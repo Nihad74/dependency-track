@@ -16,7 +16,6 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) OWASP Foundation. All Rights Reserved.
  */
-
 package org.dependencytrack.model;
 
 import com.github.packageurl.PackageURL;
@@ -35,13 +34,13 @@ import static java.util.Objects.requireNonNull;
  */
 @NullMarked
 public record PackageHealthScorecardCheck(
-    PackageURL purl,
-    String name,
-    @Nullable String description,
-    @Nullable Float score,
-    @Nullable String reason,
-    List<String> details,
-    @Nullable String documentationUrl) {
+        PackageURL purl,
+        String name,
+        @Nullable String description,
+        @Nullable Float score,
+        @Nullable String reason,
+        List<String> details,
+        @Nullable String documentationUrl) {
 
     public PackageHealthScorecardCheck {
         requireNonNull(purl, "purl must not be null");
@@ -53,10 +52,9 @@ public record PackageHealthScorecardCheck(
         }
 
         if (purl.getVersion() != null
-            || (purl.getQualifiers() != null && !purl.getQualifiers().isEmpty())
-            || purl.getSubpath() != null) {
-            throw new IllegalArgumentException(
-                "purl must not contain version, qualifiers, or subpath: " + purl);
+                || (purl.getQualifiers() != null && !purl.getQualifiers().isEmpty())
+                || purl.getSubpath() != null) {
+            throw new IllegalArgumentException("purl must not contain version, qualifiers, or subpath: " + purl);
         }
 
         details = List.copyOf(details);

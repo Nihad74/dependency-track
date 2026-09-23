@@ -16,7 +16,6 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) OWASP Foundation. All Rights Reserved.
  */
-
 package org.dependencytrack.model;
 
 import com.github.packageurl.PackageURL;
@@ -35,28 +34,28 @@ import static java.util.Objects.requireNonNull;
  */
 @NullMarked
 public record PackageHealthMetadata(
-    PackageURL purl,
-    @Nullable Long stars,
-    @Nullable Long forks,
-    @Nullable Long contributors,
-    @Nullable Float commitFrequencyWeekly,
-    @Nullable Long openIssues,
-    @Nullable Long openPullRequests,
-    @Nullable Instant lastCommit,
-    @Nullable Integer busFactor,
-    @Nullable Boolean hasReadme,
-    @Nullable Boolean hasCodeOfConduct,
-    @Nullable Boolean hasSecurityPolicy,
-    @Nullable Long dependents,
-    @Nullable Long files,
-    @Nullable Boolean repositoryArchived,
-    @Nullable Float scorecardScore,
-    @Nullable String scorecardReferenceVersion,
-    @Nullable Instant scorecardTimestamp,
-    @Nullable Float averageIssueAgeDays,
-    @Nullable Instant lastFetch,
-    PackageHealthMetadataStatus status,
-    List<PackageHealthScorecardCheck> scorecardChecks) {
+        PackageURL purl,
+        @Nullable Long stars,
+        @Nullable Long forks,
+        @Nullable Long contributors,
+        @Nullable Float commitFrequencyWeekly,
+        @Nullable Long openIssues,
+        @Nullable Long openPullRequests,
+        @Nullable Instant lastCommit,
+        @Nullable Integer busFactor,
+        @Nullable Boolean hasReadme,
+        @Nullable Boolean hasCodeOfConduct,
+        @Nullable Boolean hasSecurityPolicy,
+        @Nullable Long dependents,
+        @Nullable Long files,
+        @Nullable Boolean repositoryArchived,
+        @Nullable Float scorecardScore,
+        @Nullable String scorecardReferenceVersion,
+        @Nullable Instant scorecardTimestamp,
+        @Nullable Float averageIssueAgeDays,
+        @Nullable Instant lastFetch,
+        PackageHealthMetadataStatus status,
+        List<PackageHealthScorecardCheck> scorecardChecks) {
 
     public PackageHealthMetadata {
         requireNonNull(purl, "purl must not be null");
@@ -64,16 +63,14 @@ public record PackageHealthMetadata(
         requireNonNull(scorecardChecks, "scorecardChecks must not be null");
 
         if (purl.getVersion() != null
-            || (purl.getQualifiers() != null && !purl.getQualifiers().isEmpty())
-            || purl.getSubpath() != null) {
-            throw new IllegalArgumentException(
-                "purl must not contain version, qualifiers, or subpath: " + purl);
+                || (purl.getQualifiers() != null && !purl.getQualifiers().isEmpty())
+                || purl.getSubpath() != null) {
+            throw new IllegalArgumentException("purl must not contain version, qualifiers, or subpath: " + purl);
         }
 
         for (final PackageHealthScorecardCheck check : scorecardChecks) {
             if (!purl.equals(check.purl())) {
-                throw new IllegalArgumentException(
-                    "scorecard check purl must match health metadata purl");
+                throw new IllegalArgumentException("scorecard check purl must match health metadata purl");
             }
         }
 
