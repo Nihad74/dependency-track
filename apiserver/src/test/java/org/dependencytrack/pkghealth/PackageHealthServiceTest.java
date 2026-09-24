@@ -110,4 +110,24 @@ class PackageHealthServiceTest {
         verify(analyzer).supports(purl);
         verify(analyzer).analyze(purl);
     }
+
+    @Test
+    void shouldDelegateSupportsCheck() throws Exception {
+        final var purl = new PackageURL("pkg:npm/example");
+
+        when(analyzer.supports(purl)).thenReturn(true);
+
+        assertThat(service.supports(purl)).isTrue();
+
+        verify(analyzer).supports(purl);
+    }
+
+    @Test
+    void shouldRejectNullPurlForSupports() {
+        assertThatNullPointerException()
+                .isThrownBy(() -> service.supports(null))
+                .withMessage("purl must not be null");
+
+        verifyNoInteractions(analyzer);
+    }
 }
