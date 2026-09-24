@@ -46,6 +46,7 @@ import org.dependencytrack.metrics.VulnerabilityMetricsUpdateTask;
 import org.dependencytrack.notification.ProcessScheduledNotificationsWorkflow;
 import org.dependencytrack.persistence.jdbi.ScheduledNotificationDao;
 import org.dependencytrack.persistence.jdbi.VulnerabilityPolicyDao;
+import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataWorkflow;
 import org.dependencytrack.pkgmetadata.ResolvePackageMetadataWorkflow;
 import org.dependencytrack.plugin.runtime.PluginManager;
 import org.dependencytrack.policy.vulnerability.SyncVulnPolicyBundleWorkflow;
@@ -231,6 +232,12 @@ public final class TaskSchedulerInitializer implements ServletContextListener {
                         "OSV Mirror",
                         getCronScheduleFromConfig(config, ConfigKeys.TASK_OSV_VULN_DATA_SOURCE_MIRROR_CRON),
                         () -> vulnDataSourceMirrorService.trigger("osv", null)),
+                recurringTask(
+                        "Package Health Metadata Resolution",
+                        getCronScheduleFromConfig(config, ConfigKeys.TASK_PACKAGE_HEALTH_METADATA_RESOLUTION_CRON),
+                        () -> dexEngine.createRun(
+                                new CreateWorkflowRunRequest<>(ResolvePackageHealthMetadataWorkflow.class)
+                                        .withWorkflowInstanceId(ResolvePackageHealthMetadataWorkflow.INSTANCE_ID))),
                 recurringTask(
                         "Package Metadata Resolution",
                         getCronScheduleFromConfig(config, ConfigKeys.TASK_PACKAGE_METADATA_RESOLUTION_CRON),
