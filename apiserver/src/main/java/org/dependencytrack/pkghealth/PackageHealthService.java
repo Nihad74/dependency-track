@@ -31,10 +31,15 @@ public final class PackageHealthService {
         this.analyzer = requireNonNull(analyzer, "analyzer must not be null");
     }
 
+    public boolean supports(final PackageURL purl) {
+        requireNonNull(purl, "purl must not be null");
+        return analyzer.supports(purl);
+    }
+
     public PackageHealthAnalyzer.AnalysisResult fetch(PackageURL purl) throws PackageHealthAnalyzer.AnalysisException {
         requireNonNull(purl, "purl must not be null");
 
-        if (!analyzer.supports(purl)) {
+        if (!supports(purl)) {
             return new PackageHealthAnalyzer.AnalysisResult.NotAvailable();
         }
 
