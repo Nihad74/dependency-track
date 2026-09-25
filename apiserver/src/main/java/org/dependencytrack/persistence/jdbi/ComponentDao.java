@@ -18,6 +18,8 @@
  */
 package org.dependencytrack.persistence.jdbi;
 
+import com.github.packageurl.PackageURL;
+import io.github.resilience4j.core.lang.Nullable;
 import org.dependencytrack.common.pagination.Page;
 import org.dependencytrack.common.pagination.Page.TotalCount;
 import org.dependencytrack.common.pagination.PageTokenEncoder;
@@ -102,6 +104,14 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             SELECT "ID" FROM "COMPONENT" WHERE "UUID" = :componentUuid
             """)
     Long getComponentId(@Bind UUID componentUuid);
+
+    @SqlQuery("""
+        SELECT "PURL"
+          FROM "COMPONENT"
+         WHERE "UUID" = :componentUuid
+        """)
+    @Nullable
+    PackageURL getPurl(@Bind UUID componentUuid);
 
     /// @since 5.2.0
     @SqlQuery("""
