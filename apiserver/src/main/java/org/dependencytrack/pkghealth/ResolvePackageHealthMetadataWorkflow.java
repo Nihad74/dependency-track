@@ -43,7 +43,7 @@ public final class ResolvePackageHealthMetadataWorkflow
             /* initialDelay */ Duration.ofSeconds(5),
             /* delayMultiplier */ 2.0,
             /* randomizationFactor */ 0.3,
-            /* maxDelay */ Duration.ofMinutes(1),
+            /* maxDelay */ Duration.ofHours(2),
             /* maxAttempts */ 3);
 
     @Override

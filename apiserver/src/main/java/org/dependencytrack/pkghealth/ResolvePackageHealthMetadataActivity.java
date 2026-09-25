@@ -22,10 +22,12 @@ import com.github.packageurl.PackageURL;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
+import org.dependencytrack.dex.api.failure.ApplicationFailureException;
 import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
+import org.dependencytrack.pkghealth.client.ApiRateLimitException;
 import org.dependencytrack.pkghealth.mapping.PackageHealthMetadataMapper;
 import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityArg;
@@ -33,6 +35,7 @@ import org.dependencytrack.util.PurlUtil;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Clock;
+import java.time.Duration;
 
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
@@ -61,7 +64,18 @@ public final class ResolvePackageHealthMetadataActivity
         }
 
         for (final String purlString : arg.getPurlsList()) {
-            resolveAndPersist(new PackageURL(purlString));
+            try {
+                resolveAndPersist(new PackageURL(purlString));
+            } catch (PackageHealthAnalyzer.AnalysisException e) {
+                if (e.getCause() instanceof ApiRateLimitException rateLimit) {
+                    final Duration wait = Duration.between(
+                            clock.instant(), rateLimit.resetAt().plusSeconds(2));
+                    if (wait.isPositive()) {
+                        throw new ApplicationFailureException("External API rate limit reached", e, wait);
+                    }
+                }
+                throw e;
+            }
         }
 
         return null;

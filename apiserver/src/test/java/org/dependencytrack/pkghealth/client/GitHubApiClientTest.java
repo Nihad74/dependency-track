@@ -395,4 +395,17 @@ class GitHubApiClientTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody(responseBody)));
     }
+
+    @Test
+    void shouldExposeRateLimitReset() {
+        stubFor(get(urlPathEqualTo("/repos/acme/example"))
+                .willReturn(aResponse()
+                        .withStatus(403)
+                        .withHeader("x-ratelimit-remaining", "0")
+                        .withHeader("x-ratelimit-reset", "1790333868")));
+
+        assertThatExceptionOfType(ApiRateLimitException.class)
+                .isThrownBy(() -> client.fetchRepositoryMetadata(packagePurl, "github.com/acme/example"))
+                .satisfies(e -> assertThat(e.resetAt()).isEqualTo(Instant.ofEpochSecond(1790333868)));
+    }
 }
