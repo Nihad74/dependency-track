@@ -26,9 +26,11 @@ import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.metrics.DependencyMetrics;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.ComponentIdentity;
+import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.Scope;
 import org.dependencytrack.persistence.jdbi.MetricsTestDao;
+import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadata;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadataDao;
 import org.dependencytrack.pkgmetadata.PackageMetadata;
@@ -964,6 +966,177 @@ public class ComponentsResourceTest extends ResourceTest {
                         """);
     }
 
+    @Test
+    public void getComponentHealthWithoutMetadataTest() throws Exception {
+        initializeWithPermissions(Permissions.VIEW_PORTFOLIO);
+
+        final Project project = qm.createProject("test", null, "1.0", null, null, null, null, false);
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("comp");
+        component.setPurl(new PackageURL("maven", "test", "comp", "1.0", null, null));
+        qm.createComponent(component, false);
+
+        final Response response = jersey.target("/components/" + component.getUuid() + "/health")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get();
+
+        assertThat(response.getStatus()).isEqualTo(404);
+    }
+
+    @Test
+    public void getComponentHealthTest() throws Exception {
+        initializeWithPermissions(Permissions.VIEW_PORTFOLIO);
+        final Component component = createComponentWithPackageMetadataForHealthTest();
+        final var packagePurl = new PackageURL("maven", "test", "comp", null, null, null);
+        final Instant fetchedAt = Instant.ofEpochMilli(1_700_000_000_000L);
+
+        final var check = new org.dependencytrack.model.PackageHealthScorecardCheck(
+                packagePurl,
+                "Maintained",
+                null,
+                8.0f,
+                "Active development",
+                List.of("Recent commits"),
+                "https://example.org/check");
+
+        final var metadata = new org.dependencytrack.model.PackageHealthMetadata(
+                packagePurl,
+                42L,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                true,
+                null,
+                null,
+                null,
+                null,
+                null,
+                7.5f,
+                null,
+                null,
+                null,
+                fetchedAt,
+                PackageHealthMetadataStatus.PROCESSED,
+                List.of(check));
+        useJdbiHandle(handle -> new PackageHealthMetadataDao(handle).upsert(metadata));
+
+        final Response response = jersey.target("/components/" + component.getUuid() + "/health")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get();
+
+        assertThat(response.getStatus()).isEqualTo(200);
+
+        assertThatJson(getPlainTextBody(response)).isEqualTo("""
+        {
+          "purl": "pkg:maven/test/comp",
+          "status": "PROCESSED",
+          "last_fetch": 1700000000000,
+          "stars": 42,
+          "has_readme": true,
+          "scorecard_score": 7.5,
+          "scorecard_checks": [{
+            "name": "Maintained",
+            "score": 8.0,
+            "reason": "Active development",
+            "details": ["Recent commits"],
+            "documentation_url": "https://example.org/check"
+          }]
+        }
+        """);
+    }
+
+    @Test
+    public void getComponentHealthAclTest() throws Exception {
+        enablePortfolioAccessControl();
+        initializeWithPermissions(Permissions.VIEW_PORTFOLIO);
+        final Component component = createComponentWithPackageMetadataForHealthTest();
+
+        final Response denied = jersey.target("/components/" + component.getUuid() + "/health")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get();
+        assertThat(denied.getStatus()).isEqualTo(403);
+
+        component.getProject().addAccessTeam(team);
+
+        final Response allowed = jersey.target("/components/" + component.getUuid() + "/health")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get();
+        assertThat(allowed.getStatus()).isEqualTo(404);
+    }
+
+    @Test
+    public void getComponentHealthInProgressTest() throws Exception {
+        initializeWithPermissions(Permissions.VIEW_PORTFOLIO);
+        final Component component = createComponentWithPackageMetadataForHealthTest();
+        final var packagePurl = new PackageURL("maven", "test", "comp", null, null, null);
+
+        final var metadata = new org.dependencytrack.model.PackageHealthMetadata(
+                packagePurl,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                PackageHealthMetadataStatus.IN_PROGRESS,
+                List.of());
+        useJdbiHandle(handle -> new PackageHealthMetadataDao(handle).upsert(metadata));
+
+        final Response response = jersey.target("/components/" + component.getUuid() + "/health")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get();
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThatJson(getPlainTextBody(response)).isEqualTo(/* language=JSON */ """
+            {
+              "purl": "pkg:maven/test/comp",
+              "status": "IN_PROGRESS",
+              "scorecard_checks": []
+            }
+            """);
+    }
+
+    @Test
+    public void getComponentHealthWithoutPurlTest() {
+        initializeWithPermissions(Permissions.VIEW_PORTFOLIO);
+
+        final Project project = qm.createProject("test", null, "1.0", null, null, null, null, false);
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("comp-without-purl");
+        qm.createComponent(component, false);
+
+        final Response response = jersey.target("/components/" + component.getUuid() + "/health")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get();
+
+        assertThat(response.getStatus()).isEqualTo(404);
+    }
+
     private Component createComponentWithPublishedAt(
             final Project project, final String name, final Instant publishedAt) throws Exception {
         final var component = new Component();
@@ -1028,5 +1201,19 @@ public class ComponentsResourceTest extends ResourceTest {
         componentC.setLastInheritedRiskScore(2.3);
         componentC.setLicense("Public Domain");
         qm.createComponent(componentC, false);
+    }
+
+    private Component createComponentWithPackageMetadataForHealthTest() throws Exception {
+        final Project project = qm.createProject("health-test", null, "1.0", null, null, null, null, false);
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("comp");
+        component.setPurl(new PackageURL("maven", "test", "comp", "1.0", null, null));
+        qm.createComponent(component, false);
+
+        final var packagePurl = new PackageURL("maven", "test", "comp", null, null, null);
+        useJdbiHandle(handle -> new PackageMetadataDao(handle)
+                .upsertAll(List.of(new PackageMetadata(packagePurl, null, null, Instant.now(), null, null))));
+        return component;
     }
 }

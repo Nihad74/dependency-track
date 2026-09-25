@@ -37,9 +37,11 @@ import org.dependencytrack.metrics.MetricsDao;
 import org.dependencytrack.model.Classifier;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.License;
+import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.persistence.QueryManager;
 import org.dependencytrack.persistence.jdbi.ComponentDao;
+import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.persistence.jdbi.query.ListComponentsQuery;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadata;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadataDao;
@@ -122,6 +124,26 @@ public class ComponentsResource extends AbstractApiResource implements Component
             }
             throw e;
         }
+    }
+
+    @Override
+    @PermissionRequired(Permissions.Constants.VIEW_PORTFOLIO)
+    public Response getComponentHealth(final UUID uuid) {
+        return withJdbiHandle(getAlpineRequest(), handle -> {
+            requireComponentAccess(handle, uuid);
+
+            final PackageURL purl = handle.attach(ComponentDao.class).getPurl(uuid);
+            if (purl == null) {
+                throw new NotFoundException("Component has no package URL");
+            }
+
+            final PackageHealthMetadata metadata = new PackageHealthMetadataDao(handle).get(purl);
+            if (metadata == null) {
+                throw new NotFoundException("Package health metadata could not be found");
+            }
+
+            return Response.ok(map(metadata)).build();
+        });
     }
 
     @Override
