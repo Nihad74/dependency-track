@@ -21,11 +21,13 @@ package org.dependencytrack.pkghealth;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.dex.api.ActivityContext;
+import org.dependencytrack.dex.api.failure.ApplicationFailureException;
 import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.model.PackageMetadata;
 import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageMetadataDao;
 import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
+import org.dependencytrack.pkghealth.client.ApiRateLimitException;
 import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityArg;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,11 +35,13 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.mockito.Mockito.mock;
@@ -187,6 +191,25 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
         final var thrown = catchThrowable(() -> activity.execute(mock(ActivityContext.class), arg));
 
         assertThat(thrown).isSameAs(expectedException);
+    }
+
+    @Test
+    void shouldRetryAfterApiRateLimitReset() throws Exception {
+        final var purl = new PackageURL("pkg:npm/example@1.0.0");
+        final var resetAt = NOW.plus(Duration.ofMinutes(10));
+
+        when(packageHealthService.fetch(purl))
+                .thenThrow(new PackageHealthAnalyzer.AnalysisException(
+                        "GitHub request failed", new ApiRateLimitException(resetAt)));
+
+        final var arg = ResolvePackageHealthMetadataActivityArg.newBuilder()
+                .addPurls(purl.toString())
+                .build();
+
+        assertThatExceptionOfType(ApplicationFailureException.class)
+                .isThrownBy(() -> activity.execute(mock(ActivityContext.class), arg))
+                .satisfies(e -> assertThat(e.retryAfter())
+                        .isEqualTo(Duration.ofMinutes(10).plusSeconds(2)));
     }
 
     private static void createPackageMetadata(final PackageURL packagePurl) {

@@ -31,6 +31,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -76,8 +77,33 @@ abstract class ApiClient {
             return Optional.empty();
         }
 
+        final int status = response.statusCode();
+        if ((status == 403 || status == 429)
+                && response.headers()
+                        .firstValue("x-ratelimit-remaining")
+                        .filter("0"::equals)
+                        .isPresent()) {
+            final var reset = response.headers().firstValue("x-ratelimit-reset");
+            if (reset.isPresent()) {
+                try {
+                    throw new ApiRateLimitException(Instant.ofEpochSecond(Long.parseLong(reset.get())));
+                } catch (NumberFormatException ignored) {
+                    // Invalid reset header; use the generic HTTP error below
+                }
+            }
+        }
+
         if (response.statusCode() != 200) {
-            throw new IOException("API returned HTTP %d for %s".formatted(response.statusCode(), url));
+            final var headers = response.headers();
+            throw new IOException("API returned HTTP %d for %s (limit=%s, used=%s, remaining=%s, reset=%s, resource=%s)"
+                    .formatted(
+                            response.statusCode(),
+                            url,
+                            headers.firstValue("x-ratelimit-limit").orElse("unknown"),
+                            headers.firstValue("x-ratelimit-used").orElse("unknown"),
+                            headers.firstValue("x-ratelimit-remaining").orElse("unknown"),
+                            headers.firstValue("x-ratelimit-reset").orElse("unknown"),
+                            headers.firstValue("x-ratelimit-resource").orElse("unknown")));
         }
 
         return Optional.of(objectMapper.readTree(response.body()));
