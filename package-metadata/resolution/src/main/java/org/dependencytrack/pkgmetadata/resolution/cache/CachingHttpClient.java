@@ -147,8 +147,10 @@ public final class CachingHttpClient {
         applyValidators(requestBuilderCopy, entry);
 
         return sendWithStaleFallback(uri, entry, this::staleBody, () -> {
-            final HttpResponse<byte[]> response =
-                    httpClient.send(requestBuilderCopy.build(), _ -> new LimitedBodySubscriber(maxCompressedBytes));
+            final HttpResponse<byte[]> response = httpClient.send(
+                    requestBuilderCopy.build(),
+                    responseInfo -> new LimitedBodySubscriber(
+                            isGzipEncoded(responseInfo.headers()) ? maxCompressedBytes : maxDecodedBytes));
             return handleGetResponse(response, entry, cacheKey);
         });
     }

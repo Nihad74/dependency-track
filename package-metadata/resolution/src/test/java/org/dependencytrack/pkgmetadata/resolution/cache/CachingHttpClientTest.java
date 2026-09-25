@@ -923,6 +923,29 @@ class CachingHttpClientTest {
         assertThat(body).isEqualTo(payload);
     }
 
+    @Test
+    void shouldAcceptPlainBodyAboveCompressedCapWhenWithinDecodedCap(WireMockRuntimeInfo wmRuntimeInfo)
+            throws Exception {
+        final byte[] payload = new byte[2 * 1024];
+        stubFor(get(urlPathEqualTo(PATH)).willReturn(aResponse().withStatus(200).withBody(payload)));
+
+        final var cachingHttpClient = new CachingHttpClient(httpClient, cache, Duration.ofHours(1), 1024, 4 * 1024);
+
+        assertThat(cachingHttpClient.get(requestBuilderFor(wmRuntimeInfo), null))
+                .isEqualTo(payload);
+    }
+
+    @Test
+    void shouldRejectPlainBodyExceedingDecodedCap(WireMockRuntimeInfo wmRuntimeInfo) {
+        final byte[] payload = new byte[8 * 1024];
+        stubFor(get(urlPathEqualTo(PATH)).willReturn(aResponse().withStatus(200).withBody(payload)));
+
+        final var cachingHttpClient = new CachingHttpClient(httpClient, cache, Duration.ofHours(1), 1024, 4 * 1024);
+
+        assertThatExceptionOfType(UncheckedIOException.class)
+                .isThrownBy(() -> cachingHttpClient.get(requestBuilderFor(wmRuntimeInfo), null));
+    }
+
     @ParameterizedTest(name = "[{index}] Content-Encoding={0}")
     @CsvSource({
         "absent, plain",
