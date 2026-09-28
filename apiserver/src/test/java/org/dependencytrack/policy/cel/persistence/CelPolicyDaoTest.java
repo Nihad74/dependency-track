@@ -41,6 +41,7 @@ import org.dependencytrack.persistence.jdbi.EpssDao;
 import org.dependencytrack.persistence.jdbi.PackageArtifactMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageMetadataDao;
 import org.dependencytrack.persistence.jdbi.VulnerabilityAliasDao;
+import org.dependencytrack.proto.policy.v1.HealthMeta;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -379,5 +380,34 @@ public class CelPolicyDaoTest extends PersistenceCapableTest {
                           "epssPercentile": 0.2
                         }
                         """);
+    }
+
+    @Test
+    public void testFetchAllPackageHealthMetadata() throws Exception {
+        final String packagePurl = "pkg:maven/com.acme/acme-lib";
+        final String missingPurl = "pkg:maven/com.acme/unknown";
+
+        useJdbiTransaction(handle -> {
+            new PackageMetadataDao(handle)
+                    .upsertAll(List.of(new PackageMetadata(
+                            new PackageURL(packagePurl), "1.0.0", null, Instant.now(), null, null)));
+
+            handle.createUpdate("""
+                        INSERT INTO "PACKAGE_HEALTH_METADATA"
+                            ("PURL", "SCORECARD_SCORE", "STATUS")
+                        VALUES (:purl, :score, 'PROCESSED')
+                        """)
+                    .bind("purl", packagePurl)
+                    .bind("score", 4.0f)
+                    .execute();
+        });
+
+        final Map<String, HealthMeta> result = withJdbiHandle(handle -> new CelPolicyDao(handle)
+                .fetchAllPackageHealthMetadata(List.of(packagePurl, missingPurl), Set.of("scorecard_score")));
+
+        assertThat(result)
+                .containsOnly(entry(
+                        packagePurl,
+                        HealthMeta.newBuilder().setScorecardScore(4.0f).build()));
     }
 }

@@ -51,9 +51,11 @@ import org.dependencytrack.policy.cel.compat.VulnerabilityIdCelPolicyScriptSourc
 import org.dependencytrack.policy.cel.persistence.CelPolicyDao;
 import org.dependencytrack.policy.cel.persistence.CelPolicyDao.ComponentWithLicenseId;
 import org.dependencytrack.proto.policy.v1.Component;
+import org.dependencytrack.proto.policy.v1.HealthMeta;
 import org.dependencytrack.proto.policy.v1.License;
 import org.dependencytrack.proto.policy.v1.Project;
 import org.dependencytrack.proto.policy.v1.Vulnerability;
+import org.dependencytrack.util.PurlUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -76,6 +78,7 @@ import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransactio
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.dependencytrack.policy.cel.CelPolicyTypes.TYPE_COMPONENT;
 import static org.dependencytrack.policy.cel.CelPolicyTypes.TYPE_COMPONENT_PROPERTY;
+import static org.dependencytrack.policy.cel.CelPolicyTypes.TYPE_HEALTH;
 import static org.dependencytrack.policy.cel.CelPolicyTypes.TYPE_LICENSE;
 import static org.dependencytrack.policy.cel.CelPolicyTypes.TYPE_LICENSE_GROUP;
 import static org.dependencytrack.policy.cel.CelPolicyTypes.TYPE_PROJECT;
@@ -142,6 +145,9 @@ public final class CelPolicyEngine {
         }
 
         final Map<CelType, Set<String>> requirements = determineScriptRequirements(policiesWithScripts);
+        if (requirements.containsKey(TYPE_HEALTH)) {
+            requirements.computeIfAbsent(TYPE_COMPONENT, _ -> new HashSet<>()).add("purl");
+        }
         final long conditionCount = policiesWithScripts.stream()
                 .mapToLong(pws -> pws.conditionScripts().size())
                 .sum();
@@ -159,6 +165,25 @@ public final class CelPolicyEngine {
         final Map<Long, ComponentWithLicenseId> componentsWithLicense =
                 withJdbiHandle(handle -> new CelPolicyDao(handle)
                         .fetchAllComponents(projectId, requirements.getOrDefault(TYPE_COMPONENT, Set.of())));
+
+        final var packagePurlByComponentId = new HashMap<Long, String>();
+        final Map<String, HealthMeta> healthByPackagePurl;
+
+        if (requirements.containsKey(TYPE_HEALTH)) {
+            for (final var entry : componentsWithLicense.entrySet()) {
+                final var componentPurl =
+                        PurlUtil.silentPurl(entry.getValue().component().getPurl());
+                if (componentPurl != null) {
+                    packagePurlByComponentId.put(entry.getKey(), PurlUtil.purlPackageOnly(componentPurl));
+                }
+            }
+
+            healthByPackagePurl = withJdbiHandle(handle -> new CelPolicyDao(handle)
+                    .fetchAllPackageHealthMetadata(
+                            new HashSet<>(packagePurlByComponentId.values()), requirements.get(TYPE_HEALTH)));
+        } else {
+            healthByPackagePurl = Map.of();
+        }
 
         // Preload licenses for the entire project, as chances are high that
         // they will be used by multiple components.
@@ -237,6 +262,7 @@ public final class CelPolicyEngine {
         }
 
         final var violationsByComponentId = new HashMap<Long, List<PolicyViolation>>();
+        final var unevaluatedConditionIdsByComponentId = new HashMap<Long, Set<Long>>();
         final Timestamp protoNow = Timestamps.now();
 
         for (final Map.Entry<Long, Component> entry : componentsById.entrySet()) {
@@ -257,6 +283,11 @@ public final class CelPolicyEngine {
                 protoVulns = List.of();
             }
 
+            final String packagePurl = packagePurlByComponentId.get(componentId);
+            final HealthMeta protoHealth = packagePurl != null
+                    ? healthByPackagePurl.getOrDefault(packagePurl, HealthMeta.getDefaultInstance())
+                    : HealthMeta.getDefaultInstance();
+
             evaluateComponentAgainstPolicies(
                     policiesWithScripts,
                     componentId,
@@ -264,12 +295,14 @@ public final class CelPolicyEngine {
                             Map.entry(CelPolicyVariable.COMPONENT.variableName(), protoComponent),
                             Map.entry(CelPolicyVariable.PROJECT.variableName(), protoProject),
                             Map.entry(CelPolicyVariable.VULNS.variableName(), protoVulns),
-                            Map.entry(CelPolicyVariable.NOW.variableName(), protoNow)),
-                    violationsByComponentId);
+                            Map.entry(CelPolicyVariable.NOW.variableName(), protoNow),
+                            Map.entry(CelPolicyVariable.HEALTH.variableName(), protoHealth)),
+                    violationsByComponentId,
+                    unevaluatedConditionIdsByComponentId);
         }
 
-        final Set<Long> newViolationIds = inJdbiTransaction(
-                handle -> new CelPolicyDao(handle).reconcileViolations(projectId, violationsByComponentId));
+        final Set<Long> newViolationIds = inJdbiTransaction(handle -> new CelPolicyDao(handle)
+                .reconcileViolations(projectId, violationsByComponentId, unevaluatedConditionIdsByComponentId));
         LOGGER.info("Identified {} new violations", newViolationIds.size());
 
         if (!newViolationIds.isEmpty()) {
@@ -366,14 +399,30 @@ public final class CelPolicyEngine {
             List<PolicyWithScripts> policiesWithScripts,
             long componentId,
             Map<String, Object> scriptArgs,
-            Map<Long, List<PolicyViolation>> violationsByComponentId) {
+            Map<Long, List<PolicyViolation>> violationsByComponentId,
+            Map<Long, Set<Long>> unevaluatedConditionIdsByComponentId) {
         for (final PolicyWithScripts pws : policiesWithScripts) {
             final Policy policy = pws.policy();
             final var violatedConditions = new ArrayList<PolicyCondition>();
+            final var unevaluatedConditions = new ArrayList<PolicyCondition>();
+            int evaluatedConditionCount = 0;
 
             for (final ConditionScript cs : pws.conditionScripts()) {
+                final Set<String> requiredHealthFields =
+                        cs.script().getRequirements().getOrDefault(TYPE_HEALTH, Set.of());
+                final HealthMeta health = (HealthMeta) scriptArgs.get(CelPolicyVariable.HEALTH.variableName());
+
+                if (requiredHealthFields.stream()
+                        .map(HealthMeta.getDescriptor()::findFieldByName)
+                        .anyMatch(field -> field == null || !health.hasField(field))) {
+                    unevaluatedConditions.add(cs.condition());
+                    continue;
+                }
+
                 try {
-                    if (cs.script().execute(scriptArgs)) {
+                    final boolean conditionMatched = cs.script().execute(scriptArgs);
+                    evaluatedConditionCount++;
+                    if (conditionMatched) {
                         violatedConditions.add(cs.condition());
                     }
                 } catch (CelEvaluationException e) {
@@ -381,6 +430,32 @@ public final class CelPolicyEngine {
                             "Failed to execute script for condition {}",
                             cs.condition().getUuid(),
                             e);
+                }
+            }
+
+            if (!unevaluatedConditions.isEmpty()) {
+                final Set<Long> conditionIdsToProtect;
+
+                if (policy.getOperator() == Policy.Operator.ALL) {
+                    // A known false condition makes the ALL policy false, even
+                    // when another condition could not be evaluated.
+                    if (violatedConditions.size() == evaluatedConditionCount) {
+                        conditionIdsToProtect = policy.getPolicyConditions().stream()
+                                .map(PolicyCondition::getId)
+                                .collect(Collectors.toSet());
+                    } else {
+                        conditionIdsToProtect = Set.of();
+                    }
+                } else {
+                    conditionIdsToProtect = unevaluatedConditions.stream()
+                            .map(PolicyCondition::getId)
+                            .collect(Collectors.toSet());
+                }
+
+                if (!conditionIdsToProtect.isEmpty()) {
+                    unevaluatedConditionIdsByComponentId
+                            .computeIfAbsent(componentId, _ -> new HashSet<>())
+                            .addAll(conditionIdsToProtect);
                 }
             }
 

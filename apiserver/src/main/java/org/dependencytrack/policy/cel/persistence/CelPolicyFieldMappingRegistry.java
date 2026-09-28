@@ -95,6 +95,9 @@ public final class CelPolicyFieldMappingRegistry {
             new FieldMapping("epss_score", "ep.\"SCORE\""),
             new FieldMapping("epss_percentile", "ep.\"PERCENTILE\""));
 
+    static final List<FieldMapping> HEALTH_FIELDS =
+            List.of(new FieldMapping("scorecard_score", "phm.\"SCORECARD_SCORE\""));
+
     static final List<FieldMapping> LICENSE_FIELDS = List.of(
             new FieldMapping("uuid", "l.\"UUID\""),
             new FieldMapping("id", "l.\"LICENSEID\""),
