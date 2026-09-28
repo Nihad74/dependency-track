@@ -25,6 +25,7 @@ import org.dependencytrack.model.PolicyViolation;
 import org.dependencytrack.persistence.jdbi.mapping.OptionalColumnRowMapper;
 import org.dependencytrack.persistence.jdbi.mapping.OptionalColumnRowMapper.Columns;
 import org.dependencytrack.proto.policy.v1.Component;
+import org.dependencytrack.proto.policy.v1.HealthMeta;
 import org.dependencytrack.proto.policy.v1.License;
 import org.dependencytrack.proto.policy.v1.Project;
 import org.dependencytrack.proto.policy.v1.Vulnerability;
@@ -54,6 +55,7 @@ import static org.dependencytrack.policy.cel.CelPolicyTypes.TYPE_PROJECT_PROPERT
 import static org.dependencytrack.policy.cel.CelPolicyTypes.TYPE_VULNERABILITY;
 import static org.dependencytrack.policy.cel.persistence.CelPolicyFieldMappingRegistry.COMPONENT_FIELDS;
 import static org.dependencytrack.policy.cel.persistence.CelPolicyFieldMappingRegistry.COMPONENT_PROPERTY_FIELDS;
+import static org.dependencytrack.policy.cel.persistence.CelPolicyFieldMappingRegistry.HEALTH_FIELDS;
 import static org.dependencytrack.policy.cel.persistence.CelPolicyFieldMappingRegistry.LICENSE_FIELDS;
 import static org.dependencytrack.policy.cel.persistence.CelPolicyFieldMappingRegistry.LICENSE_GROUP_FIELDS;
 import static org.dependencytrack.policy.cel.persistence.CelPolicyFieldMappingRegistry.PROJECT_FIELDS;
@@ -198,6 +200,29 @@ public final class CelPolicyDao {
                             .computeIfAbsent(componentId, k -> new HashSet<>())
                             .add(vulnerabilityId);
                     return accumulator;
+                });
+    }
+
+    public Map<String, HealthMeta> fetchAllPackageHealthMetadata(
+            Collection<String> packagePurls, Collection<String> protoFieldNames) {
+        if (packagePurls.isEmpty() || protoFieldNames.isEmpty()) {
+            return Map.of();
+        }
+
+        final var rowMapper = new CelPolicyHealthRowMapper();
+        return jdbiHandle
+                .createQuery("""
+                    SELECT phm."PURL" AS package_purl
+                         , ${fetchColumns?join(", ")}
+                      FROM "PACKAGE_HEALTH_METADATA" AS phm
+                     WHERE phm."PURL" = ANY(:packagePurls)
+                       AND phm."STATUS" = 'PROCESSED'
+                    """)
+                .define("fetchColumns", selectColumns(HEALTH_FIELDS, protoFieldNames))
+                .bindArray("packagePurls", String.class, packagePurls)
+                .reduceResultSet(new HashMap<String, HealthMeta>(), (result, rs, ctx) -> {
+                    result.put(rs.getString("package_purl"), rowMapper.map(rs, ctx));
+                    return result;
                 });
     }
 
@@ -461,17 +486,45 @@ public final class CelPolicyDao {
 
     public Set<Long> reconcileViolations(
             long projectId, Map<Long, List<PolicyViolation>> reportedViolationsByComponentId) {
+        return reconcileViolations(projectId, reportedViolationsByComponentId, Map.of());
+    }
+
+    public Set<Long> reconcileViolations(
+            long projectId,
+            Map<Long, List<PolicyViolation>> reportedViolationsByComponentId,
+            Map<Long, Set<Long>> unevaluatedConditionIdsByComponentId) {
+
+        final var protectedComponentIds = new ArrayList<Long>();
+        final var protectedConditionIds = new ArrayList<Long>();
+        for (final var entry : unevaluatedConditionIdsByComponentId.entrySet()) {
+            for (final long conditionId : entry.getValue()) {
+                protectedComponentIds.add(entry.getKey());
+                protectedConditionIds.add(conditionId);
+            }
+        }
+        final Long[] protectedComponentIdArray = protectedComponentIds.toArray(Long[]::new);
+        final Long[] protectedConditionIdArray = protectedConditionIds.toArray(Long[]::new);
+
         if (reportedViolationsByComponentId.isEmpty()) {
-            jdbiHandle.createUpdate("""
-                            DELETE FROM "POLICYVIOLATION"
-                             WHERE "ID" IN (
-                               SELECT "ID"
-                                 FROM "POLICYVIOLATION"
-                                WHERE "PROJECT_ID" = :projectId
-                                ORDER BY "ID"
-                                  FOR UPDATE
-                             )
-                            """).bind("projectId", projectId).execute();
+            jdbiHandle
+                    .createUpdate("""
+                DELETE FROM "POLICYVIOLATION"
+                 WHERE "ID" IN (
+                   SELECT "ID"
+                     FROM "POLICYVIOLATION"
+                    WHERE "PROJECT_ID" = :projectId
+                      AND ("COMPONENT_ID", "POLICYCONDITION_ID") NOT IN (
+                        SELECT * FROM UNNEST(:protectedComponentIds, :protectedConditionIds)
+                      )
+                    ORDER BY "ID"
+                      FOR UPDATE
+                 )
+                """)
+                    .bind("projectId", projectId)
+                    .bind("protectedComponentIds", protectedComponentIdArray)
+                    .bind("protectedConditionIds", protectedConditionIdArray)
+                    .execute();
+
             return Set.of();
         }
 
@@ -500,46 +553,51 @@ public final class CelPolicyDao {
 
         return jdbiHandle
                 .createQuery("""
-                        WITH created AS (
-                          INSERT INTO "POLICYVIOLATION" (
-                            "UUID"
-                          , "TIMESTAMP"
-                          , "COMPONENT_ID"
-                          , "PROJECT_ID"
-                          , "POLICYCONDITION_ID"
-                          , "TYPE"
-                          )
-                          SELECT GEN_RANDOM_UUID()
-                               , t.*
-                            FROM UNNEST(:timestamps, :componentIds, :projectIds, :policyConditionIds, :types)
-                              AS t("TIMESTAMP", "COMPONENT_ID", "PROJECT_ID", "POLICYCONDITION_ID", "TYPE")
-                           ORDER BY t."PROJECT_ID"
-                                  , t."COMPONENT_ID"
-                                  , t."POLICYCONDITION_ID"
-                          ON CONFLICT DO NOTHING
-                          RETURNING "ID"
-                        ),
-                        deleted AS (
-                          DELETE FROM "POLICYVIOLATION"
-                           WHERE "ID" IN (
-                             SELECT "ID"
-                               FROM "POLICYVIOLATION"
-                              WHERE "PROJECT_ID" = :projectId
-                                AND ("COMPONENT_ID", "POLICYCONDITION_ID") NOT IN (
-                                  SELECT * FROM UNNEST(:componentIds, :policyConditionIds)
-                                )
-                              ORDER BY "ID"
-                                FOR UPDATE
-                           )
+                WITH created AS (
+                  INSERT INTO "POLICYVIOLATION" (
+                    "UUID"
+                  , "TIMESTAMP"
+                  , "COMPONENT_ID"
+                  , "PROJECT_ID"
+                  , "POLICYCONDITION_ID"
+                  , "TYPE"
+                  )
+                  SELECT GEN_RANDOM_UUID()
+                       , t.*
+                    FROM UNNEST(:timestamps, :componentIds, :projectIds, :policyConditionIds, :types)
+                      AS t("TIMESTAMP", "COMPONENT_ID", "PROJECT_ID", "POLICYCONDITION_ID", "TYPE")
+                   ORDER BY t."PROJECT_ID"
+                          , t."COMPONENT_ID"
+                          , t."POLICYCONDITION_ID"
+                  ON CONFLICT DO NOTHING
+                  RETURNING "ID"
+                ),
+                deleted AS (
+                  DELETE FROM "POLICYVIOLATION"
+                   WHERE "ID" IN (
+                     SELECT "ID"
+                       FROM "POLICYVIOLATION"
+                      WHERE "PROJECT_ID" = :projectId
+                        AND ("COMPONENT_ID", "POLICYCONDITION_ID") NOT IN (
+                          SELECT * FROM UNNEST(:componentIds, :policyConditionIds)
                         )
-                        SELECT "ID" FROM created
-                        """)
+                        AND ("COMPONENT_ID", "POLICYCONDITION_ID") NOT IN (
+                          SELECT * FROM UNNEST(:protectedComponentIds, :protectedConditionIds)
+                        )
+                      ORDER BY "ID"
+                        FOR UPDATE
+                   )
+                )
+                SELECT "ID" FROM created
+                """)
                 .bind("timestamps", timestamps)
                 .bind("componentIds", componentIds)
                 .bind("projectIds", projIds)
                 .bind("policyConditionIds", condIds)
                 .bind("types", types)
                 .bind("projectId", projectId)
+                .bind("protectedComponentIds", protectedComponentIdArray)
+                .bind("protectedConditionIds", protectedConditionIdArray)
                 .mapTo(Long.class)
                 .set();
     }

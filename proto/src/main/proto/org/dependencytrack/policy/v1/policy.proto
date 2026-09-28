@@ -114,6 +114,12 @@ message Component {
   }
 }
 
+message HealthMeta {
+  // OpenSSF Scorecard score for the package.
+  // Metadata is resolved asynchronously and may be unavailable.
+  optional float scorecard_score = 1;
+}
+
 message License {
   string uuid = 1;
   string id = 2;
