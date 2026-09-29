@@ -58,6 +58,7 @@ import org.dependencytrack.pkghealth.FetchPackageHealthMetadataCandidatesActivit
 import org.dependencytrack.pkghealth.PackageHealthService;
 import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataActivity;
 import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataWorkflow;
+import org.dependencytrack.pkghealth.ScheduleHealthPolicyEvaluationsActivity;
 import org.dependencytrack.pkghealth.analyzer.DepsDevGitHubPackageHealthAnalyzer;
 import org.dependencytrack.pkghealth.client.DepsDevApiClient;
 import org.dependencytrack.pkghealth.client.GitHubApiClientProvider;
@@ -66,6 +67,7 @@ import org.dependencytrack.pkgmetadata.ResolvePackageMetadataActivity;
 import org.dependencytrack.pkgmetadata.ResolvePackageMetadataWorkflow;
 import org.dependencytrack.plugin.runtime.PluginManager;
 import org.dependencytrack.policy.EvalProjectPoliciesActivity;
+import org.dependencytrack.policy.EvalProjectPoliciesWorkflow;
 import org.dependencytrack.policy.cel.CelPolicyEngine;
 import org.dependencytrack.policy.cel.CelVulnerabilityPolicyEvaluator;
 import org.dependencytrack.policy.vulnerability.SyncVulnPolicyBundleActivity;
@@ -92,9 +94,11 @@ import org.dependencytrack.proto.internal.workflow.v1.PublishNotificationActivit
 import org.dependencytrack.proto.internal.workflow.v1.PublishNotificationWorkflowArg;
 import org.dependencytrack.proto.internal.workflow.v1.ReconcileVulnAnalysisResultsArg;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityArg;
+import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityRes;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataWorkflowArg;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageMetadataActivityArg;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageMetadataWorkflowArg;
+import org.dependencytrack.proto.internal.workflow.v1.ScheduleHealthPolicyEvaluationsArg;
 import org.dependencytrack.proto.internal.workflow.v1.SyncVulnPolicyBundleArg;
 import org.dependencytrack.proto.internal.workflow.v1.UpdateProjectMetricsArg;
 import org.dependencytrack.proto.internal.workflow.v1.VulnAnalysisWorkflowArg;
@@ -196,6 +200,11 @@ public final class DexEngineInitializer implements ServletContextListener {
         engine.registerWorkflow(
                 new AnalyzeProjectWorkflow(),
                 protoConverter(AnalyzeProjectWorkflowArg.class),
+                voidConverter(),
+                Duration.ofMinutes(1));
+        engine.registerWorkflow(
+                new EvalProjectPoliciesWorkflow(),
+                protoConverter(EvalProjectPoliciesArg.class),
                 voidConverter(),
                 Duration.ofMinutes(1));
         engine.registerWorkflow(
@@ -336,6 +345,11 @@ public final class DexEngineInitializer implements ServletContextListener {
                 engine,
                 new ResolvePackageHealthMetadataActivity(packageHealthService),
                 protoConverter(ResolvePackageHealthMetadataActivityArg.class),
+                protoConverter(ResolvePackageHealthMetadataActivityRes.class));
+        registerActivity(
+                engine,
+                new ScheduleHealthPolicyEvaluationsActivity(engine),
+                protoConverter(ScheduleHealthPolicyEvaluationsArg.class),
                 voidConverter());
         registerActivity(
                 engine,

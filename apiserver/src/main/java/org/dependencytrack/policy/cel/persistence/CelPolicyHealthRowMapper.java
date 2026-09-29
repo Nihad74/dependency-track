@@ -21,25 +21,60 @@ package org.dependencytrack.policy.cel.persistence;
 import org.dependencytrack.proto.policy.v1.HealthMeta;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.statement.StatementContext;
+import org.jspecify.annotations.Nullable;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
 import static org.dependencytrack.persistence.jdbi.mapping.RowMapperUtil.maybeSet;
+import static org.dependencytrack.persistence.jdbi.mapping.RowMapperUtil.nullableTimestamp;
 
 public final class CelPolicyHealthRowMapper implements RowMapper<HealthMeta> {
 
     @Override
     public HealthMeta map(ResultSet rs, StatementContext ctx) throws SQLException {
+        return mapToBuilder(rs).build();
+    }
+
+    HealthMeta.Builder mapToBuilder(ResultSet rs) throws SQLException {
         final HealthMeta.Builder builder = HealthMeta.newBuilder();
+        maybeSet(rs, "scorecard_score", CelPolicyHealthRowMapper::nullableFloat, builder::setScorecardScore);
+        maybeSet(rs, "avg_issue_age_days", CelPolicyHealthRowMapper::nullableFloat, builder::setAvgIssueAgeDays);
         maybeSet(
                 rs,
-                "scorecard_score",
-                (resultSet, columnName) -> {
-                    final float score = resultSet.getFloat(columnName);
-                    return resultSet.wasNull() ? null : score;
-                },
-                builder::setScorecardScore);
-        return builder.build();
+                "commit_frequency_weekly",
+                CelPolicyHealthRowMapper::nullableFloat,
+                builder::setCommitFrequencyWeekly);
+        maybeSet(
+                rs,
+                "last_commit",
+                (resultSet, columnName) -> nullableTimestamp(resultSet, columnName),
+                builder::setLastCommit);
+        maybeSet(rs, "dependents", CelPolicyHealthRowMapper::nullableLong, builder::setDependents);
+        maybeSet(rs, "bus_factor", CelPolicyHealthRowMapper::nullableInt, builder::setBusFactor);
+        maybeSet(rs, "stars", CelPolicyHealthRowMapper::nullableLong, builder::setStars);
+        maybeSet(rs, "forks", CelPolicyHealthRowMapper::nullableLong, builder::setForks);
+        maybeSet(rs, "is_repo_archived", CelPolicyHealthRowMapper::nullableBoolean, builder::setIsRepoArchived);
+        return builder;
+    }
+
+    private static @Nullable Float nullableFloat(ResultSet rs, String columnName) throws SQLException {
+        final float value = rs.getFloat(columnName);
+        return rs.wasNull() ? null : value;
+    }
+
+    private static @Nullable Long nullableLong(ResultSet rs, String columnName) throws SQLException {
+        final long value = rs.getLong(columnName);
+        return rs.wasNull() ? null : value;
+    }
+
+    private static @Nullable Integer nullableInt(ResultSet rs, String columnName) throws SQLException {
+        final int value = rs.getInt(columnName);
+        return rs.wasNull() ? null : value;
+    }
+
+    private static @Nullable Boolean nullableBoolean(ResultSet rs, String columnName) throws SQLException {
+        final boolean value = rs.getBoolean(columnName);
+        return rs.wasNull() ? null : value;
     }
 }

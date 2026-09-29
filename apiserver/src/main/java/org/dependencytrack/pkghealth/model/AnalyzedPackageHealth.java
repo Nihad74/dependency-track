@@ -29,7 +29,7 @@ import java.util.List;
 import static java.util.Objects.requireNonNull;
 
 @NullMarked
-public final class PackageHealthMetaModel {
+public final class AnalyzedPackageHealth {
 
     private final PackageURL purl;
 
@@ -54,7 +54,7 @@ public final class PackageHealthMetaModel {
 
     private List<PackageHealthScorecardCheck> scorecardChecks = List.of();
 
-    public PackageHealthMetaModel(PackageURL purl) {
+    public AnalyzedPackageHealth(PackageURL purl) {
         this.purl = requireNonNull(purl, "purl must not be null");
 
         if (purl.getVersion() != null
@@ -64,7 +64,7 @@ public final class PackageHealthMetaModel {
         }
     }
 
-    public void mergeFrom(PackageHealthMetaModel other) {
+    public void mergeFrom(AnalyzedPackageHealth other) {
         requireNonNull(other, "other must not be null");
 
         if (!purl.equals(other.purl)) {
@@ -254,7 +254,7 @@ public final class PackageHealthMetaModel {
 
     @Override
     public String toString() {
-        return "PackageHealthMetaModel{" + "purl="
+        return "AnalyzedPackageHealth{" + "purl="
                 + purl + ", stars="
                 + stars + ", forks="
                 + forks + ", contributors="

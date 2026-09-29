@@ -225,4 +225,34 @@ class CelPolicyCompilerTest {
         assertThat(program.execute(Map.of("health", HealthMeta.getDefaultInstance())))
                 .isFalse();
     }
+
+    @Test
+    void shouldCompileHealthPolicyFields() throws Exception {
+        final var compiler = new CelPolicyCompiler(CelPolicyType.COMPONENT);
+        Set<String> healthData = Set.of(
+                "avg_issue_age_days",
+                "commit_frequency_weekly",
+                "last_commit",
+                "dependents",
+                "bus_factor",
+                "stars",
+                "forks",
+                "is_repo_archived");
+        for (final String field : healthData) {
+            final CelPolicyProgram program = compiler.compile("has(health." + field + ")", CacheMode.NO_CACHE);
+            assertThat(program.getRequirements().get(TYPE_HEALTH)).contains(field);
+        }
+
+        final CelPolicyProgram checks = compiler.compile(
+                "health.scorecard_checks.exists(c, c.name == \"Maintained\" && c.score <= 3.0)", CacheMode.NO_CACHE);
+        assertThat(checks.getRequirements().get(TYPE_HEALTH)).contains("scorecard_checks");
+        assertThat(checks.execute(Map.of(
+                        "health",
+                        HealthMeta.newBuilder()
+                                .addScorecardChecks(HealthMeta.ScorecardCheck.newBuilder()
+                                        .setName("Maintained")
+                                        .setScore(3.0f))
+                                .build())))
+                .isTrue();
+    }
 }

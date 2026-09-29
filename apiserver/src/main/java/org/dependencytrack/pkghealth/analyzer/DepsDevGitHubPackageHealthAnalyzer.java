@@ -22,7 +22,7 @@ import com.github.packageurl.PackageURL;
 import org.dependencytrack.pkghealth.client.DepsDevApiClient;
 import org.dependencytrack.pkghealth.client.GitHubApiClient;
 import org.dependencytrack.pkghealth.client.GitHubApiClientProvider;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.util.PurlUtil;
 
 import java.io.IOException;
@@ -60,14 +60,17 @@ public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHea
     }
 
     @Override
-    public AnalysisResult analyze(final PackageURL purl) throws AnalysisException {
+    public AnalysisResult analyze(final PackageURL purl) throws AnalysisException, InterruptedException {
 
         final PackageURL packagePurl =
                 Objects.requireNonNull(PurlUtil.silentPurlPackageOnly(purl), "Unable to create package-only PURL");
 
-        final var metadata = new PackageHealthMetaModel(packagePurl);
+        final var metadata = new AnalyzedPackageHealth(packagePurl);
 
         final String system = DEPS_DEV_SYSTEM_BY_PURL_TYPE.get(purl.getType());
+        if (system == null) {
+            return new AnalysisResult.NotAvailable();
+        }
         final String name = toDepsDevPackageName(purl);
 
         /*
@@ -120,16 +123,13 @@ public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHea
             gitHubClient.get().fetchRepositoryMetadata(packagePurl, repository).ifPresent(metadata::mergeFrom);
 
             return new AnalysisResult.Available(metadata);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new AnalysisException("Package health analysis was interrupted for " + packagePurl, e);
         } catch (IOException e) {
             throw new AnalysisException("Package health analysis failed for " + packagePurl, e);
         }
     }
 
     private void fetchDependents(
-            final PackageHealthMetaModel metadata,
+            final AnalyzedPackageHealth metadata,
             final String system,
             final String name,
             final String actualVersion,

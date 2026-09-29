@@ -20,7 +20,7 @@ package org.dependencytrack.pkghealth;
 
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -66,7 +66,7 @@ class PackageHealthServiceTest {
         final var packagePurl = new PackageURL("pkg:npm/example");
 
         final var expectedResult =
-                new PackageHealthAnalyzer.AnalysisResult.Available(new PackageHealthMetaModel(packagePurl));
+                new PackageHealthAnalyzer.AnalysisResult.Available(new AnalyzedPackageHealth(packagePurl));
 
         when(analyzer.supports(purl)).thenReturn(true);
         when(analyzer.analyze(purl)).thenReturn(expectedResult);

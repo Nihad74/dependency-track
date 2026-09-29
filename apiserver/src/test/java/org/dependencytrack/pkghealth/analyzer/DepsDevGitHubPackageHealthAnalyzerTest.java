@@ -22,7 +22,7 @@ import com.github.packageurl.PackageURL;
 import org.dependencytrack.pkghealth.client.DepsDevApiClient;
 import org.dependencytrack.pkghealth.client.GitHubApiClient;
 import org.dependencytrack.pkghealth.client.GitHubApiClientProvider;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -177,11 +177,11 @@ class DepsDevGitHubPackageHealthAnalyzerTest {
         final var packagePurl = new PackageURL("pkg:npm/example");
         final var repository = "github.com/acme/example";
 
-        final var depsDevMetadata = new PackageHealthMetaModel(packagePurl);
+        final var depsDevMetadata = new AnalyzedPackageHealth(packagePurl);
         depsDevMetadata.setStars(100L);
         depsDevMetadata.setScorecardScore(8.5f);
 
-        final var gitHubMetadata = new PackageHealthMetaModel(packagePurl);
+        final var gitHubMetadata = new AnalyzedPackageHealth(packagePurl);
         gitHubMetadata.setContributors(12L);
         gitHubMetadata.setHasReadme(true);
 
@@ -231,20 +231,12 @@ class DepsDevGitHubPackageHealthAnalyzerTest {
     }
 
     @Test
-    void shouldRestoreInterruptStatus() throws Exception {
+    void shouldPropagateInterruptedException() throws Exception {
         final var purl = new PackageURL("pkg:npm/example@1.0.0");
 
         when(depsDevApiClient.fetchLatestVersion("NPM", "example"))
                 .thenThrow(new InterruptedException("request interrupted"));
 
-        try {
-            assertThatExceptionOfType(PackageHealthAnalyzer.AnalysisException.class)
-                    .isThrownBy(() -> analyzer.analyze(purl))
-                    .withCauseInstanceOf(InterruptedException.class);
-
-            assertThat(Thread.currentThread().isInterrupted()).isTrue();
-        } finally {
-            Thread.interrupted();
-        }
+        assertThatExceptionOfType(InterruptedException.class).isThrownBy(() -> analyzer.analyze(purl));
     }
 }

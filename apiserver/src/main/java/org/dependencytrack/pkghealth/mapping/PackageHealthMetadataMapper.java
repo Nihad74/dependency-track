@@ -20,7 +20,7 @@ package org.dependencytrack.pkghealth.mapping;
 
 import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.PackageHealthMetadataStatus;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.jspecify.annotations.NullMarked;
 
 import java.time.Instant;
@@ -33,7 +33,7 @@ public final class PackageHealthMetadataMapper {
     private PackageHealthMetadataMapper() {}
 
     public static PackageHealthMetadata map(
-            final PackageHealthMetaModel source, final PackageHealthMetadataStatus status, final Instant lastFetch) {
+            final AnalyzedPackageHealth source, final PackageHealthMetadataStatus status, final Instant lastFetch) {
         requireNonNull(source, "source must not be null");
         requireNonNull(status, "status must not be null");
         requireNonNull(lastFetch, "lastFetch must not be null");

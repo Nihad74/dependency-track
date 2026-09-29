@@ -83,6 +83,7 @@ public enum CelPolicyType {
             Vulnerability.Alias.getDescriptor(),
             VersionDistance.getDescriptor(),
             HealthMeta.getDescriptor(),
+            HealthMeta.ScorecardCheck.getDescriptor(),
         };
     }
 

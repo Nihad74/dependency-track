@@ -28,7 +28,7 @@ import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageMetadataDao;
 import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
 import org.dependencytrack.pkghealth.client.ApiRateLimitException;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityArg;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -70,7 +70,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
 
         createPackageMetadata(packagePurl);
 
-        final var model = new PackageHealthMetaModel(packagePurl);
+        final var model = new AnalyzedPackageHealth(packagePurl);
         model.setStars(100L);
         model.setHasReadme(true);
 
@@ -80,13 +80,21 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
                 .addPurls(purl.toString())
                 .build();
 
-        activity.execute(mock(ActivityContext.class), arg);
+        final var firstResult = activity.execute(mock(ActivityContext.class), arg);
+        assertThat(firstResult.getChangedPurlsList()).containsExactly(packagePurl.canonicalize());
+
+        final var secondResult = activity.execute(mock(ActivityContext.class), arg);
+        assertThat(secondResult.getChangedPurlsList()).isEmpty();
+
+        model.setStars(101L);
+        final var thirdResult = activity.execute(mock(ActivityContext.class), arg);
+        assertThat(thirdResult.getChangedPurlsList()).containsExactly(packagePurl.canonicalize());
 
         final var persisted = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(packagePurl));
 
         assertThat(persisted).isNotNull();
         assertThat(persisted.purl()).isEqualTo(packagePurl);
-        assertThat(persisted.stars()).isEqualTo(100L);
+        assertThat(persisted.stars()).isEqualTo(101L);
         assertThat(persisted.hasReadme()).isTrue();
         assertThat(persisted.status()).isEqualTo(PackageHealthMetadataStatus.PROCESSED);
         assertThat(persisted.lastFetch()).isEqualTo(NOW);
@@ -145,7 +153,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
         createPackageMetadata(npmPackagePurl);
         createPackageMetadata(pypiPackagePurl);
 
-        final var npmModel = new PackageHealthMetaModel(npmPackagePurl);
+        final var npmModel = new AnalyzedPackageHealth(npmPackagePurl);
         npmModel.setStars(100L);
 
         when(packageHealthService.fetch(npmPurl))

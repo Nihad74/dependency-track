@@ -16,31 +16,7 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) OWASP Foundation. All Rights Reserved.
  */
+@NullMarked
 package org.dependencytrack.pkghealth.analyzer;
 
-import com.github.packageurl.PackageURL;
-import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
-
-public interface PackageHealthAnalyzer {
-
-    boolean supports(PackageURL purl);
-    ;
-
-    AnalysisResult analyze(PackageURL purl) throws AnalysisException, InterruptedException;
-
-    String getName();
-
-    sealed interface AnalysisResult {
-
-        record Available(AnalyzedPackageHealth metadata) implements AnalysisResult {}
-
-        record NotAvailable() implements AnalysisResult {}
-    }
-
-    final class AnalysisException extends Exception {
-
-        public AnalysisException(String message, Throwable cause) {
-            super(message, cause);
-        }
-    }
-}
+import org.jspecify.annotations.NullMarked;

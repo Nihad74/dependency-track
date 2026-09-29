@@ -22,7 +22,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -106,7 +107,7 @@ public final class DepsDevApiClient extends ApiClient {
         });
     }
 
-    public Optional<PackageHealthMetaModel> fetchProjectMetadata(final PackageURL packagePurl, final String project)
+    public Optional<AnalyzedPackageHealth> fetchProjectMetadata(final PackageURL packagePurl, final String project)
             throws IOException, InterruptedException {
         if (packagePurl == null || project == null) {
             return Optional.empty();
@@ -115,7 +116,7 @@ public final class DepsDevApiClient extends ApiClient {
         final String url = "%s/v3/projects/%s".formatted(apiBaseUrl, urlEncode(project));
 
         return requestParseJsonForResult(url, root -> {
-            final var metadata = new PackageHealthMetaModel(packagePurl);
+            final var metadata = new AnalyzedPackageHealth(packagePurl);
 
             metadata.setStars(longOrNull(root.get("starsCount")));
             metadata.setForks(longOrNull(root.get("forksCount")));
@@ -149,7 +150,8 @@ public final class DepsDevApiClient extends ApiClient {
                 .toList();
     }
 
-    private static PackageHealthScorecardCheck mapScorecardCheck(final PackageURL packagePurl, final JsonNode node) {
+    private static @Nullable PackageHealthScorecardCheck mapScorecardCheck(
+            final PackageURL packagePurl, final JsonNode node) {
         final String name = textOrNull(node.get("name"));
         if (name == null || name.isBlank()) {
             return null;
@@ -173,19 +175,19 @@ public final class DepsDevApiClient extends ApiClient {
                 documentation != null ? textOrNull(documentation.get("url")) : null);
     }
 
-    private static String textOrNull(final JsonNode node) {
+    private static @Nullable String textOrNull(final @Nullable JsonNode node) {
         return node != null && node.isTextual() ? node.textValue() : null;
     }
 
-    private static Long longOrNull(final JsonNode node) {
+    private static @Nullable Long longOrNull(final @Nullable JsonNode node) {
         return node != null && node.isIntegralNumber() ? node.longValue() : null;
     }
 
-    private static Float floatOrNull(final JsonNode node) {
+    private static @Nullable Float floatOrNull(final @Nullable JsonNode node) {
         return node != null && node.isNumber() ? node.floatValue() : null;
     }
 
-    private static Instant instantOrNull(final JsonNode node) {
+    private static @Nullable Instant instantOrNull(final @Nullable JsonNode node) {
         final String value = textOrNull(node);
         return value != null && !value.isBlank() ? Instant.parse(value) : null;
     }

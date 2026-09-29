@@ -27,7 +27,7 @@ import org.dependencytrack.model.PackageMetadata;
 import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageMetadataDao;
 import org.dependencytrack.pkghealth.mapping.PackageHealthMetadataMapper;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageHealthMetadataCandidatesArg;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -99,7 +99,7 @@ class FetchPackageHealthMetadataCandidatesActivityTest extends PersistenceCapabl
     }
 
     private static void createHealthMetadata(final PackageURL purl, final Instant lastFetch) {
-        final var source = new PackageHealthMetaModel(purl);
+        final var source = new AnalyzedPackageHealth(purl);
 
         final var metadata = PackageHealthMetadataMapper.map(source, PackageHealthMetadataStatus.PROCESSED, lastFetch);
 
