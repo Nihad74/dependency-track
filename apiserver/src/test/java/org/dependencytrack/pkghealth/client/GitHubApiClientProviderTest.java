@@ -96,6 +96,19 @@ class GitHubApiClientProviderTest extends PersistenceCapableTest {
         verify(secretManager).getSecretValue("github-token-reference");
     }
 
+    @Test
+    void shouldReuseClientUntilTokenChanges() {
+        createGitHubRepository(true, true, "github-token-reference");
+        when(secretManager.getSecretValue("github-token-reference")).thenReturn("token-1", "token-1", "token-2");
+
+        final var first = provider.get().orElseThrow();
+        final var second = provider.get().orElseThrow();
+        final var afterRotation = provider.get().orElseThrow();
+
+        assertThat(second).isSameAs(first);
+        assertThat(afterRotation).isNotSameAs(first);
+    }
+
     private void createGitHubRepository(
             final boolean enabled, final boolean authenticationRequired, final String password) {
         qm.createRepository(

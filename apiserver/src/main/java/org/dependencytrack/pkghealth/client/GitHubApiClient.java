@@ -20,6 +20,8 @@ package org.dependencytrack.pkghealth.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
 import org.jspecify.annotations.Nullable;
@@ -34,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 
 public final class GitHubApiClient extends ApiClient {
@@ -45,6 +48,13 @@ public final class GitHubApiClient extends ApiClient {
     private final String accessToken;
     private final Clock clock;
 
+    // Multiple packages can share a GitHub repository. Cache its metadata so each
+    // repository is fetched once per cache entry, then create a separate result for each PURL.
+    private final Cache<String, Optional<RepositoryMetadata>> repositoryCache = Caffeine.newBuilder()
+            .maximumSize(1_000)
+            .expireAfterWrite(Duration.ofHours(1))
+            .build();
+
     public GitHubApiClient(final @Nullable String accessToken) {
         super();
 
@@ -52,7 +62,7 @@ public final class GitHubApiClient extends ApiClient {
             throw new IllegalArgumentException("accessToken must not be blank");
         }
 
-        this.accessToken = accessToken;
+        this.accessToken = Objects.requireNonNull(accessToken);
         this.clock = Clock.systemUTC();
         this.apiBaseUrl = DEFAULT_API_BASE_URL;
     }
@@ -65,7 +75,7 @@ public final class GitHubApiClient extends ApiClient {
             final String apiBaseUrl) {
 
         super(httpClient, objectMapper);
-        this.accessToken = accessToken;
+        this.accessToken = Objects.requireNonNull(accessToken);
         this.clock = clock;
         this.apiBaseUrl = apiBaseUrl;
     }
@@ -85,40 +95,64 @@ public final class GitHubApiClient extends ApiClient {
             return Optional.empty();
         }
 
-        final String repositoryUrl = repositoryUrl(coordinates.get());
-        final Optional<JsonNode> repositoryResponse = requestJson(repositoryUrl);
+        return cachedRepositoryData(repositoryUrl(coordinates.get())).map(data -> data.forPackage(packagePurl));
+    }
 
-        if (repositoryResponse.isEmpty()) {
+    private Optional<RepositoryMetadata> cachedRepositoryData(final String repositoryUrl)
+            throws IOException, InterruptedException {
+        try {
+            return repositoryCache.get(repositoryUrl.toLowerCase(Locale.ROOT), ignored -> {
+                try {
+                    return fetchRepositoryData(repositoryUrl);
+                } catch (IOException | InterruptedException e) {
+                    throw new RepositoryFetchException(e);
+                }
+            });
+        } catch (RepositoryFetchException e) {
+            if (e.getCause() instanceof InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            }
+            if (e.getCause() instanceof IOException io) {
+                throw io;
+            }
+            throw e;
+        }
+    }
+
+    private static final class RepositoryFetchException extends RuntimeException {
+        private RepositoryFetchException(final Exception cause) {
+            super(cause);
+        }
+    }
+
+    private Optional<RepositoryMetadata> fetchRepositoryData(final String repositoryUrl)
+            throws IOException, InterruptedException {
+        final Optional<JsonNode> response = requestJson(repositoryUrl);
+        if (response.isEmpty()) {
             return Optional.empty();
         }
 
-        final JsonNode repository = repositoryResponse.get();
-        final var metadata = new PackageHealthMetaModel(packagePurl);
-
-        metadata.setRepositoryArchived(booleanOrNull(repository.get("archived")));
-
+        final JsonNode repository = response.get();
         final IssueStatistics issues = fetchIssueStatistics(repositoryUrl);
-        metadata.setOpenIssues(issues.openIssues());
-        metadata.setOpenPullRequests(issues.openPullRequests());
-        metadata.setAverageIssueAgeDays(issues.averageIssueAgeDays());
-
         final ContributorStatistics contributors = fetchContributorStatistics(repositoryUrl);
-        metadata.setContributors(contributors.count());
-        metadata.setCommitFrequencyWeekly(calculateCommitFrequency(
-                contributors.totalContributions(), instantOrNull(repository.get("created_at"))));
-        metadata.setBusFactor(calculateBusFactor(contributors.contributions()));
-
         final String defaultBranch = textOrNull(repository.get("default_branch"));
 
-        metadata.setLastCommit(fetchLastCommit(repositoryUrl, defaultBranch));
-        metadata.setFiles(fetchFileCount(repositoryUrl, defaultBranch));
-        metadata.setHasReadme(resourceExists(repositoryUrl + "/readme"));
-        metadata.setHasCodeOfConduct(resourceExistsAtAnyPath(
-                repositoryUrl, "CODE_OF_CONDUCT.md", ".github/CODE_OF_CONDUCT.md", "docs/CODE_OF_CONDUCT.md"));
-        metadata.setHasSecurityPolicy(
-                resourceExistsAtAnyPath(repositoryUrl, "SECURITY.md", ".github/SECURITY.md", "docs/SECURITY.md"));
-
-        return Optional.of(metadata);
+        return Optional.of(new RepositoryMetadata(
+                booleanOrNull(repository.get("archived")),
+                issues.openIssues(),
+                issues.openPullRequests(),
+                issues.averageIssueAgeDays(),
+                contributors.count(),
+                calculateCommitFrequency(
+                        contributors.totalContributions(), instantOrNull(repository.get("created_at"))),
+                calculateBusFactor(contributors.contributions()),
+                fetchLastCommit(repositoryUrl, defaultBranch),
+                fetchFileCount(repositoryUrl, defaultBranch),
+                resourceExists(repositoryUrl + "/readme"),
+                resourceExistsAtAnyPath(
+                        repositoryUrl, "CODE_OF_CONDUCT.md", ".github/CODE_OF_CONDUCT.md", "docs/CODE_OF_CONDUCT.md"),
+                resourceExistsAtAnyPath(repositoryUrl, "SECURITY.md", ".github/SECURITY.md", "docs/SECURITY.md")));
     }
 
     private IssueStatistics fetchIssueStatistics(final String repositoryUrl) throws IOException, InterruptedException {
@@ -163,7 +197,7 @@ public final class GitHubApiClient extends ApiClient {
         return new ContributorStatistics((long) contributors.size(), contributions);
     }
 
-    private Instant fetchLastCommit(final String repositoryUrl, final @Nullable String defaultBranch)
+    private @Nullable Instant fetchLastCommit(final String repositoryUrl, final @Nullable String defaultBranch)
             throws IOException, InterruptedException {
         if (defaultBranch == null) {
             return null;
@@ -185,7 +219,7 @@ public final class GitHubApiClient extends ApiClient {
                 : instantOrNull(commit.path("author").get("date"));
     }
 
-    private Long fetchFileCount(final String repositoryUrl, final @Nullable String defaultBranch)
+    private @Nullable Long fetchFileCount(final String repositoryUrl, final @Nullable String defaultBranch)
             throws IOException, InterruptedException {
         if (defaultBranch == null) {
             return null;
@@ -258,7 +292,8 @@ public final class GitHubApiClient extends ApiClient {
         return results;
     }
 
-    private Float calculateCommitFrequency(final long totalContributions, final @Nullable Instant repositoryCreatedAt) {
+    private @Nullable Float calculateCommitFrequency(
+            final long totalContributions, final @Nullable Instant repositoryCreatedAt) {
         if (repositoryCreatedAt == null) {
             return null;
         }
@@ -269,7 +304,7 @@ public final class GitHubApiClient extends ApiClient {
         return (float) totalContributions / repositoryAgeWeeks;
     }
 
-    private static Integer calculateBusFactor(final List<Long> contributions) {
+    private static @Nullable Integer calculateBusFactor(final List<Long> contributions) {
         final long totalContributions =
                 contributions.stream().mapToLong(Long::longValue).sum();
 
@@ -296,7 +331,7 @@ public final class GitHubApiClient extends ApiClient {
         return null;
     }
 
-    private static Optional<RepositoryCoordinates> parseProject(final String project) {
+    private static Optional<RepositoryCoordinates> parseProject(final @Nullable String project) {
         if (project == null || !project.toLowerCase(Locale.ROOT).startsWith("github.com/")) {
             return Optional.empty();
         }
@@ -317,19 +352,19 @@ public final class GitHubApiClient extends ApiClient {
                 .formatted(apiBaseUrl, urlEncode(coordinates.owner()), urlEncode(coordinates.repository()));
     }
 
-    private static String textOrNull(final JsonNode node) {
+    private static @Nullable String textOrNull(final @Nullable JsonNode node) {
         return node != null && node.isTextual() ? node.textValue() : null;
     }
 
-    private static Long longOrNull(final JsonNode node) {
+    private static @Nullable Long longOrNull(final @Nullable JsonNode node) {
         return node != null && node.isIntegralNumber() ? node.longValue() : null;
     }
 
-    private static Boolean booleanOrNull(final JsonNode node) {
+    private static @Nullable Boolean booleanOrNull(final @Nullable JsonNode node) {
         return node != null && node.isBoolean() ? node.booleanValue() : null;
     }
 
-    private static Instant instantOrNull(final JsonNode node) {
+    private static @Nullable Instant instantOrNull(final @Nullable JsonNode node) {
         final String value = textOrNull(node);
         if (value == null || value.isBlank()) {
             return null;
@@ -350,6 +385,38 @@ public final class GitHubApiClient extends ApiClient {
 
         private long totalContributions() {
             return contributions.stream().mapToLong(Long::longValue).sum();
+        }
+    }
+
+    private record RepositoryMetadata(
+            @Nullable Boolean archived,
+            long openIssues,
+            long openPullRequests,
+            float averageIssueAgeDays,
+            long contributors,
+            @Nullable Float commitFrequencyWeekly,
+            @Nullable Integer busFactor,
+            @Nullable Instant lastCommit,
+            @Nullable Long files,
+            boolean hasReadme,
+            boolean hasCodeOfConduct,
+            boolean hasSecurityPolicy) {
+
+        private PackageHealthMetaModel forPackage(final PackageURL packagePurl) {
+            final var model = new PackageHealthMetaModel(packagePurl);
+            model.setRepositoryArchived(archived);
+            model.setOpenIssues(openIssues);
+            model.setOpenPullRequests(openPullRequests);
+            model.setAverageIssueAgeDays(averageIssueAgeDays);
+            model.setContributors(contributors);
+            model.setCommitFrequencyWeekly(commitFrequencyWeekly);
+            model.setBusFactor(busFactor);
+            model.setLastCommit(lastCommit);
+            model.setFiles(files);
+            model.setHasReadme(hasReadme);
+            model.setHasCodeOfConduct(hasCodeOfConduct);
+            model.setHasSecurityPolicy(hasSecurityPolicy);
+            return model;
         }
     }
 }

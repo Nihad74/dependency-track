@@ -30,6 +30,9 @@ import java.net.http.HttpClient;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
@@ -198,6 +201,17 @@ class GitHubApiClientTest {
         assertThat(metadata.getHasSecurityPolicy()).isTrue();
         assertThat(metadata.getCommitFrequencyWeekly()).isEqualTo(2.0f);
         assertThat(metadata.getBusFactor()).isEqualTo(1);
+
+        final var otherPurl = new PackageURL("pkg:npm/another");
+        final var other = client.fetchRepositoryMetadata(otherPurl, "github.com/ACME/EXAMPLE")
+                .orElseThrow();
+
+        assertThat(other).isNotSameAs(metadata);
+        assertThat(other.getPurl()).isEqualTo(otherPurl);
+        assertThat(other.getContributors()).isEqualTo(metadata.getContributors());
+
+        verify(1, getRequestedFor(urlPathEqualTo("/repos/acme/example")));
+        verify(1, getRequestedFor(urlPathEqualTo("/repos/acme/example/issues")));
     }
 
     @Test
@@ -407,5 +421,43 @@ class GitHubApiClientTest {
         assertThatExceptionOfType(ApiRateLimitException.class)
                 .isThrownBy(() -> client.fetchRepositoryMetadata(packagePurl, "github.com/acme/example"))
                 .satisfies(e -> assertThat(e.resetAt()).isEqualTo(Instant.ofEpochSecond(1790333868)));
+
+        assertThatExceptionOfType(ApiRateLimitException.class)
+                .isThrownBy(() -> client.fetchRepositoryMetadata(packagePurl, "github.com/acme/example"));
+
+        verify(2, getRequestedFor(urlPathEqualTo("/repos/acme/example")));
+    }
+
+    @Test
+    void shouldShareConcurrentRepositoryFetch() throws Exception {
+        stubFor(get(urlPathEqualTo("/repos/acme/example"))
+                .willReturn(aResponse().withStatus(404).withFixedDelay(300)));
+
+        final var ready = new CountDownLatch(2);
+        final var start = new CountDownLatch(1);
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            final var first = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                return client.fetchRepositoryMetadata(packagePurl, "github.com/acme/example");
+            });
+            final var second = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                return client.fetchRepositoryMetadata(new PackageURL("pkg:npm/another"), "github.com/acme/example");
+            });
+
+            try {
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                start.countDown();
+            }
+
+            assertThat(first.get()).isEmpty();
+            assertThat(second.get()).isEmpty();
+        }
+
+        verify(1, getRequestedFor(urlPathEqualTo("/repos/acme/example")));
     }
 }
