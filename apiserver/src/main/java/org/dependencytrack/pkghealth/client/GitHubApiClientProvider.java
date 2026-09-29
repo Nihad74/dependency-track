@@ -21,6 +21,7 @@ package org.dependencytrack.pkghealth.client;
 import org.dependencytrack.model.Repository;
 import org.dependencytrack.model.RepositoryType;
 import org.dependencytrack.secret.management.SecretManager;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +36,7 @@ public final class GitHubApiClientProvider {
 
     private final SecretManager secretManager;
 
-    private volatile CachedClient cachedClient;
+    private volatile @Nullable CachedClient cachedClient;
 
     public GitHubApiClientProvider(final SecretManager secretManager) {
         this.secretManager = Objects.requireNonNull(secretManager);
