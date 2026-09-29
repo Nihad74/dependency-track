@@ -395,6 +395,17 @@ public final class CelPolicyEngine {
         }
     }
 
+    private static boolean isHealthFieldAbsent(HealthMeta health, String fieldName) {
+        final var field = HealthMeta.getDescriptor().findFieldByName(fieldName);
+        if (field == null) {
+            return true;
+        }
+        if (field.isRepeated()) {
+            return health.getRepeatedFieldCount(field) == 0;
+        }
+        return !health.hasField(field);
+    }
+
     private void evaluateComponentAgainstPolicies(
             List<PolicyWithScripts> policiesWithScripts,
             long componentId,
@@ -412,9 +423,7 @@ public final class CelPolicyEngine {
                         cs.script().getRequirements().getOrDefault(TYPE_HEALTH, Set.of());
                 final HealthMeta health = (HealthMeta) scriptArgs.get(CelPolicyVariable.HEALTH.variableName());
 
-                if (requiredHealthFields.stream()
-                        .map(HealthMeta.getDescriptor()::findFieldByName)
-                        .anyMatch(field -> field == null || !health.hasField(field))) {
+                if (requiredHealthFields.stream().anyMatch(fieldName -> isHealthFieldAbsent(health, fieldName))) {
                     unevaluatedConditions.add(cs.condition());
                     continue;
                 }

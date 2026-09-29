@@ -28,7 +28,9 @@ import org.dependencytrack.dex.api.failure.ActivityFailureException;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageHealthMetadataCandidatesArg;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageHealthMetadataCandidatesRes;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityArg;
+import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityRes;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataWorkflowArg;
+import org.dependencytrack.proto.internal.workflow.v1.ScheduleHealthPolicyEvaluationsArg;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
@@ -69,8 +71,9 @@ public final class ResolvePackageHealthMetadataWorkflow
         if (!fetchResult.getPurlsList().isEmpty()) {
             ctx.logger().debug("Resolving health metadata for {} packages", fetchResult.getPurlsCount());
 
+            ResolvePackageHealthMetadataActivityRes resolveResult = null;
             try {
-                ctx.activity(ResolvePackageHealthMetadataActivity.class)
+                resolveResult = ctx.activity(ResolvePackageHealthMetadataActivity.class)
                         .call(new ActivityCallOptions<ResolvePackageHealthMetadataActivityArg>()
                                 .withRetryPolicy(RESOLVE_RETRY_POLICY)
                                 .withArgument(ResolvePackageHealthMetadataActivityArg.newBuilder()
@@ -81,6 +84,14 @@ public final class ResolvePackageHealthMetadataWorkflow
                 ctx.logger().debug("Package health metadata resolution completed");
             } catch (ActivityFailureException e) {
                 ctx.logger().warn("Package health metadata resolution failed", e);
+            }
+
+            if (resolveResult != null && resolveResult.getChangedPurlsCount() > 0) {
+                ctx.activity(ScheduleHealthPolicyEvaluationsActivity.class)
+                        .call(ScheduleHealthPolicyEvaluationsArg.newBuilder()
+                                .addAllPurls(resolveResult.getChangedPurlsList())
+                                .build())
+                        .await();
             }
         }
 

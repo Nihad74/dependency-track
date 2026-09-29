@@ -21,7 +21,7 @@ package org.dependencytrack.pkghealth.mapping;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -37,7 +37,7 @@ class PackageHealthMetadataMapperTest {
         final var purl = new PackageURL("pkg:npm/example");
         final var lastFetch = Instant.parse("2026-09-24T10:00:00Z");
 
-        final var source = new PackageHealthMetaModel(purl);
+        final var source = new AnalyzedPackageHealth(purl);
         source.setStars(100L);
         source.setOpenIssues(12L);
         source.setHasReadme(true);
@@ -67,7 +67,7 @@ class PackageHealthMetadataMapperTest {
                 List.of("30 commits found"),
                 "https://github.com/ossf/scorecard");
 
-        final var source = new PackageHealthMetaModel(purl);
+        final var source = new AnalyzedPackageHealth(purl);
         source.setScorecardScore(8.7f);
         source.setScorecardReferenceVersion("v5.0.0");
         source.setScorecardTimestamp(scorecardTimestamp);
@@ -87,7 +87,7 @@ class PackageHealthMetadataMapperTest {
         final var lastCommit = Instant.parse("2026-09-20T12:00:00Z");
         final var lastFetch = Instant.parse("2026-09-24T10:00:00Z");
 
-        final var source = new PackageHealthMetaModel(purl);
+        final var source = new AnalyzedPackageHealth(purl);
         source.setForks(20L);
         source.setContributors(15L);
         source.setCommitFrequencyWeekly(3.5f);
@@ -127,7 +127,7 @@ class PackageHealthMetadataMapperTest {
 
     @Test
     void shouldRejectNullStatus() throws Exception {
-        final var source = new PackageHealthMetaModel(new PackageURL("pkg:npm/example"));
+        final var source = new AnalyzedPackageHealth(new PackageURL("pkg:npm/example"));
 
         assertThatNullPointerException()
                 .isThrownBy(() -> PackageHealthMetadataMapper.map(source, null, Instant.EPOCH))
@@ -136,7 +136,7 @@ class PackageHealthMetadataMapperTest {
 
     @Test
     void shouldRejectNullLastFetch() throws Exception {
-        final var source = new PackageHealthMetaModel(new PackageURL("pkg:npm/example"));
+        final var source = new AnalyzedPackageHealth(new PackageURL("pkg:npm/example"));
 
         assertThatNullPointerException()
                 .isThrownBy(() -> PackageHealthMetadataMapper.map(source, PackageHealthMetadataStatus.PROCESSED, null))

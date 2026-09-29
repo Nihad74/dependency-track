@@ -23,7 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.packageurl.PackageURL;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -87,7 +87,7 @@ public final class GitHubApiClient extends ApiClient {
         requestBuilder.setHeader("Authorization", "Bearer " + accessToken);
     }
 
-    public Optional<PackageHealthMetaModel> fetchRepositoryMetadata(final PackageURL packagePurl, final String project)
+    public Optional<AnalyzedPackageHealth> fetchRepositoryMetadata(final PackageURL packagePurl, final String project)
             throws IOException, InterruptedException {
         final Optional<RepositoryCoordinates> coordinates = parseProject(project);
 
@@ -402,8 +402,8 @@ public final class GitHubApiClient extends ApiClient {
             boolean hasCodeOfConduct,
             boolean hasSecurityPolicy) {
 
-        private PackageHealthMetaModel forPackage(final PackageURL packagePurl) {
-            final var model = new PackageHealthMetaModel(packagePurl);
+        private AnalyzedPackageHealth forPackage(final PackageURL packagePurl) {
+            final var model = new AnalyzedPackageHealth(packagePurl);
             model.setRepositoryArchived(archived);
             model.setOpenIssues(openIssues);
             model.setOpenPullRequests(openPullRequests);

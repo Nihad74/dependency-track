@@ -29,20 +29,23 @@ import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
 import org.dependencytrack.pkghealth.client.ApiRateLimitException;
 import org.dependencytrack.pkghealth.mapping.PackageHealthMetadataMapper;
-import org.dependencytrack.pkghealth.model.PackageHealthMetaModel;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityArg;
+import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityRes;
 import org.dependencytrack.util.PurlUtil;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
-import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 
 @ActivitySpec(name = "resolve-package-health-metadata", defaultTaskQueue = "package-health-metadata-resolutions")
 public final class ResolvePackageHealthMetadataActivity
-        implements Activity<ResolvePackageHealthMetadataActivityArg, Void> {
+        implements Activity<ResolvePackageHealthMetadataActivityArg, ResolvePackageHealthMetadataActivityRes> {
 
     private final PackageHealthService packageHealthService;
     private final Clock clock;
@@ -57,15 +60,16 @@ public final class ResolvePackageHealthMetadataActivity
     }
 
     @Override
-    public @Nullable Void execute(
+    public @Nullable ResolvePackageHealthMetadataActivityRes execute(
             final ActivityContext ctx, final @Nullable ResolvePackageHealthMetadataActivityArg arg) throws Exception {
         if (arg == null || arg.getPurlsList().isEmpty()) {
-            return null;
+            return ResolvePackageHealthMetadataActivityRes.getDefaultInstance();
         }
 
+        final var metadataToPersist = new ArrayList<PackageHealthMetadata>(arg.getPurlsCount());
         for (final String purlString : arg.getPurlsList()) {
             try {
-                resolveAndPersist(new PackageURL(purlString));
+                metadataToPersist.add(fetchMetadata(new PackageURL(purlString)));
             } catch (PackageHealthAnalyzer.AnalysisException e) {
                 if (e.getCause() instanceof ApiRateLimitException rateLimit) {
                     final Duration wait = Duration.between(
@@ -78,26 +82,40 @@ public final class ResolvePackageHealthMetadataActivity
             }
         }
 
-        return null;
-    }
-
-    private void resolveAndPersist(final PackageURL purl) throws PackageHealthAnalyzer.AnalysisException {
-        final var result = packageHealthService.fetch(purl);
-        final PackageHealthMetadata metadata;
-
-        if (result instanceof PackageHealthAnalyzer.AnalysisResult.Available available) {
-            metadata = PackageHealthMetadataMapper.map(
-                    available.metadata(), PackageHealthMetadataStatus.PROCESSED, clock.instant());
-        } else {
-            final PackageURL packagePurl =
-                    requireNonNull(PurlUtil.silentPurlPackageOnly(purl), "Unable to create package-only PURL");
-
-            metadata = PackageHealthMetadataMapper.map(
-                    new PackageHealthMetaModel(packagePurl),
-                    PackageHealthMetadataStatus.NOT_AVAILABLE,
-                    clock.instant());
+        if (Thread.interrupted()) {
+            throw new InterruptedException("Interrupted before package health metadata was stored");
         }
 
-        useJdbiHandle(handle -> new PackageHealthMetadataDao(handle).upsert(metadata));
+        final List<String> changedPurls = inJdbiTransaction(handle -> {
+            final var dao = new PackageHealthMetadataDao(handle);
+            final var changed = new ArrayList<String>(metadataToPersist.size());
+            for (final PackageHealthMetadata metadata : metadataToPersist) {
+                final PackageHealthMetadata previous = dao.get(metadata.purl());
+                dao.upsert(metadata);
+                if (PackageHealthPolicyDelta.changed(previous, metadata)) {
+                    changed.add(metadata.purl().canonicalize());
+                }
+            }
+            return changed;
+        });
+
+        return ResolvePackageHealthMetadataActivityRes.newBuilder()
+                .addAllChangedPurls(changedPurls)
+                .build();
+    }
+
+    private PackageHealthMetadata fetchMetadata(final PackageURL purl)
+            throws PackageHealthAnalyzer.AnalysisException, InterruptedException {
+        final var result = packageHealthService.fetch(purl);
+
+        if (result instanceof PackageHealthAnalyzer.AnalysisResult.Available available) {
+            return PackageHealthMetadataMapper.map(
+                    available.metadata(), PackageHealthMetadataStatus.PROCESSED, clock.instant());
+        }
+
+        final PackageURL packagePurl =
+                requireNonNull(PurlUtil.silentPurlPackageOnly(purl), "Unable to create package-only PURL");
+        return PackageHealthMetadataMapper.map(
+                new AnalyzedPackageHealth(packagePurl), PackageHealthMetadataStatus.NOT_AVAILABLE, clock.instant());
     }
 }

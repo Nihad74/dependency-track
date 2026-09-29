@@ -36,7 +36,8 @@ public final class PackageHealthService {
         return analyzer.supports(purl);
     }
 
-    public PackageHealthAnalyzer.AnalysisResult fetch(PackageURL purl) throws PackageHealthAnalyzer.AnalysisException {
+    public PackageHealthAnalyzer.AnalysisResult fetch(PackageURL purl)
+            throws PackageHealthAnalyzer.AnalysisException, InterruptedException {
         requireNonNull(purl, "purl must not be null");
 
         if (!supports(purl)) {
