@@ -35,6 +35,8 @@ public final class GitHubApiClientProvider {
 
     private final SecretManager secretManager;
 
+    private volatile CachedClient cachedClient;
+
     public GitHubApiClientProvider(final SecretManager secretManager) {
         this.secretManager = Objects.requireNonNull(secretManager);
     }
@@ -72,6 +74,24 @@ public final class GitHubApiClientProvider {
             return Optional.empty();
         }
 
-        return Optional.of(new GitHubApiClient(accessToken));
+        return Optional.of(clientFor(accessToken));
+    }
+
+    private record CachedClient(String token, GitHubApiClient client) {}
+
+    private GitHubApiClient clientFor(final String accessToken) {
+        var current = cachedClient;
+        if (current != null && current.token().equals(accessToken)) {
+            return current.client();
+        }
+
+        synchronized (this) {
+            current = cachedClient;
+            if (current == null || !current.token().equals(accessToken)) {
+                current = new CachedClient(accessToken, new GitHubApiClient(accessToken));
+                cachedClient = current;
+            }
+            return current.client();
+        }
     }
 }
