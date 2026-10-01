@@ -617,7 +617,7 @@ public class ComponentsResourceTest extends ResourceTest {
                   "title": "Invalid sort field",
                   "detail": "Sorting by field 'invalid_field' is not supported",
                   "invalid_field": "invalid_field",
-                  "supported_fields": ["name", "group", "last_inherited_risk_score"]
+                  "supported_fields": ["name", "group", "last_inherited_risk_score", "scorecard_score"]
                 }
                 """);
     }

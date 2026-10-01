@@ -486,6 +486,12 @@ public class Component implements Serializable {
     private Double lastInheritedRiskScore;
 
     /**
+     * OpenSSF Scorecard score loaded from package health metadata for list queries.
+     * Not persisted on the component row.
+     */
+    private transient Double scorecardScore;
+
+    /**
      * Sticky notes
      */
     @Persistent(defaultFetchGroup = "true")
@@ -996,6 +1002,17 @@ public class Component implements Serializable {
 
     public void setLastInheritedRiskScore(Double lastInheritedRiskScore) {
         this.lastInheritedRiskScore = lastInheritedRiskScore;
+    }
+
+    @JsonIgnore
+    @Schema(hidden = true)
+    public Double getScorecardScore() {
+        return scorecardScore;
+    }
+
+    @JsonIgnore
+    public void setScorecardScore(Double scorecardScore) {
+        this.scorecardScore = scorecardScore;
     }
 
     @JsonIgnore
