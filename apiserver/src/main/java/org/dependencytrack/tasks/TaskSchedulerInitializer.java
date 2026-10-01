@@ -44,6 +44,7 @@ import org.dependencytrack.kevdatasource.api.KevDataSourceFactory;
 import org.dependencytrack.metrics.UpdatePortfolioMetricsWorkflow;
 import org.dependencytrack.metrics.VulnerabilityMetricsUpdateTask;
 import org.dependencytrack.notification.ProcessScheduledNotificationsWorkflow;
+import org.dependencytrack.persistence.jdbi.ConfigPropertyDao;
 import org.dependencytrack.persistence.jdbi.ScheduledNotificationDao;
 import org.dependencytrack.persistence.jdbi.VulnerabilityPolicyDao;
 import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataWorkflow;
@@ -77,6 +78,7 @@ import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.model.ConfigPropertyConstants.PACKAGE_HEALTH_RESOLUTION_ENABLED;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.dependencytrack.util.TaskUtil.getCronScheduleFromConfig;
 
@@ -182,6 +184,12 @@ public final class TaskSchedulerInitializer implements ServletContextListener {
         }
     }
 
+    static boolean isPackageHealthResolutionEnabled() {
+        return withJdbiHandle(handle -> handle.attach(ConfigPropertyDao.class)
+                .getOptionalValue(PACKAGE_HEALTH_RESOLUTION_ENABLED, Boolean.class)
+                .orElse(true));
+    }
+
     static List<RecurringTask<Void>> recurringTasks(
             Config config, DexEngine dexEngine, PluginManager pluginManager, SecretManager secretManager) {
         final var kevDataSourceMirrorService = new KevDataSourceMirrorService(pluginManager, dexEngine);
@@ -235,9 +243,15 @@ public final class TaskSchedulerInitializer implements ServletContextListener {
                 recurringTask(
                         "Package Health Metadata Resolution",
                         getCronScheduleFromConfig(config, ConfigKeys.TASK_PACKAGE_HEALTH_METADATA_RESOLUTION_CRON),
-                        () -> dexEngine.createRun(
-                                new CreateWorkflowRunRequest<>(ResolvePackageHealthMetadataWorkflow.class)
-                                        .withWorkflowInstanceId(ResolvePackageHealthMetadataWorkflow.INSTANCE_ID))),
+                        () -> {
+                            if (!isPackageHealthResolutionEnabled()) {
+                                LOGGER.info("Package health metadata resolution is disabled");
+                                return;
+                            }
+                            dexEngine.createRun(
+                                    new CreateWorkflowRunRequest<>(ResolvePackageHealthMetadataWorkflow.class)
+                                            .withWorkflowInstanceId(ResolvePackageHealthMetadataWorkflow.INSTANCE_ID));
+                        }),
                 recurringTask(
                         "Package Metadata Resolution",
                         getCronScheduleFromConfig(config, ConfigKeys.TASK_PACKAGE_METADATA_RESOLUTION_CRON),

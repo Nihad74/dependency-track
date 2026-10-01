@@ -202,9 +202,10 @@ public class ComponentsResource extends AbstractApiResource implements Component
                         case "name" -> ListComponentsQuery.SortBy.NAME;
                         case "group" -> ListComponentsQuery.SortBy.GROUP;
                         case "last_inherited_risk_score" -> ListComponentsQuery.SortBy.LAST_RISKSCORE;
+                        case "scorecard_score" -> ListComponentsQuery.SortBy.SCORECARD_SCORE;
                         default ->
                             throw new InvalidSortFieldException(
-                                    sortBy, List.of("name", "group", "last_inherited_risk_score"));
+                                    sortBy, List.of("name", "group", "last_inherited_risk_score", "scorecard_score"));
                     };
 
             final Page<Component> componentsPage = handle.attach(ComponentDao.class)
@@ -289,6 +290,7 @@ public class ComponentsResource extends AbstractApiResource implements Component
                         .group(componentRow.getGroup())
                         .internal(componentRow.isInternal())
                         .lastInheritedRiskScore(componentRow.getLastInheritedRiskScore())
+                        .scorecardScore(componentRow.getScorecardScore())
                         .license(componentRow.getLicense())
                         .licenseExpression(componentRow.getLicenseExpression())
                         .licenseUrl(componentRow.getLicenseUrl())

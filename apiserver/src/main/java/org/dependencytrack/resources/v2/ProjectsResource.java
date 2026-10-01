@@ -107,6 +107,7 @@ public class ProjectsResource extends AbstractApiResource implements ProjectsApi
                         case "name" -> ListProjectComponentsQuery.SortBy.NAME;
                         case "group" -> ListProjectComponentsQuery.SortBy.GROUP;
                         case "last_inherited_risk_score" -> ListProjectComponentsQuery.SortBy.LAST_RISKSCORE;
+                        case "scorecard_score" -> ListProjectComponentsQuery.SortBy.SCORECARD_SCORE;
                         case "package_artifact_metadata.published_at" -> ListProjectComponentsQuery.SortBy.PUBLISHED_AT;
                         default ->
                             throw new InvalidSortFieldException(
@@ -115,6 +116,7 @@ public class ProjectsResource extends AbstractApiResource implements ProjectsApi
                                             "name",
                                             "group",
                                             "last_inherited_risk_score",
+                                            "scorecard_score",
                                             "package_artifact_metadata.published_at"));
                     };
 
@@ -185,6 +187,7 @@ public class ProjectsResource extends AbstractApiResource implements ProjectsApi
                         .group(componentRow.getGroup())
                         .internal(componentRow.isInternal())
                         .lastInheritedRiskScore(componentRow.getLastInheritedRiskScore())
+                        .scorecardScore(componentRow.getScorecardScore())
                         .license(componentRow.getLicense())
                         .licenseExpression(componentRow.getLicenseExpression())
                         .licenseUrl(componentRow.getLicenseUrl())
