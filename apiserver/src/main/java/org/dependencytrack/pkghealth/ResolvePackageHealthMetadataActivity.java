@@ -32,6 +32,7 @@ import org.dependencytrack.pkghealth.mapping.PackageHealthMetadataMapper;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityArg;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityRes;
+import org.dependencytrack.util.InternalComponentIdentifier;
 import org.dependencytrack.util.PurlUtil;
 import org.jspecify.annotations.Nullable;
 
@@ -67,10 +68,19 @@ public final class ResolvePackageHealthMetadataActivity
             return ResolvePackageHealthMetadataActivityRes.getDefaultInstance();
         }
 
+        // Same rule as package metadata resolution: names of internal packages must not leave the server.
+        final var internalIdentifier = new InternalComponentIdentifier();
+
         final var metadataToPersist = new ArrayList<PackageHealthMetadata>(arg.getPurlsCount());
         for (final String purlString : arg.getPurlsList()) {
+            final var purl = new PackageURL(purlString);
+            if (internalIdentifier.isInternal(purl)) {
+                metadataToPersist.add(notAvailable(purl));
+                continue;
+            }
+
             try {
-                metadataToPersist.add(fetchMetadata(new PackageURL(purlString)));
+                metadataToPersist.add(fetchMetadata(purl));
             } catch (PackageHealthAnalyzer.AnalysisException e) {
                 if (e.getCause() instanceof ApiRateLimitException rateLimit) {
                     final Duration wait = Duration.between(
@@ -117,6 +127,10 @@ public final class ResolvePackageHealthMetadataActivity
                     available.metadata(), PackageHealthMetadataStatus.PROCESSED, clock.instant());
         }
 
+        return notAvailable(purl);
+    }
+
+    private PackageHealthMetadata notAvailable(final PackageURL purl) {
         final PackageURL packagePurl =
                 requireNonNull(PurlUtil.silentPurlPackageOnly(purl), "Unable to create package-only PURL");
         return PackageHealthMetadataMapper.map(

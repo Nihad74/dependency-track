@@ -18,6 +18,7 @@
  */
 package org.dependencytrack.pkghealth;
 
+import alpine.model.IConfigProperty.PropertyType;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.dex.api.ActivityContext;
@@ -43,8 +44,10 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.dependencytrack.model.ConfigPropertyConstants.INTERNAL_COMPONENTS_GROUPS_REGEX;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -61,6 +64,40 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
         analyzer = mock(PackageHealthAnalyzer.class);
 
         activity = new ResolvePackageHealthMetadataActivity(analyzer, Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    @Test
+    void shouldNotSendInternalPackagesToExternalApis() throws Exception {
+        qm.createConfigProperty(
+                INTERNAL_COMPONENTS_GROUPS_REGEX.getGroupName(),
+                INTERNAL_COMPONENTS_GROUPS_REGEX.getPropertyName(),
+                "^org\\.acme$",
+                PropertyType.STRING,
+                null);
+
+        final var internalPurl = new PackageURL("pkg:maven/org.acme/secret-lib");
+        final var publicPurl = new PackageURL("pkg:maven/org.example/public-lib");
+        createPackageMetadata(internalPurl);
+        createPackageMetadata(publicPurl);
+
+        final var model = new AnalyzedPackageHealth(publicPurl);
+        model.setStars(10L);
+        when(analyzer.analyze(publicPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(model));
+
+        activity.execute(
+                mock(ActivityContext.class),
+                ResolvePackageHealthMetadataActivityArg.newBuilder()
+                        .addPurls(internalPurl.toString())
+                        .addPurls(publicPurl.toString())
+                        .build());
+
+        verify(analyzer).analyze(publicPurl);
+        verify(analyzer, never()).analyze(internalPurl);
+
+        final var internalMetadata = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(internalPurl));
+        assertThat(internalMetadata).isNotNull();
+        assertThat(internalMetadata.status()).isEqualTo(PackageHealthMetadataStatus.NOT_AVAILABLE);
+        assertThat(internalMetadata.lastFetch()).isEqualTo(NOW);
     }
 
     @Test
