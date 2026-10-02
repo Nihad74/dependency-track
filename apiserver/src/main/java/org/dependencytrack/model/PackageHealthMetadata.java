@@ -53,7 +53,6 @@ public record PackageHealthMetadata(
         @Nullable Float scorecardScore,
         @Nullable String scorecardReferenceVersion,
         @Nullable Instant scorecardTimestamp,
-        @Nullable Instant projectMetadataObservedAt,
         @Nullable String depsDevUrl,
         @Nullable String githubUrl,
         @Nullable Float averageIssueAgeDays,

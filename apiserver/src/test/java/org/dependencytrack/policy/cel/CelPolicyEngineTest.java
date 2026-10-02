@@ -70,6 +70,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.dependencytrack.model.ConfigPropertyConstants.PACKAGE_HEALTH_RESOLUTION_ENABLED;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
@@ -2413,6 +2414,61 @@ class CelPolicyEngineTest extends PersistenceCapableTest {
 
         engine.evaluateProject(project.getUuid());
         assertThat(qm.getAllPolicyViolations(component)).hasSize(1);
+    }
+
+    @Test
+    void testEvaluateProjectClearsHealthViolationsWhenPackageHealthIsDisabled() throws Exception {
+        final var policy = qm.createPolicy("poor-scorecard", Policy.Operator.ANY, Policy.ViolationState.FAIL);
+        qm.createPolicyCondition(
+                policy,
+                PolicyCondition.Subject.EXPRESSION,
+                PolicyCondition.Operator.MATCHES,
+                "health.scorecard_score <= 3.0",
+                PolicyViolation.Type.OPERATIONAL);
+
+        final var project = new Project();
+        project.setName("acme-app");
+        qm.persist(project);
+
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("acme-lib");
+        component.setPurl(new PackageURL("pkg:maven/com.acme/acme-lib@1.0.0"));
+        qm.persist(component);
+
+        final String packagePurl = "pkg:maven/com.acme/acme-lib";
+        useJdbiTransaction(handle -> {
+            new PackageMetadataDao(handle)
+                    .upsertAll(List.of(new PackageMetadata(
+                            new PackageURL(packagePurl), "1.0.0", null, Instant.now(), null, null)));
+            handle.createUpdate("""
+                        INSERT INTO "PACKAGE_HEALTH_METADATA"
+                            ("PURL", "SCORECARD_SCORE", "STATUS")
+                        VALUES (:purl, 3.0, 'PROCESSED')
+                        """).bind("purl", packagePurl).execute();
+        });
+
+        final var engine = new CelPolicyEngine();
+        engine.evaluateProject(project.getUuid());
+        assertThat(qm.getAllPolicyViolations(component)).hasSize(1);
+
+        qm.createConfigProperty(
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getGroupName(),
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getPropertyName(),
+                "false",
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getPropertyType(),
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getDescription());
+
+        engine.evaluateProject(project.getUuid());
+        final long violationCount = withJdbiHandle(handle -> handle.createQuery("""
+                SELECT COUNT(*)
+                  FROM "POLICYVIOLATION"
+                 WHERE "COMPONENT_ID" = :componentId
+                """)
+                .bind("componentId", component.getId())
+                .mapTo(Long.class)
+                .one());
+        assertThat(violationCount).isZero();
     }
 
     @Test

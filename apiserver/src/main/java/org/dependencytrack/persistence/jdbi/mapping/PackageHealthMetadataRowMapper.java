@@ -78,7 +78,6 @@ public final class PackageHealthMetadataRowMapper implements RowMapper<PackageHe
                 rs.getObject("SCORECARD_SCORE", Float.class),
                 rs.getString("SCORECARD_REF_VERSION"),
                 getInstant(rs, "SCORECARD_TIMESTAMP"),
-                getInstant(rs, "PROJECT_METADATA_OBSERVED_AT"),
                 rs.getString("DEPS_DEV_URL"),
                 rs.getString("GITHUB_URL"),
                 rs.getObject("AVG_ISSUE_AGE_DAYS", Float.class),

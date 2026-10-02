@@ -18,19 +18,21 @@
  */
 package org.dependencytrack.pkghealth;
 
+import com.google.protobuf.util.Timestamps;
 import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
+import org.dependencytrack.proto.policy.v1.HealthMeta;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.Comparator;
 
 /**
  * Compares the package health values that component policies can read.
+ * <p>
+ * The values are compared in their policy form, {@link HealthMeta}, so that a field added to the
+ * policy type is compared without further changes here.
  * <p>
  * Average issue age and commit frequency are computed relative to the time of the fetch,
  * so they change on every refresh even when nothing changed upstream. Those changes are
@@ -54,30 +56,86 @@ final class PackageHealthPolicyDelta {
     private PackageHealthPolicyDelta() {}
 
     static boolean changed(final @Nullable PackageHealthMetadata previous, final PackageHealthMetadata next) {
+        final HealthMeta nextValues = policyValues(next);
         if (previous == null) {
-            return hasPolicyValue(next);
+            return !nextValues.equals(HealthMeta.getDefaultInstance());
         }
 
-        return !Objects.equals(previous.stars(), next.stars())
-                || !Objects.equals(previous.forks(), next.forks())
-                || commitFrequencyChanged(previous.commitFrequencyWeekly(), next.commitFrequencyWeekly())
-                || !Objects.equals(previous.lastCommit(), next.lastCommit())
-                || !Objects.equals(previous.busFactor(), next.busFactor())
-                || !Objects.equals(previous.dependents(), next.dependents())
-                || !Objects.equals(previous.repositoryArchived(), next.repositoryArchived())
-                || !Objects.equals(previous.scorecardScore(), next.scorecardScore())
-                || issueAgeChanged(previous, next)
-                || !sameChecks(previous.scorecardChecks(), next.scorecardChecks());
+        final HealthMeta previousValues = policyValues(previous);
+        return !withoutTimeDrivenValues(previousValues).equals(withoutTimeDrivenValues(nextValues))
+                || commitFrequencyChanged(previousValues, nextValues)
+                || issueAgeChanged(previous, previousValues, next, nextValues);
     }
 
-    private static boolean issueAgeChanged(final PackageHealthMetadata previous, final PackageHealthMetadata next) {
-        final @Nullable Float previousAge = previous.averageIssueAgeDays();
-        final @Nullable Float nextAge = next.averageIssueAgeDays();
-        if (Objects.equals(previousAge, nextAge)) {
+    /**
+     * Converts the stored health to the values a component policy sees. Checks are sorted by name,
+     * so that their order does not count as a change.
+     */
+    static HealthMeta policyValues(final PackageHealthMetadata metadata) {
+        final HealthMeta.Builder builder = HealthMeta.newBuilder();
+        if (metadata.scorecardScore() != null) {
+            builder.setScorecardScore(metadata.scorecardScore());
+        }
+        if (metadata.averageIssueAgeDays() != null) {
+            builder.setAvgIssueAgeDays(metadata.averageIssueAgeDays());
+        }
+        if (metadata.commitFrequencyWeekly() != null) {
+            builder.setCommitFrequencyWeekly(metadata.commitFrequencyWeekly());
+        }
+        if (metadata.lastCommit() != null) {
+            builder.setLastCommit(Timestamps.fromMillis(metadata.lastCommit().toEpochMilli()));
+        }
+        if (metadata.dependents() != null) {
+            builder.setDependents(metadata.dependents());
+        }
+        if (metadata.busFactor() != null) {
+            builder.setBusFactor(metadata.busFactor());
+        }
+        if (metadata.stars() != null) {
+            builder.setStars(metadata.stars());
+        }
+        if (metadata.forks() != null) {
+            builder.setForks(metadata.forks());
+        }
+        if (metadata.repositoryArchived() != null) {
+            builder.setIsRepoArchived(metadata.repositoryArchived());
+        }
+        metadata.scorecardChecks().stream()
+                .sorted(Comparator.comparing(PackageHealthScorecardCheck::name))
+                .forEach(check -> {
+                    final var protoCheck =
+                            HealthMeta.ScorecardCheck.newBuilder().setName(check.name());
+                    if (check.score() != null) {
+                        protoCheck.setScore(check.score());
+                    }
+                    builder.addScorecardChecks(protoCheck);
+                });
+        return builder.build();
+    }
+
+    private static HealthMeta withoutTimeDrivenValues(final HealthMeta values) {
+        return values.toBuilder()
+                .clearAvgIssueAgeDays()
+                .clearCommitFrequencyWeekly()
+                .build();
+    }
+
+    private static boolean issueAgeChanged(
+            final PackageHealthMetadata previous,
+            final HealthMeta previousValues,
+            final PackageHealthMetadata next,
+            final HealthMeta nextValues) {
+        if (previousValues.hasAvgIssueAgeDays() != nextValues.hasAvgIssueAgeDays()) {
+            return true;
+        }
+        if (!nextValues.hasAvgIssueAgeDays()) {
             return false;
         }
-        if (previousAge == null || nextAge == null) {
-            return true;
+
+        final float previousAge = previousValues.getAvgIssueAgeDays();
+        final float nextAge = nextValues.getAvgIssueAgeDays();
+        if (previousAge == nextAge) {
+            return false;
         }
 
         final @Nullable Instant previousFetch = previous.lastFetch();
@@ -88,41 +146,21 @@ final class PackageHealthPolicyDelta {
         return Math.abs(nextAge - (previousAge + elapsedDays)) >= ISSUE_AGE_TOLERANCE_DAYS;
     }
 
-    private static boolean commitFrequencyChanged(final @Nullable Float previous, final @Nullable Float next) {
-        if (Objects.equals(previous, next)) {
+    private static boolean commitFrequencyChanged(final HealthMeta previousValues, final HealthMeta nextValues) {
+        if (previousValues.hasCommitFrequencyWeekly() != nextValues.hasCommitFrequencyWeekly()) {
+            return true;
+        }
+        if (!nextValues.hasCommitFrequencyWeekly()) {
             return false;
         }
-        if (previous == null || next == null) {
-            return true;
+
+        final float previous = previousValues.getCommitFrequencyWeekly();
+        final float next = nextValues.getCommitFrequencyWeekly();
+        if (previous == next) {
+            return false;
         }
 
         final double magnitude = Math.max(Math.abs(previous), Math.abs(next));
         return Math.abs(next - previous) / magnitude >= COMMIT_FREQUENCY_RELATIVE_TOLERANCE;
-    }
-
-    private static boolean hasPolicyValue(final PackageHealthMetadata metadata) {
-        return metadata.stars() != null
-                || metadata.forks() != null
-                || metadata.commitFrequencyWeekly() != null
-                || metadata.lastCommit() != null
-                || metadata.busFactor() != null
-                || metadata.dependents() != null
-                || metadata.repositoryArchived() != null
-                || metadata.scorecardScore() != null
-                || metadata.averageIssueAgeDays() != null
-                || !metadata.scorecardChecks().isEmpty();
-    }
-
-    private static boolean sameChecks(
-            final List<PackageHealthScorecardCheck> previous, final List<PackageHealthScorecardCheck> next) {
-        return checkScores(previous).equals(checkScores(next));
-    }
-
-    private static Map<String, @Nullable Float> checkScores(final List<PackageHealthScorecardCheck> checks) {
-        final var scores = new HashMap<String, @Nullable Float>(checks.size());
-        for (final PackageHealthScorecardCheck check : checks) {
-            scores.put(check.name(), check.score());
-        }
-        return scores;
     }
 }

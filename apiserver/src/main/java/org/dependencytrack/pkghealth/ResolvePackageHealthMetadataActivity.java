@@ -19,35 +19,45 @@
 package org.dependencytrack.pkghealth;
 
 import com.github.packageurl.PackageURL;
+import com.google.protobuf.util.Timestamps;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
-import org.dependencytrack.dex.api.failure.ApplicationFailureException;
 import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
 import org.dependencytrack.pkghealth.client.ApiRateLimitException;
-import org.dependencytrack.pkghealth.mapping.PackageHealthMetadataMapper;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityArg;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityRes;
 import org.dependencytrack.util.InternalComponentIdentifier;
 import org.dependencytrack.util.PurlUtil;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
+/**
+ * Fetches and stores health metadata for one batch of packages.
+ * <p>
+ * When an external API rate limit is reached, the packages fetched so far are stored, and the
+ * remaining packages are returned together with the time the limit resets. The workflow waits
+ * for that time, so rate limits do not use up retry attempts.
+ */
 @ActivitySpec(name = "resolve-package-health-metadata", defaultTaskQueue = "package-health-metadata-resolutions")
 public final class ResolvePackageHealthMetadataActivity
         implements Activity<ResolvePackageHealthMetadataActivityArg, ResolvePackageHealthMetadataActivityRes> {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ResolvePackageHealthMetadataActivity.class);
 
     private final PackageHealthAnalyzer analyzer;
     private final Clock clock;
@@ -68,12 +78,22 @@ public final class ResolvePackageHealthMetadataActivity
             return ResolvePackageHealthMetadataActivityRes.getDefaultInstance();
         }
 
+        // The setting can be turned off while a run waits for a rate limit to reset.
+        if (!withJdbiHandle(PackageHealthSettings::isEnabled)) {
+            LOGGER.info("Package health metadata resolution is disabled; Skipping {} packages", arg.getPurlsCount());
+            return ResolvePackageHealthMetadataActivityRes.getDefaultInstance();
+        }
+
         // Same rule as package metadata resolution: names of internal packages must not leave the server.
         final var internalIdentifier = new InternalComponentIdentifier();
 
-        final var metadataToPersist = new ArrayList<PackageHealthMetadata>(arg.getPurlsCount());
-        for (final String purlString : arg.getPurlsList()) {
-            final var purl = new PackageURL(purlString);
+        final List<String> purls = arg.getPurlsList();
+        final var metadataToPersist = new ArrayList<PackageHealthMetadata>(purls.size());
+        @Nullable ApiRateLimitException rateLimit = null;
+        List<String> unresolvedPurls = List.of();
+
+        for (int i = 0; i < purls.size(); i++) {
+            final var purl = new PackageURL(purls.get(i));
             if (internalIdentifier.isInternal(purl)) {
                 metadataToPersist.add(notAvailable(purl));
                 continue;
@@ -82,12 +102,10 @@ public final class ResolvePackageHealthMetadataActivity
             try {
                 metadataToPersist.add(fetchMetadata(purl));
             } catch (PackageHealthAnalyzer.AnalysisException e) {
-                if (e.getCause() instanceof ApiRateLimitException rateLimit) {
-                    final Duration wait = Duration.between(
-                            clock.instant(), rateLimit.resetAt().plusSeconds(2));
-                    if (wait.isPositive()) {
-                        throw new ApplicationFailureException("External API rate limit reached", e, wait);
-                    }
+                if (e.getCause() instanceof ApiRateLimitException rateLimitException) {
+                    rateLimit = rateLimitException;
+                    unresolvedPurls = purls.subList(i, purls.size());
+                    break;
                 }
                 throw e;
             }
@@ -97,7 +115,19 @@ public final class ResolvePackageHealthMetadataActivity
             throw new InterruptedException("Interrupted before package health metadata was stored");
         }
 
-        final List<String> changedPurls = inJdbiTransaction(handle -> {
+        final List<String> changedPurls = metadataToPersist.isEmpty() ? List.of() : persist(metadataToPersist);
+
+        final var result = ResolvePackageHealthMetadataActivityRes.newBuilder()
+                .addAllChangedPurls(changedPurls)
+                .addAllUnresolvedPurls(unresolvedPurls);
+        if (rateLimit != null) {
+            result.setRateLimitResetAt(Timestamps.fromMillis(rateLimit.resetAt().toEpochMilli()));
+        }
+        return result.build();
+    }
+
+    private static List<String> persist(final List<PackageHealthMetadata> metadataToPersist) {
+        return inJdbiTransaction(handle -> {
             final var dao = new PackageHealthMetadataDao(handle);
             final Map<String, PackageHealthMetadata> previousByPurl = dao.getAll(
                     metadataToPersist.stream().map(PackageHealthMetadata::purl).toList());
@@ -112,10 +142,6 @@ public final class ResolvePackageHealthMetadataActivity
             }
             return changed;
         });
-
-        return ResolvePackageHealthMetadataActivityRes.newBuilder()
-                .addAllChangedPurls(changedPurls)
-                .build();
     }
 
     private PackageHealthMetadata fetchMetadata(final PackageURL purl)
@@ -123,8 +149,7 @@ public final class ResolvePackageHealthMetadataActivity
         final var result = analyzer.analyze(purl);
 
         if (result instanceof PackageHealthAnalyzer.AnalysisResult.Available available) {
-            return PackageHealthMetadataMapper.map(
-                    available.metadata(), PackageHealthMetadataStatus.PROCESSED, clock.instant());
+            return available.metadata().toMetadata(PackageHealthMetadataStatus.PROCESSED, clock.instant());
         }
 
         return notAvailable(purl);
@@ -133,7 +158,7 @@ public final class ResolvePackageHealthMetadataActivity
     private PackageHealthMetadata notAvailable(final PackageURL purl) {
         final PackageURL packagePurl =
                 requireNonNull(PurlUtil.silentPurlPackageOnly(purl), "Unable to create package-only PURL");
-        return PackageHealthMetadataMapper.map(
-                new AnalyzedPackageHealth(packagePurl), PackageHealthMetadataStatus.NOT_AVAILABLE, clock.instant());
+        return new AnalyzedPackageHealth(packagePurl)
+                .toMetadata(PackageHealthMetadataStatus.NOT_AVAILABLE, clock.instant());
     }
 }

@@ -18,26 +18,36 @@
  */
 package org.dependencytrack.pkghealth;
 
+import com.github.packageurl.PackageURL;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.analysis.AnalyzeProjectWorkflow;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.engine.api.DexEngine;
 import org.dependencytrack.dex.engine.api.request.CreateWorkflowRunRequest;
 import org.dependencytrack.model.Component;
+import org.dependencytrack.model.PackageArtifactMetadata;
+import org.dependencytrack.model.PackageMetadata;
 import org.dependencytrack.model.Policy;
 import org.dependencytrack.model.PolicyCondition;
 import org.dependencytrack.model.PolicyViolation;
 import org.dependencytrack.model.Project;
-import org.dependencytrack.policy.EvalProjectPoliciesWorkflow;
+import org.dependencytrack.persistence.jdbi.PackageArtifactMetadataDao;
+import org.dependencytrack.persistence.jdbi.PackageMetadataDao;
 import org.dependencytrack.proto.internal.workflow.v1.EvalProjectPoliciesArg;
 import org.dependencytrack.proto.internal.workflow.v1.ScheduleHealthPolicyEvaluationsArg;
+import org.dependencytrack.util.PurlUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -120,7 +130,7 @@ class ScheduleHealthPolicyEvaluationsActivityTest extends PersistenceCapableTest
         assertThat(captor.getValue()).singleElement().satisfies(request -> {
             assertThat(request.workflowName()).isEqualTo("eval-project-policies");
             assertThat(request.concurrencyKey())
-                    .isEqualTo(EvalProjectPoliciesWorkflow.concurrencyKey(matchingProject.getUuid()));
+                    .isEqualTo(AnalyzeProjectWorkflow.concurrencyKeyForProject(matchingProject.getUuid()));
             assertThat(request.argument())
                     .isEqualTo(EvalProjectPoliciesArg.newBuilder()
                             .setProjectUuid(matchingProject.getUuid().toString())
@@ -139,6 +149,22 @@ class ScheduleHealthPolicyEvaluationsActivityTest extends PersistenceCapableTest
         component.setPurl(purl);
         component.setPurlCoordinates(purl);
         qm.persist(component);
+        persistArtifactMetadata(purl);
         return project;
+    }
+
+    /**
+     * Package health is matched to components through their package artifact metadata.
+     */
+    private static void persistArtifactMetadata(final String purl) {
+        final PackageURL artifactPurl = requireNonNull(PurlUtil.silentPurl(purl));
+        final PackageURL packagePurl = requireNonNull(PurlUtil.silentPurlPackageOnly(artifactPurl));
+        useJdbiHandle(handle -> {
+            new PackageMetadataDao(handle)
+                    .upsertAll(List.of(new PackageMetadata(packagePurl, null, null, Instant.now(), null, null)));
+            new PackageArtifactMetadataDao(handle)
+                    .upsertAll(List.of(new PackageArtifactMetadata(
+                            artifactPurl, packagePurl, null, null, null, null, null, null, "test", Instant.now())));
+        });
     }
 }

@@ -26,11 +26,12 @@ import org.dependencytrack.dex.api.ActivitySpec;
 import org.dependencytrack.dex.api.failure.ApplicationFailureException;
 import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.model.PackageMetadataResolutionStatus;
-import org.dependencytrack.model.Repository;
 import org.dependencytrack.model.RepositoryType;
 import org.dependencytrack.persistence.jdbi.PackageArtifactMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageMetadataResolutionDao;
+import org.dependencytrack.persistence.jdbi.RepositoryDao;
+import org.dependencytrack.persistence.jdbi.RepositoryDao.EnabledRepository;
 import org.dependencytrack.pkgmetadata.resolution.api.HashAlgorithm;
 import org.dependencytrack.pkgmetadata.resolution.api.PackageArtifactMetadata;
 import org.dependencytrack.pkgmetadata.resolution.api.PackageMetadata;
@@ -120,7 +121,7 @@ public final class ResolvePackageMetadataActivity implements Activity<ResolvePac
                                     .collect(Collectors.toMap(
                                             pam -> pam.purl().canonicalize(), Function.identity(), (a, b) -> a)));
 
-            final var repoByPurlType = new HashMap<String, List<Repository>>();
+            final var repoByPurlType = new HashMap<String, List<EnabledRepository>>();
             final var passwordByRepoTypeAndName = new HashMap<String, Optional<String>>();
 
             final var internalIdentifier = new InternalComponentIdentifier();
@@ -182,7 +183,7 @@ public final class ResolvePackageMetadataActivity implements Activity<ResolvePac
             String purlStr,
             PackageMetadataResolverFactory resolverFactory,
             PackageMetadataResolver resolver,
-            Map<String, List<Repository>> repoByPurlType,
+            Map<String, List<EnabledRepository>> repoByPurlType,
             Map<String, Optional<String>> passwordByRepoTypeAndName,
             Function<PackageURL, Boolean> isInternalFunc,
             Map<String, org.dependencytrack.model.PackageArtifactMetadata> priorArtifactMetadataByPurl,
@@ -234,13 +235,13 @@ public final class ResolvePackageMetadataActivity implements Activity<ResolvePac
             PackageURL normalizedPurl,
             PackageMetadataResolverFactory resolverFactory,
             PackageMetadataResolver resolver,
-            Map<String, List<Repository>> repoByPurlType,
+            Map<String, List<EnabledRepository>> repoByPurlType,
             Map<String, Optional<String>> passwordByRepoTypeAndName,
             Function<PackageURL, Boolean> isInternalFunc,
             org.dependencytrack.model.@Nullable PackageArtifactMetadata priorArtifactMetadata)
             throws Exception {
         if (resolverFactory.requiresRepository()) {
-            final List<Repository> repos =
+            final List<EnabledRepository> repos =
                     repoByPurlType.computeIfAbsent(normalizedPurl.getType(), this::getRepositoriesByPurlType);
             if (repos.isEmpty()) {
                 LOGGER.debug("No repositories found");
@@ -248,18 +249,19 @@ public final class ResolvePackageMetadataActivity implements Activity<ResolvePac
             }
 
             final boolean internal = isInternalFunc.apply(normalizedPurl);
-            for (final Repository repo : repos) {
+            for (final EnabledRepository repo : repos) {
                 // Only resolve internal packages against internal repositories.
-                if (!Objects.equals(repo.isInternal(), internal)) {
+                if (!Objects.equals(repo.internal(), internal)) {
                     continue;
                 }
 
-                try (var _ = MDC.putCloseable(MDC_PKG_REPOSITORY_IDENTIFIER, repo.getIdentifier())) {
+                try (var _ = MDC.putCloseable(MDC_PKG_REPOSITORY_IDENTIFIER, repo.identifier())) {
                     String password = null;
-                    if (repo.isAuthenticationRequired() && repo.getPassword() != null) {
+                    final String passwordReference = repo.password();
+                    if (repo.authenticationRequired() && passwordReference != null) {
                         password = passwordByRepoTypeAndName
-                                .computeIfAbsent("%s:%s".formatted(repo.getType(), repo.getIdentifier()), _ -> {
-                                    final String secret = secretManager.getSecretValue(repo.getPassword());
+                                .computeIfAbsent("%s:%s".formatted(repo.type(), repo.identifier()), _ -> {
+                                    final String secret = secretManager.getSecretValue(passwordReference);
                                     if (secret == null) {
                                         LOGGER.warn("""
                                                         Repository requires authentication, but the configured password \
@@ -277,16 +279,16 @@ public final class ResolvePackageMetadataActivity implements Activity<ResolvePac
                     }
 
                     final var packageRepository = new PackageRepository(
-                            repo.getIdentifier(),
-                            repo.getUrl(),
-                            repo.isAuthenticationRequired() ? repo.getUsername() : null,
+                            repo.identifier(),
+                            repo.url(),
+                            repo.authenticationRequired() ? repo.username() : null,
                             password);
 
                     // Only surface priorArtifactMetadata to the resolver if it was originally resolved
                     // from the repository currently being attempted. Cross-repo reuse is unsafe
                     // (publishedAt timestamps can differ across mirrors / proxies).
                     final PackageArtifactMetadata effectivePriorArtifactMetadata = (priorArtifactMetadata != null
-                                    && Objects.equals(priorArtifactMetadata.resolvedFrom(), repo.getIdentifier()))
+                                    && Objects.equals(priorArtifactMetadata.resolvedFrom(), repo.identifier()))
                             ? convert(priorArtifactMetadata)
                             : null;
 
@@ -294,7 +296,7 @@ public final class ResolvePackageMetadataActivity implements Activity<ResolvePac
                     final PackageMetadata result =
                             resolver.resolve(normalizedPurl, packageRepository, effectivePriorArtifactMetadata);
                     if (result != null) {
-                        return new ResolutionResult(result, repo.getIdentifier(), resolverFactory.extensionName());
+                        return new ResolutionResult(result, repo.identifier(), resolverFactory.extensionName());
                     }
                 }
             }
@@ -340,22 +342,13 @@ public final class ResolvePackageMetadataActivity implements Activity<ResolvePac
         }
     }
 
-    private List<Repository> getRepositoriesByPurlType(String purlType) {
+    private List<EnabledRepository> getRepositoriesByPurlType(String purlType) {
         final var repoType = RepositoryType.ofPurlType(purlType);
         if (repoType == RepositoryType.UNSUPPORTED) {
             return List.of();
         }
 
-        return withJdbiHandle(handle -> handle.createQuery(/* language=SQL */ """
-                        SELECT *
-                          FROM "REPOSITORY"
-                         WHERE "TYPE" = :type
-                           AND "ENABLED"
-                         ORDER BY "RESOLUTION_ORDER"
-                        """)
-                .bind("type", repoType.name())
-                .mapToBean(Repository.class)
-                .list());
+        return withJdbiHandle(handle -> handle.attach(RepositoryDao.class).getEnabledRepositories(repoType));
     }
 
     private static final class ResultBuffer {

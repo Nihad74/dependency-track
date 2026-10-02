@@ -201,17 +201,6 @@ class DepsDevApiClientTest {
 
     @Test
     void shouldFetchProjectAndScorecardMetadata() throws Exception {
-        stubFor(get(urlPathEqualTo("/_/project/GITHUB/lodash%2Flodash"))
-                .willReturn(aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("""
-                            {
-                              "project": {
-                                "observedAt": 1658223503
-                              }
-                            }
-                            """)));
         stubFor(get(urlPathEqualTo("/v3/projects/github.com%2Flodash%2Flodash"))
                 .willReturn(aResponse()
                         .withStatus(200)
@@ -258,7 +247,6 @@ class DepsDevApiClientTest {
         assertThat(metadata.getStars()).isEqualTo(61234L);
         assertThat(metadata.getForks()).isEqualTo(7021L);
         assertThat(metadata.getOpenIssues()).isEqualTo(128L);
-        assertThat(metadata.getProjectMetadataObservedAt()).isEqualTo(Instant.ofEpochSecond(1658223503));
         assertThat(metadata.getScorecardScore()).isEqualTo(8.7f);
         assertThat(metadata.getScorecardReferenceVersion()).isEqualTo("v5.0.0");
         assertThat(metadata.getScorecardTimestamp()).isEqualTo(Instant.parse("2026-09-20T12:30:00Z"));
@@ -307,28 +295,6 @@ class DepsDevApiClientTest {
     }
 
     @Test
-    void shouldKeepProjectMetadataWhenObservedAtLookupFails() throws Exception {
-        stubFor(get(urlPathEqualTo("/v3/projects/github.com%2Flodash%2Flodash"))
-                .willReturn(aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("""
-                            {
-                              "starsCount": 10,
-                              "forksCount": 2
-                            }
-                            """)));
-        stubFor(get(urlPathEqualTo("/_/project/GITHUB/lodash%2Flodash"))
-                .willReturn(aResponse().withStatus(500)));
-
-        final var result = client.fetchProjectMetadata(new PackageURL("pkg:npm/lodash"), "github.com/lodash/lodash");
-
-        assertThat(result).isPresent();
-        assertThat(result.orElseThrow().getStars()).isEqualTo(10L);
-        assertThat(result.orElseThrow().getProjectMetadataObservedAt()).isNull();
-    }
-
-    @Test
     void shouldThrowOnServerError() {
         stubFor(get(urlPathEqualTo("/v3/systems/NPM/packages/lodash"))
                 .willReturn(aResponse().withStatus(500)));
@@ -348,45 +314,37 @@ class DepsDevApiClientTest {
     }
 
     @Test
-    void shouldFetchProjectMetadataObservedAt() throws Exception {
-        stubFor(get(urlPathEqualTo("/_/project/GITHUB/substack%2Fnode-wordwrap"))
-                .willReturn(aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("""
-                            {
-                              "project": {
-                                "observedAt": 1658223503,
-                                "stars": 142,
-                                "forks": 27
-                              }
-                            }
-                            """)));
+    void shouldTreatRetryAfterAsRateLimit() {
+        stubFor(get(urlPathEqualTo("/v3/systems/NPM/packages/lodash"))
+                .willReturn(aResponse().withStatus(429).withHeader("retry-after", "30")));
 
-        assertThat(client.fetchProjectMetadataObservedAt("github.com/substack/node-wordwrap"))
-                .contains(Instant.ofEpochSecond(1658223503));
-        assertThat(client.fetchProjectMetadataObservedAt("GitHub.com/substack/node-wordwrap"))
-                .contains(Instant.ofEpochSecond(1658223503));
+        final Instant before = Instant.now();
+        assertThatExceptionOfType(ApiRateLimitException.class)
+                .isThrownBy(() -> client.fetchLatestVersion("NPM", "lodash"))
+                .satisfies(e -> assertThat(e.resetAt())
+                        .isBetween(before.plusSeconds(30), Instant.now().plusSeconds(30)));
     }
 
     @Test
-    void shouldLeaveProjectMetadataObservedAtAbsentWhenMissing() throws Exception {
-        stubFor(get(urlPathEqualTo("/_/project/GITHUB/acme%2Fexample"))
-                .willReturn(aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("""
-                            {
-                              "project": {
-                                "stars": 1
-                              }
-                            }
-                            """)));
+    void shouldWaitOneMinuteOn429WithoutRateLimitHeaders() {
+        stubFor(get(urlPathEqualTo("/v3/systems/NPM/packages/lodash"))
+                .willReturn(aResponse().withStatus(429)));
 
-        assertThat(client.fetchProjectMetadataObservedAt("github.com/acme/example"))
-                .isEmpty();
-        assertThat(client.fetchProjectMetadataObservedAt("gitlab.com/acme/example"))
-                .isEmpty();
+        final Instant before = Instant.now();
+        assertThatExceptionOfType(ApiRateLimitException.class)
+                .isThrownBy(() -> client.fetchLatestVersion("NPM", "lodash"))
+                .satisfies(e -> assertThat(e.resetAt())
+                        .isBetween(before.plusSeconds(60), Instant.now().plusSeconds(60)));
+    }
+
+    @Test
+    void shouldNotTreatForbiddenWithoutRateLimitHeadersAsRateLimit() {
+        stubFor(get(urlPathEqualTo("/v3/systems/NPM/packages/lodash"))
+                .willReturn(aResponse().withStatus(403)));
+
+        assertThatExceptionOfType(IOException.class)
+                .isThrownBy(() -> client.fetchLatestVersion("NPM", "lodash"))
+                .isNotInstanceOf(ApiRateLimitException.class);
     }
 
     private static void stubPackageResponse(final String responseBody) {

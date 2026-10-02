@@ -39,7 +39,6 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
 
     private static final Instant LAST_COMMIT = Instant.parse("2026-01-10T12:00:00Z");
     private static final Instant SCORECARD_TIMESTAMP = Instant.parse("2026-01-11T12:00:00Z");
-    private static final Instant PROJECT_METADATA_OBSERVED_AT = Instant.ofEpochSecond(1658223503);
     private static final Instant LAST_FETCH = Instant.parse("2026-01-12T12:00:00Z");
 
     private Handle jdbiHandle;
@@ -71,7 +70,7 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
         final PackageHealthMetadata expected =
                 createMetadata(100L, List.of(createCheck("Branch-Protection", 8.0f, List.of("detail-a", "detail-b"))));
 
-        healthMetadataDao.upsert(expected);
+        healthMetadataDao.upsertAll(List.of(expected));
 
         assertThat(healthMetadataDao.get(purl)).isEqualTo(expected);
     }
@@ -101,22 +100,21 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
                 null,
                 null,
                 null,
-                null,
                 PackageHealthMetadataStatus.NOT_AVAILABLE,
                 List.of());
 
-        healthMetadataDao.upsert(metadata);
+        healthMetadataDao.upsertAll(List.of(metadata));
 
         assertThat(healthMetadataDao.get(purl)).isEqualTo(metadata);
     }
 
     @Test
     void shouldUpdateMetadataAndReplaceScorecardChecks() {
-        healthMetadataDao.upsert(createMetadata(
+        healthMetadataDao.upsertAll(List.of(createMetadata(
                 100L,
                 List.of(
                         createCheck("Branch-Protection", 8.0f, List.of("old-detail")),
-                        createCheck("Code-Review", 7.0f, List.of()))));
+                        createCheck("Code-Review", 7.0f, List.of())))));
 
         final PackageHealthMetadata updated = createMetadata(
                 200L,
@@ -124,7 +122,7 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
                         createCheck("Code-Review", 9.0f, List.of("updated-detail")),
                         createCheck("Vulnerabilities", 10.0f, List.of())));
 
-        healthMetadataDao.upsert(updated);
+        healthMetadataDao.upsertAll(List.of(updated));
 
         final PackageHealthMetadata actual = healthMetadataDao.get(purl);
 
@@ -136,11 +134,12 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
 
     @Test
     void shouldRemoveScorecardChecksWhenUpdatedWithEmptyList() {
-        healthMetadataDao.upsert(createMetadata(100L, List.of(createCheck("Branch-Protection", 8.0f, List.of()))));
+        healthMetadataDao.upsertAll(
+                List.of(createMetadata(100L, List.of(createCheck("Branch-Protection", 8.0f, List.of())))));
 
         final PackageHealthMetadata updated = createMetadata(200L, List.of());
 
-        healthMetadataDao.upsert(updated);
+        healthMetadataDao.upsertAll(List.of(updated));
 
         assertThat(healthMetadataDao.get(purl)).isEqualTo(updated);
 
@@ -157,7 +156,8 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
 
     @Test
     void shouldCascadeDeleteHealthMetadataAndChecks() {
-        healthMetadataDao.upsert(createMetadata(100L, List.of(createCheck("Branch-Protection", 8.0f, List.of()))));
+        healthMetadataDao.upsertAll(
+                List.of(createMetadata(100L, List.of(createCheck("Branch-Protection", 8.0f, List.of())))));
 
         jdbiHandle.createUpdate("""
                         DELETE FROM "PACKAGE_METADATA"
@@ -181,7 +181,6 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
         final var second = new PackageHealthMetadata(
                 otherPurl,
                 5L,
-                null,
                 null,
                 null,
                 null,
@@ -238,7 +237,6 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
                 8.7f,
                 "v5.0.0",
                 SCORECARD_TIMESTAMP,
-                PROJECT_METADATA_OBSERVED_AT,
                 "https://deps.dev/npm/example",
                 "https://github.com/acme/example",
                 6.5f,

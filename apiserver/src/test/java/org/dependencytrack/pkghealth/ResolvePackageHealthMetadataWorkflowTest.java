@@ -31,14 +31,17 @@ import org.dependencytrack.dex.engine.api.request.CreateWorkflowRunRequest;
 import org.dependencytrack.dex.testing.WorkflowTestExtension;
 import org.dependencytrack.metrics.UpdateProjectMetricsActivity;
 import org.dependencytrack.model.Component;
+import org.dependencytrack.model.PackageArtifactMetadata;
 import org.dependencytrack.model.PackageMetadata;
 import org.dependencytrack.model.Policy;
 import org.dependencytrack.model.PolicyCondition;
 import org.dependencytrack.model.PolicyViolation;
 import org.dependencytrack.model.Project;
+import org.dependencytrack.persistence.jdbi.PackageArtifactMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageMetadataDao;
 import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
+import org.dependencytrack.pkghealth.client.ApiRateLimitException;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.policy.EvalProjectPoliciesActivity;
 import org.dependencytrack.policy.EvalProjectPoliciesWorkflow;
@@ -67,10 +70,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.protoConverter;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.voidConverter;
+import static org.dependencytrack.model.ConfigPropertyConstants.PACKAGE_HEALTH_RESOLUTION_ENABLED;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -216,6 +221,51 @@ class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
     }
 
     @Test
+    void shouldWaitForRateLimitResetWithoutUsingUpRetryAttempts() throws Exception {
+        final var purl = new PackageURL("pkg:npm/a");
+        createPackageMetadata(purl);
+
+        final var model = new AnalyzedPackageHealth(purl);
+        model.setStars(10L);
+        // One more rate limit than the activity retry policy has attempts.
+        final var rateLimited = new PackageHealthAnalyzer.AnalysisException(
+                "GitHub request failed", new ApiRateLimitException(Instant.now()));
+        when(analyzer.analyze(purl))
+                .thenThrow(rateLimited, rateLimited, rateLimited)
+                .thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(model));
+
+        final UUID runId = workflowTest
+                .getEngine()
+                .createRun(new CreateWorkflowRunRequest<>(ResolvePackageHealthMetadataWorkflow.class));
+
+        workflowTest.awaitRunStatus(runId, WorkflowRunStatus.COMPLETED, Duration.ofSeconds(90));
+
+        verify(analyzer, times(4)).analyze(purl);
+        final var persisted = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(purl));
+        assertThat(persisted).isNotNull();
+        assertThat(persisted.stars()).isEqualTo(10L);
+    }
+
+    @Test
+    void shouldStopWhenDisabled() throws Exception {
+        createPackageMetadata(new PackageURL("pkg:npm/a"));
+        qm.createConfigProperty(
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getGroupName(),
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getPropertyName(),
+                "false",
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getPropertyType(),
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getDescription());
+
+        final UUID runId = workflowTest
+                .getEngine()
+                .createRun(new CreateWorkflowRunRequest<>(ResolvePackageHealthMetadataWorkflow.class));
+
+        workflowTest.awaitRunStatus(runId, WorkflowRunStatus.COMPLETED);
+
+        verify(analyzer, never()).analyze(any());
+    }
+
+    @Test
     void shouldEvaluatePoliciesWhenHealthFieldsChange() throws Exception {
         final var packagePurl = new PackageURL("pkg:npm/react");
         createPackageMetadata(packagePurl);
@@ -238,6 +288,18 @@ class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
         component.setPurl("pkg:npm/react@18.3.1");
         component.setPurlCoordinates("pkg:npm/react@18.3.1");
         qm.persist(component);
+        withJdbiHandle(handle -> new PackageArtifactMetadataDao(handle)
+                .upsertAll(List.of(new PackageArtifactMetadata(
+                        new PackageURL("pkg:npm/react@18.3.1"),
+                        packagePurl,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "test",
+                        NOW))));
 
         final var model = new AnalyzedPackageHealth(packagePurl);
         model.setStars(10L);

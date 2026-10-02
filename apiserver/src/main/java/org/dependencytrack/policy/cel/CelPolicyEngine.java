@@ -31,6 +31,7 @@ import org.dependencytrack.notification.JdbiNotificationEmitter;
 import org.dependencytrack.notification.NotificationGroup;
 import org.dependencytrack.persistence.jdbi.NotificationSubjectDao;
 import org.dependencytrack.persistence.jdbi.ProjectDao;
+import org.dependencytrack.pkghealth.PackageHealthSettings;
 import org.dependencytrack.policy.cel.CelPolicyCompiler.CacheMode;
 import org.dependencytrack.policy.cel.compat.CelPolicyScriptSourceBuilder;
 import org.dependencytrack.policy.cel.compat.ComponentAgeCelPolicyScriptSourceBuilder;
@@ -168,8 +169,10 @@ public final class CelPolicyEngine {
 
         final var packagePurlByComponentId = new HashMap<Long, String>();
         final Map<String, HealthMeta> healthByPackagePurl;
+        final boolean healthEnabled =
+                requirements.containsKey(TYPE_HEALTH) && withJdbiHandle(PackageHealthSettings::isEnabled);
 
-        if (requirements.containsKey(TYPE_HEALTH)) {
+        if (healthEnabled) {
             for (final var entry : componentsWithLicense.entrySet()) {
                 final var componentPurl =
                         PurlUtil.silentPurl(entry.getValue().component().getPurl());
@@ -297,6 +300,7 @@ public final class CelPolicyEngine {
                             Map.entry(CelPolicyVariable.VULNS.variableName(), protoVulns),
                             Map.entry(CelPolicyVariable.NOW.variableName(), protoNow),
                             Map.entry(CelPolicyVariable.HEALTH.variableName(), protoHealth)),
+                    healthEnabled,
                     violationsByComponentId,
                     unevaluatedConditionIdsByComponentId);
         }
@@ -410,6 +414,7 @@ public final class CelPolicyEngine {
             List<PolicyWithScripts> policiesWithScripts,
             long componentId,
             Map<String, Object> scriptArgs,
+            boolean healthEnabled,
             Map<Long, List<PolicyViolation>> violationsByComponentId,
             Map<Long, Set<Long>> unevaluatedConditionIdsByComponentId) {
         for (final PolicyWithScripts pws : policiesWithScripts) {
@@ -422,6 +427,13 @@ public final class CelPolicyEngine {
                 final Set<String> requiredHealthFields =
                         cs.script().getRequirements().getOrDefault(TYPE_HEALTH, Set.of());
                 final HealthMeta health = (HealthMeta) scriptArgs.get(CelPolicyVariable.HEALTH.variableName());
+
+                if (!healthEnabled && !requiredHealthFields.isEmpty()) {
+                    // With package health turned off, health conditions do not match,
+                    // and violations they reported earlier are cleared.
+                    evaluatedConditionCount++;
+                    continue;
+                }
 
                 if (requiredHealthFields.stream().anyMatch(fieldName -> isHealthFieldAbsent(health, fieldName))) {
                     unevaluatedConditions.add(cs.condition());

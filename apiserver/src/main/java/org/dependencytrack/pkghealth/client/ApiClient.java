@@ -23,10 +23,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.dependencytrack.common.HttpClient;
 import org.dependencytrack.common.Mappers;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -41,6 +43,7 @@ import static java.util.Objects.requireNonNull;
 abstract class ApiClient {
 
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
+    private static final Duration DEFAULT_RATE_LIMIT_WAIT = Duration.ofMinutes(1);
 
     protected final java.net.http.HttpClient httpClient;
     protected final ObjectMapper objectMapper;
@@ -62,12 +65,7 @@ abstract class ApiClient {
 
         configureRequest(requestBuilder);
 
-        try {
-            return httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw e;
-        }
+        return httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
     protected final Optional<JsonNode> requestJson(String url) throws IOException, InterruptedException {
@@ -77,20 +75,9 @@ abstract class ApiClient {
             return Optional.empty();
         }
 
-        final int status = response.statusCode();
-        if ((status == 403 || status == 429)
-                && response.headers()
-                        .firstValue("x-ratelimit-remaining")
-                        .filter("0"::equals)
-                        .isPresent()) {
-            final var reset = response.headers().firstValue("x-ratelimit-reset");
-            if (reset.isPresent()) {
-                try {
-                    throw new ApiRateLimitException(Instant.ofEpochSecond(Long.parseLong(reset.get())));
-                } catch (NumberFormatException ignored) {
-                    // Invalid reset header; use the generic HTTP error below
-                }
-            }
+        final Instant rateLimitResetAt = rateLimitResetAt(response);
+        if (rateLimitResetAt != null) {
+            throw new ApiRateLimitException(rateLimitResetAt);
         }
 
         if (response.statusCode() != 200) {
@@ -107,6 +94,43 @@ abstract class ApiClient {
         }
 
         return Optional.of(objectMapper.readTree(response.body()));
+    }
+
+    /**
+     * Follows GitHub's guidance for primary and secondary rate limits, which also covers deps.dev:
+     * honor {@code retry-after}, then {@code x-ratelimit-reset} when no requests remain, and
+     * otherwise wait one minute after a 429.
+     *
+     * @see <a href="https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately">GitHub rate limit handling</a>
+     */
+    private static @Nullable Instant rateLimitResetAt(final HttpResponse<?> response) {
+        final int status = response.statusCode();
+        if (status != 403 && status != 429) {
+            return null;
+        }
+
+        final HttpHeaders headers = response.headers();
+        final Long retryAfterSeconds = parseLong(headers.firstValue("retry-after"));
+        if (retryAfterSeconds != null) {
+            return Instant.now().plusSeconds(retryAfterSeconds);
+        }
+
+        if (headers.firstValue("x-ratelimit-remaining").filter("0"::equals).isPresent()) {
+            final Long resetEpochSeconds = parseLong(headers.firstValue("x-ratelimit-reset"));
+            if (resetEpochSeconds != null) {
+                return Instant.ofEpochSecond(resetEpochSeconds);
+            }
+        }
+
+        return status == 429 ? Instant.now().plus(DEFAULT_RATE_LIMIT_WAIT) : null;
+    }
+
+    private static @Nullable Long parseLong(final Optional<String> value) {
+        try {
+            return value.isPresent() ? Long.parseLong(value.get().trim()) : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     protected final <T> Optional<T> requestParseJsonForResult(String url, Function<JsonNode, Optional<T>> parser)

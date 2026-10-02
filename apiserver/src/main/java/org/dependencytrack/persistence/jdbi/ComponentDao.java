@@ -29,6 +29,7 @@ import org.dependencytrack.model.License;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.persistence.jdbi.query.ListComponentsQuery;
 import org.dependencytrack.persistence.jdbi.query.ListProjectComponentsQuery;
+import org.dependencytrack.pkghealth.PackageHealthSettings;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.mapper.reflect.BeanMapper;
 import org.jdbi.v3.core.statement.StatementContext;
@@ -196,7 +197,8 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
                 decodedPageToken != null ? decodedPageToken.lastId() : null,
                 effectiveSortBy,
                 effectiveSortDirection,
-                decodedPageToken != null);
+                decodedPageToken != null,
+                PackageHealthSettings.isEnabled(getHandle()));
 
         final List<ListedComponent> resultRows =
                 rows.size() > 1 ? rows.subList(0, Math.min(rows.size(), query.limit())) : rows;
@@ -283,13 +285,12 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
               FROM "COMPONENT" "C"
               LEFT JOIN "LICENSE" "L"
                 ON "C"."LICENSE_ID" = "L"."ID"
-              LEFT JOIN "PACKAGE_HEALTH_METADATA" "PHM"
-                ON "PHM"."PURL" = regexp_replace("C"."PURL", '[@?#].*$', '')
-               AND "PHM"."STATUS" = 'PROCESSED'
-            <#if sortByColumn?has_content && sortByColumn == "PUBLISHED_AT">
               LEFT JOIN "PACKAGE_ARTIFACT_METADATA" "PAM"
                 ON "PAM"."PURL" = "C"."PURL"
-            </#if>
+              LEFT JOIN "PACKAGE_HEALTH_METADATA" "PHM"
+                ON "PHM"."PURL" = "PAM"."PACKAGE_PURL"
+               AND "PHM"."STATUS" = 'PROCESSED'
+               AND :packageHealthEnabled
              WHERE ${apiProjectAclCondition}
                AND ${whereConditions?join(" AND ")}
             <#assign castedLastSortValue>
@@ -374,7 +375,8 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             @Bind Long lastId,
             @Define ListProjectComponentsQuery.SortBy sortByColumn,
             @Define SortDirection sortDirection,
-            @Define boolean hasCursor);
+            @Define boolean hasCursor,
+            @Bind boolean packageHealthEnabled);
 
     default Page<ListedComponent> listComponents(ListComponentsQuery query) {
         final PageTokenEncoder pageTokenEncoder =
@@ -500,7 +502,8 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
                 decodedPageToken != null ? decodedPageToken.lastId() : null,
                 effectiveSortBy,
                 effectiveSortDirection,
-                decodedPageToken != null);
+                decodedPageToken != null,
+                PackageHealthSettings.isEnabled(getHandle()));
 
         final List<ListedComponent> resultRows =
                 rows.size() > 1 ? rows.subList(0, Math.min(rows.size(), query.limit())) : rows;
@@ -575,9 +578,11 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
                 FROM "COMPONENT" "C"
                 INNER JOIN "PROJECT" ON "C"."PROJECT_ID" = "PROJECT"."ID"
                 LEFT OUTER JOIN "LICENSE" "L" ON "C"."LICENSE_ID" = "L"."ID"
+                LEFT JOIN "PACKAGE_ARTIFACT_METADATA" "PAM" ON "PAM"."PURL" = "C"."PURL"
                 LEFT JOIN "PACKAGE_HEALTH_METADATA" "PHM"
-                  ON "PHM"."PURL" = regexp_replace("C"."PURL", '[@?#].*$', '')
+                  ON "PHM"."PURL" = "PAM"."PACKAGE_PURL"
                  AND "PHM"."STATUS" = 'PROCESSED'
+                 AND :packageHealthEnabled
                 WHERE ${apiProjectAclCondition}
                 AND ${whereConditions?join(" AND ")}
                 <#assign castedLastSortValue>
@@ -645,7 +650,8 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             @Bind Long lastId,
             @Define ListComponentsQuery.SortBy sortByColumn,
             @Define SortDirection sortDirection,
-            @Define boolean hasCursor);
+            @Define boolean hasCursor,
+            @Bind boolean packageHealthEnabled);
 
     record ListedComponent(
             Component component,

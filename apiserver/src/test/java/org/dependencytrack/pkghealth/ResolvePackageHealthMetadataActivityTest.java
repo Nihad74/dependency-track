@@ -20,9 +20,9 @@ package org.dependencytrack.pkghealth;
 
 import alpine.model.IConfigProperty.PropertyType;
 import com.github.packageurl.PackageURL;
+import com.google.protobuf.util.Timestamps;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.dex.api.ActivityContext;
-import org.dependencytrack.dex.api.failure.ApplicationFailureException;
 import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.model.PackageMetadata;
 import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
@@ -42,9 +42,9 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.dependencytrack.model.ConfigPropertyConstants.INTERNAL_COMPONENTS_GROUPS_REGEX;
+import static org.dependencytrack.model.ConfigPropertyConstants.PACKAGE_HEALTH_RESOLUTION_ENABLED;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -238,22 +238,55 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
     }
 
     @Test
-    void shouldRetryAfterApiRateLimitReset() throws Exception {
-        final var purl = new PackageURL("pkg:npm/example@1.0.0");
+    void shouldStoreFetchedPackagesAndReturnRestWhenRateLimitIsReached() throws Exception {
+        final var fetchedPurl = new PackageURL("pkg:npm/fetched@1.0.0");
+        final var fetchedPackagePurl = new PackageURL("pkg:npm/fetched");
+        final var limitedPurl = new PackageURL("pkg:npm/limited@1.0.0");
+        final var laterPurl = new PackageURL("pkg:npm/later@1.0.0");
+        createPackageMetadata(fetchedPackagePurl);
         final var resetAt = NOW.plus(Duration.ofMinutes(10));
 
-        when(analyzer.analyze(purl))
+        final var model = new AnalyzedPackageHealth(fetchedPackagePurl);
+        model.setStars(10L);
+        when(analyzer.analyze(fetchedPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(model));
+        when(analyzer.analyze(limitedPurl))
                 .thenThrow(new PackageHealthAnalyzer.AnalysisException(
                         "GitHub request failed", new ApiRateLimitException(resetAt)));
 
-        final var arg = ResolvePackageHealthMetadataActivityArg.newBuilder()
-                .addPurls(purl.toString())
-                .build();
+        final var result = activity.execute(
+                mock(ActivityContext.class),
+                ResolvePackageHealthMetadataActivityArg.newBuilder()
+                        .addPurls(fetchedPurl.toString())
+                        .addPurls(limitedPurl.toString())
+                        .addPurls(laterPurl.toString())
+                        .build());
 
-        assertThatExceptionOfType(ApplicationFailureException.class)
-                .isThrownBy(() -> activity.execute(mock(ActivityContext.class), arg))
-                .satisfies(e -> assertThat(e.retryAfter())
-                        .isEqualTo(Duration.ofMinutes(10).plusSeconds(2)));
+        assertThat(result.getChangedPurlsList()).containsExactly(fetchedPackagePurl.canonicalize());
+        assertThat(result.getUnresolvedPurlsList()).containsExactly(limitedPurl.toString(), laterPurl.toString());
+        assertThat(Timestamps.toMillis(result.getRateLimitResetAt())).isEqualTo(resetAt.toEpochMilli());
+        final var stored = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(fetchedPackagePurl));
+        assertThat(stored).isNotNull();
+        verify(analyzer, never()).analyze(laterPurl);
+    }
+
+    @Test
+    void shouldNotCallExternalApisWhenDisabled() throws Exception {
+        qm.createConfigProperty(
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getGroupName(),
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getPropertyName(),
+                "false",
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getPropertyType(),
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getDescription());
+
+        final var result = activity.execute(
+                mock(ActivityContext.class),
+                ResolvePackageHealthMetadataActivityArg.newBuilder()
+                        .addPurls("pkg:npm/example@1.0.0")
+                        .build());
+
+        assertThat(result.getChangedPurlsList()).isEmpty();
+        assertThat(result.getUnresolvedPurlsList()).isEmpty();
+        verifyNoInteractions(analyzer);
     }
 
     private static void createPackageMetadata(final PackageURL packagePurl) {

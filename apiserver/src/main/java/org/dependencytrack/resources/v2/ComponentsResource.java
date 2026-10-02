@@ -48,6 +48,7 @@ import org.dependencytrack.persistence.jdbi.PackageArtifactMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageMetadataDao;
 import org.dependencytrack.persistence.jdbi.query.ListComponentsQuery;
+import org.dependencytrack.pkghealth.PackageHealthSettings;
 import org.dependencytrack.resources.AbstractApiResource;
 import org.dependencytrack.util.InternalComponentIdentifier;
 import org.dependencytrack.util.PurlUtil;
@@ -131,6 +132,10 @@ public class ComponentsResource extends AbstractApiResource implements Component
     public Response getComponentHealth(final UUID uuid) {
         return withJdbiHandle(getAlpineRequest(), handle -> {
             requireComponentAccess(handle, uuid);
+
+            if (!PackageHealthSettings.isEnabled(handle)) {
+                throw new NotFoundException("Package health is disabled");
+            }
 
             final PackageURL purl = handle.attach(ComponentDao.class).getPurl(uuid);
             if (purl == null) {

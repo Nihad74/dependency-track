@@ -277,7 +277,9 @@ public final class CelPolicyDao {
                       FROM "PROJECT" AS proj
                      INNER JOIN "COMPONENT" AS c
                         ON c."PROJECT_ID" = proj."ID"
-                     WHERE regexp_replace(c."PURL", '[@?#].*$', '') = ANY(:packagePurls)
+                     INNER JOIN "PACKAGE_ARTIFACT_METADATA" AS pam
+                        ON pam."PURL" = c."PURL"
+                     WHERE pam."PACKAGE_PURL" = ANY(:packagePurls)
                        AND EXISTS (
                          SELECT 1
                            FROM "POLICYCONDITION" AS pc

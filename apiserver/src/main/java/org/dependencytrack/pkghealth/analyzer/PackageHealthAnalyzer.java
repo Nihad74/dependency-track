@@ -19,30 +19,183 @@
 package org.dependencytrack.pkghealth.analyzer;
 
 import com.github.packageurl.PackageURL;
+import org.dependencytrack.pkghealth.client.DepsDevApiClient;
+import org.dependencytrack.pkghealth.client.GitHubApiClient;
+import org.dependencytrack.pkghealth.client.GitHubApiClientProvider;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
+import org.dependencytrack.util.PurlUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
-public interface PackageHealthAnalyzer {
+/**
+ * Fetches package health from deps.dev and, for repositories hosted on github.com, from the GitHub API.
+ */
+public final class PackageHealthAnalyzer {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(PackageHealthAnalyzer.class);
+
+    private static final Map<String, String> DEPS_DEV_SYSTEM_BY_PURL_TYPE = Map.ofEntries(
+            Map.entry(PackageURL.StandardTypes.NPM, "NPM"),
+            Map.entry(PackageURL.StandardTypes.GOLANG, "GO"),
+            Map.entry(PackageURL.StandardTypes.MAVEN, "MAVEN"),
+            Map.entry(PackageURL.StandardTypes.PYPI, "PYPI"),
+            Map.entry(PackageURL.StandardTypes.NUGET, "NUGET"),
+            Map.entry(PackageURL.StandardTypes.CARGO, "CARGO"),
+            Map.entry(PackageURL.StandardTypes.GEM, "RUBYGEMS"));
+
+    private static final Set<String> SYSTEMS_WITH_DEPENDENTS = Set.of("NPM", "CARGO", "MAVEN", "PYPI");
+
+    private final DepsDevApiClient depsDevClient;
+    private final GitHubApiClientProvider gitHubClientProvider;
+
+    public PackageHealthAnalyzer(
+            final DepsDevApiClient depsDevClient, final GitHubApiClientProvider gitHubClientProvider) {
+        this.depsDevClient = Objects.requireNonNull(depsDevClient);
+        this.gitHubClientProvider = Objects.requireNonNull(gitHubClientProvider);
+    }
 
     /**
      * @return PURL types that {@link #analyze(PackageURL)} can return health metadata for
      */
-    Set<String> supportedPurlTypes();
+    public Set<String> supportedPurlTypes() {
+        return DEPS_DEV_SYSTEM_BY_PURL_TYPE.keySet();
+    }
 
     /**
      * @return {@link AnalysisResult.NotAvailable} for PURL types outside {@link #supportedPurlTypes()}
      */
-    AnalysisResult analyze(PackageURL purl) throws AnalysisException, InterruptedException;
+    public AnalysisResult analyze(final PackageURL purl) throws AnalysisException, InterruptedException {
 
-    sealed interface AnalysisResult {
+        final PackageURL packagePurl =
+                Objects.requireNonNull(PurlUtil.silentPurlPackageOnly(purl), "Unable to create package-only PURL");
+
+        final var metadata = new AnalyzedPackageHealth(packagePurl);
+
+        final String system = DEPS_DEV_SYSTEM_BY_PURL_TYPE.get(purl.getType());
+        if (system == null) {
+            return new AnalysisResult.NotAvailable();
+        }
+        final String name = toDepsDevPackageName(purl);
+        metadata.setDepsDevUrl(depsDevClient.packagePageUrl(system, name));
+
+        /*
+         * We fetch package health metadata through a combination of deps.dev and the GitHub API.
+         *
+         * First, we retrieve the default package version from deps.dev. Dependents are fetched for the version
+         * specified by the PURL falling back to the default version when necessary.
+         *
+         * The default version is then used to determine the source repository. Project metadata, including OpenSSF
+         * Scorecard data, is retrieved from deps.dev. For repositories hosted on GitHub, the remaining metadata is
+         * fetched through the GitHub API.
+         *
+         * For projects not hosted on GitHub, only the metadata available through deps.dev can currently be retrieved.
+         */
+
+        try {
+            final Optional<String> latestVersion = depsDevClient.fetchLatestVersion(system, name);
+
+            if (latestVersion.isEmpty()) {
+                LOGGER.debug("Could not determine latest version for {}", packagePurl);
+                return new AnalysisResult.NotAvailable();
+            }
+
+            fetchDependents(metadata, system, name, purl.getVersion(), latestVersion.get());
+
+            final Optional<String> sourceRepository =
+                    depsDevClient.fetchSourceRepository(system, name, latestVersion.get());
+
+            if (sourceRepository.isEmpty()) {
+                LOGGER.debug("Could not determine source repository for {}", packagePurl);
+                return new AnalysisResult.Available(metadata);
+            }
+
+            final String repository = sourceRepository.get();
+
+            depsDevClient.fetchProjectMetadata(packagePurl, repository).ifPresent(metadata::mergeFrom);
+
+            if (!isGitHubRepository(repository)) {
+                LOGGER.debug("Source repository for {} is not hosted on GitHub", packagePurl);
+                return new AnalysisResult.Available(metadata);
+            }
+
+            metadata.setGithubUrl(GitHubApiClient.repositoryPageUrl(repository));
+
+            final Optional<GitHubApiClient> gitHubClient = gitHubClientProvider.get();
+
+            if (gitHubClient.isEmpty()) {
+                LOGGER.debug("GitHub metadata analysis is not configured");
+                return new AnalysisResult.Available(metadata);
+            }
+
+            gitHubClient.get().fetchRepositoryMetadata(packagePurl, repository).ifPresent(metadata::mergeFrom);
+
+            return new AnalysisResult.Available(metadata);
+        } catch (IOException e) {
+            throw new AnalysisException("Package health analysis failed for " + packagePurl, e);
+        }
+    }
+
+    private void fetchDependents(
+            final AnalyzedPackageHealth metadata,
+            final String system,
+            final String name,
+            final String actualVersion,
+            final String latestVersion)
+            throws IOException, InterruptedException {
+        if (!SYSTEMS_WITH_DEPENDENTS.contains(system)) {
+            return;
+        }
+
+        Optional<Long> dependents = Optional.empty();
+
+        if (actualVersion != null && !actualVersion.isBlank()) {
+            dependents = depsDevClient.fetchDependents(system, name, actualVersion);
+        }
+
+        if (dependents.isEmpty() && !latestVersion.equals(actualVersion)) {
+            dependents = depsDevClient.fetchDependents(system, name, latestVersion);
+        }
+
+        dependents.ifPresent(metadata::setDependents);
+    }
+
+    private static String toDepsDevPackageName(final PackageURL purl) {
+        final String namespace = purl.getNamespace();
+
+        if (namespace == null || namespace.isBlank()) {
+            return purl.getName();
+        }
+
+        /*
+           deps.dev identifies Maven packages as groupId:artifactId, while the PURL stores them separately as namespace
+           and name.
+        */
+        if (PackageURL.StandardTypes.MAVEN.equals(purl.getType())) {
+            return namespace + ":" + purl.getName();
+        }
+
+        return namespace + "/" + purl.getName();
+    }
+
+    private static boolean isGitHubRepository(final String repository) {
+        return repository.toLowerCase(Locale.ROOT).startsWith("github.com/");
+    }
+
+    public sealed interface AnalysisResult {
 
         record Available(AnalyzedPackageHealth metadata) implements AnalysisResult {}
 
         record NotAvailable() implements AnalysisResult {}
     }
 
-    final class AnalysisException extends Exception {
+    public static final class AnalysisException extends Exception {
 
         public AnalysisException(String message, Throwable cause) {
             super(message, cause);

@@ -19,7 +19,10 @@
 package org.dependencytrack.pkghealth.model;
 
 import com.github.packageurl.PackageURL;
+import org.dependencytrack.model.PackageHealthMetadata;
+import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
+import org.dependencytrack.util.PurlUtil;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
@@ -50,7 +53,6 @@ public final class AnalyzedPackageHealth {
     private @Nullable Float scorecardScore;
     private @Nullable String scorecardReferenceVersion;
     private @Nullable Instant scorecardTimestamp;
-    private @Nullable Instant projectMetadataObservedAt;
     private @Nullable String depsDevUrl;
     private @Nullable String githubUrl;
     private @Nullable Float averageIssueAgeDays;
@@ -58,13 +60,36 @@ public final class AnalyzedPackageHealth {
     private List<PackageHealthScorecardCheck> scorecardChecks = List.of();
 
     public AnalyzedPackageHealth(PackageURL purl) {
-        this.purl = requireNonNull(purl, "purl must not be null");
+        PurlUtil.requirePackageOnly(requireNonNull(purl, "purl must not be null"));
+        this.purl = purl;
+    }
 
-        if (purl.getVersion() != null
-                || (purl.getQualifiers() != null && !purl.getQualifiers().isEmpty())
-                || purl.getSubpath() != null) {
-            throw new IllegalArgumentException("purl must not contain version, qualifiers, or subpath: " + purl);
-        }
+    public PackageHealthMetadata toMetadata(final PackageHealthMetadataStatus status, final Instant lastFetch) {
+        return new PackageHealthMetadata(
+                purl,
+                stars,
+                forks,
+                contributors,
+                commitFrequencyWeekly,
+                openIssues,
+                openPullRequests,
+                lastCommit,
+                busFactor,
+                hasReadme,
+                hasCodeOfConduct,
+                hasSecurityPolicy,
+                dependents,
+                files,
+                repositoryArchived,
+                scorecardScore,
+                scorecardReferenceVersion,
+                scorecardTimestamp,
+                depsDevUrl,
+                githubUrl,
+                averageIssueAgeDays,
+                requireNonNull(lastFetch, "lastFetch must not be null"),
+                requireNonNull(status, "status must not be null"),
+                scorecardChecks);
     }
 
     public void mergeFrom(AnalyzedPackageHealth other) {
@@ -106,9 +131,6 @@ public final class AnalyzedPackageHealth {
         }
         if (other.scorecardTimestamp != null) {
             scorecardTimestamp = other.scorecardTimestamp;
-        }
-        if (other.projectMetadataObservedAt != null) {
-            projectMetadataObservedAt = other.projectMetadataObservedAt;
         }
         if (other.depsDevUrl != null) {
             depsDevUrl = other.depsDevUrl;
@@ -194,10 +216,6 @@ public final class AnalyzedPackageHealth {
 
     public @Nullable Instant getScorecardTimestamp() {
         return scorecardTimestamp;
-    }
-
-    public @Nullable Instant getProjectMetadataObservedAt() {
-        return projectMetadataObservedAt;
     }
 
     public @Nullable String getDepsDevUrl() {
@@ -296,8 +314,7 @@ public final class AnalyzedPackageHealth {
                 + repositoryArchived + ", scorecardScore="
                 + scorecardScore + ", scorecardReferenceVersion='"
                 + scorecardReferenceVersion + '\'' + ", scorecardTimestamp="
-                + scorecardTimestamp + ", projectMetadataObservedAt="
-                + projectMetadataObservedAt + ", depsDevUrl='"
+                + scorecardTimestamp + ", depsDevUrl='"
                 + depsDevUrl + '\'' + ", githubUrl='"
                 + githubUrl + '\'' + ", averageIssueAgeDays="
                 + averageIssueAgeDays + ", scorecardChecks="
@@ -310,10 +327,6 @@ public final class AnalyzedPackageHealth {
 
     public void setScorecardTimestamp(@Nullable Instant scorecardTimestamp) {
         this.scorecardTimestamp = scorecardTimestamp;
-    }
-
-    public void setProjectMetadataObservedAt(@Nullable Instant projectMetadataObservedAt) {
-        this.projectMetadataObservedAt = projectMetadataObservedAt;
     }
 
     public void setDepsDevUrl(@Nullable String depsDevUrl) {

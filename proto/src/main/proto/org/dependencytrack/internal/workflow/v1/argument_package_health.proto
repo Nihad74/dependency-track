@@ -20,6 +20,8 @@ syntax = "proto3";
 
 package org.dependencytrack.internal.workflow.v1;
 
+import "google/protobuf/timestamp.proto";
+
 option java_multiple_files = true;
 option java_package = "org.dependencytrack.proto.internal.workflow.v1";
 
@@ -43,6 +45,10 @@ message ResolvePackageHealthMetadataActivityArg {
 
 message ResolvePackageHealthMetadataActivityRes {
   repeated string changed_purls = 1;
+  // Packages that were not fetched because an external API rate limit was reached.
+  repeated string unresolved_purls = 2;
+  // When the rate limit resets. Set if and only if unresolved_purls is not empty.
+  google.protobuf.Timestamp rate_limit_reset_at = 3;
 }
 
 message ScheduleHealthPolicyEvaluationsArg {
