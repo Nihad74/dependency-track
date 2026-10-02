@@ -297,7 +297,9 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             <#assign castedLastSortValue>
                 <#-- Ensure Postgres can determine the type of lastSortValue even when it's null. -->
                 <#if sortByColumn?has_content && sortByColumn == "PUBLISHED_AT">CAST(:lastSortValue AS TIMESTAMPTZ)
-                <#elseif sortByColumn?has_content && (sortByColumn == "LAST_RISKSCORE" || sortByColumn == "SCORECARD_SCORE")>CAST(:lastSortValue AS DOUBLE PRECISION)
+                <#elseif sortByColumn?has_content && sortByColumn == "LAST_RISKSCORE">CAST(:lastSortValue AS DOUBLE PRECISION)
+                <#-- SCORECARD_SCORE is REAL; comparing it with a DOUBLE PRECISION cursor breaks ties on inexact scores. -->
+                <#elseif sortByColumn?has_content && sortByColumn == "SCORECARD_SCORE">CAST(:lastSortValue AS REAL)
                 <#else>CAST(:lastSortValue AS TEXT)
                 </#if>
             </#assign>
@@ -586,7 +588,9 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
                 AND ${whereConditions?join(" AND ")}
                 <#assign castedLastSortValue>
                     <#-- Ensure Postgres can determine the type of lastSortValue even when it's null. -->
-                    <#if sortByColumn?has_content && (sortByColumn == "LAST_RISKSCORE" || sortByColumn == "SCORECARD_SCORE")>CAST(:lastSortValue AS DOUBLE PRECISION)
+                    <#if sortByColumn?has_content && sortByColumn == "LAST_RISKSCORE">CAST(:lastSortValue AS DOUBLE PRECISION)
+                    <#-- SCORECARD_SCORE is REAL; comparing it with a DOUBLE PRECISION cursor breaks ties on inexact scores. -->
+                    <#elseif sortByColumn?has_content && sortByColumn == "SCORECARD_SCORE">CAST(:lastSortValue AS REAL)
                     <#else>CAST(:lastSortValue AS TEXT)
                     </#if>
                 </#assign>
