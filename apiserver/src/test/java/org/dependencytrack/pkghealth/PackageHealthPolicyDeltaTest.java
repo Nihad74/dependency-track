@@ -24,6 +24,7 @@ import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -76,6 +77,87 @@ class PackageHealthPolicyDeltaTest {
                 metadata(10L, 4.0f, List.of(check("Code-Review", 8.0f, "ok"), check("Maintained", 3.0f, "ok")));
 
         assertThat(PackageHealthPolicyDelta.changed(previous, next)).isFalse();
+    }
+
+    @Test
+    void shouldIgnoreIssueAgeGrowingByElapsedTime() throws Exception {
+        final var previous = drifting(120.0f, null, FETCHED_AT);
+        final var next = drifting(121.02f, null, FETCHED_AT.plus(Duration.ofHours(25)));
+
+        assertThat(PackageHealthPolicyDelta.changed(previous, next)).isFalse();
+    }
+
+    @Test
+    void shouldDetectIssueAgeChangeBeyondElapsedTime() throws Exception {
+        // An old issue was closed: the average dropped although a day passed.
+        final var previous = drifting(120.0f, null, FETCHED_AT);
+        final var next = drifting(80.0f, null, FETCHED_AT.plus(Duration.ofDays(1)));
+
+        assertThat(PackageHealthPolicyDelta.changed(previous, next)).isTrue();
+    }
+
+    @Test
+    void shouldIgnoreUnchangedZeroIssueAge() throws Exception {
+        final var previous = drifting(0.0f, null, FETCHED_AT);
+        final var next = drifting(0.0f, null, FETCHED_AT.plus(Duration.ofDays(1)));
+
+        assertThat(PackageHealthPolicyDelta.changed(previous, next)).isFalse();
+    }
+
+    @Test
+    void shouldIgnoreCommitFrequencyShrinkingWithRepositoryAge() throws Exception {
+        // 520 commits over 104 weeks, then over 105 weeks.
+        final var previous = drifting(null, 5.0f, FETCHED_AT);
+        final var next = drifting(null, 520f / 105, FETCHED_AT.plus(Duration.ofDays(7)));
+
+        assertThat(PackageHealthPolicyDelta.changed(previous, next)).isFalse();
+    }
+
+    @Test
+    void shouldDetectCommitFrequencyChange() throws Exception {
+        final var previous = drifting(null, 5.0f, FETCHED_AT);
+        final var next = drifting(null, 6.0f, FETCHED_AT.plus(Duration.ofDays(1)));
+
+        assertThat(PackageHealthPolicyDelta.changed(previous, next)).isTrue();
+    }
+
+    @Test
+    void shouldDetectDriftingFieldBecomingAbsent() throws Exception {
+        final var previous = drifting(120.0f, 5.0f, FETCHED_AT);
+        final var next = drifting(null, 5.0f, FETCHED_AT.plus(Duration.ofDays(1)));
+
+        assertThat(PackageHealthPolicyDelta.changed(previous, next)).isTrue();
+    }
+
+    private static PackageHealthMetadata drifting(
+            final Float averageIssueAgeDays, final Float commitFrequencyWeekly, final Instant lastFetch)
+            throws Exception {
+        return new PackageHealthMetadata(
+                new PackageURL("pkg:npm/react"),
+                null,
+                null,
+                null,
+                commitFrequencyWeekly,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                averageIssueAgeDays,
+                lastFetch,
+                PackageHealthMetadataStatus.PROCESSED,
+                List.of());
     }
 
     private static PackageHealthMetadata metadata(

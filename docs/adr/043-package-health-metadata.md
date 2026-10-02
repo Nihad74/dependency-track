@@ -68,7 +68,10 @@ from the policy type.
 Shared packages are fetched once. Projects that import the same package see the same health row.
 
 A policy saved before the first fetch does not match until health arrives and the policy run
-starts. An unchanged refresh updates `LAST_FETCH` and does not start policy evaluation.
+starts. An unchanged refresh updates `LAST_FETCH` and does not start policy evaluation. Average
+issue age and commit frequency move with time alone, so small changes in them count as unchanged.
+A policy that compares them with a threshold sees the crossing at its next evaluation, not at
+the refresh.
 
 The project lookup repeats the existing rules for which policies apply to a project, so a limited
 policy does not schedule every project that contains the package.
