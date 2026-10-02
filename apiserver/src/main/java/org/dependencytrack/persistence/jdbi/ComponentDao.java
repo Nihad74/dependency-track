@@ -121,7 +121,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             """)
     Set<UUID> getExistingUuids(@Bind Collection<UUID> componentUuids);
 
-    default Page<Component> listProjectComponents(ListProjectComponentsQuery query) {
+    default Page<ListedComponent> listProjectComponents(ListProjectComponentsQuery query) {
         final PageTokenEncoder pageTokenEncoder =
                 getHandle().getConfig(PaginationConfig.class).getPageTokenEncoder();
         final var decodedPageToken =
@@ -217,7 +217,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
                             ? lastRow.publishedAtMicros()
                             : null,
                     effectiveSortBy == ListProjectComponentsQuery.SortBy.SCORECARD_SCORE
-                            ? lastComponent.getScorecardScore()
+                            ? lastRow.scorecardScore()
                             : null,
                     effectiveSortBy,
                     effectiveSortDirection,
@@ -226,9 +226,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             nextPageToken = null;
         }
 
-        final List<Component> components =
-                resultRows.stream().map(ListedComponent::component).toList();
-        return new Page<>(components, pageTokenEncoder.encode(nextPageToken), totalCount);
+        return new Page<>(List.copyOf(resultRows), pageTokenEncoder.encode(nextPageToken), totalCount);
     }
 
     @SqlQuery(/* language=InjectedFreeMarker */ """
@@ -378,7 +376,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             @Define SortDirection sortDirection,
             @Define boolean hasCursor);
 
-    default Page<Component> listComponents(ListComponentsQuery query) {
+    default Page<ListedComponent> listComponents(ListComponentsQuery query) {
         final PageTokenEncoder pageTokenEncoder =
                 getHandle().getConfig(PaginationConfig.class).getPageTokenEncoder();
         final var decodedPageToken = pageTokenEncoder.decode(query.pageToken(), ListComponentsQuery.PageToken.class);
@@ -520,7 +518,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
                             ? lastComponent.getLastInheritedRiskScore()
                             : null,
                     effectiveSortBy == ListComponentsQuery.SortBy.SCORECARD_SCORE
-                            ? lastComponent.getScorecardScore()
+                            ? lastRow.scorecardScore()
                             : null,
                     effectiveSortBy,
                     effectiveSortDirection,
@@ -529,9 +527,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             nextPageToken = null;
         }
 
-        final List<Component> components =
-                resultRows.stream().map(ListedComponent::component).toList();
-        return new Page<>(components, pageTokenEncoder.encode(nextPageToken), totalCount);
+        return new Page<>(List.copyOf(resultRows), pageTokenEncoder.encode(nextPageToken), totalCount);
     }
 
     @SqlQuery(/* language=InjectedFreeMarker */ """
@@ -653,7 +649,8 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             @Define SortDirection sortDirection,
             @Define boolean hasCursor);
 
-    record ListedComponent(Component component, Long publishedAtMicros) {}
+    record ListedComponent(
+            Component component, @Nullable Long publishedAtMicros, @Nullable Double scorecardScore) {}
 
     class ComponentListRowMapper implements RowMapper<ListedComponent> {
 
@@ -673,10 +670,11 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             if (rs.getString("LAST_RISKSCORE") != null) {
                 maybeSet(rs, "LAST_RISKSCORE", ResultSet::getDouble, component::setLastInheritedRiskScore);
             }
+            Double scorecardScore = null;
             if (hasColumn(rs, "scorecardScore")) {
-                final double scorecardScore = rs.getDouble("scorecardScore");
+                final double value = rs.getDouble("scorecardScore");
                 if (!rs.wasNull()) {
-                    component.setScorecardScore(scorecardScore);
+                    scorecardScore = value;
                 }
             }
             if (hasColumn(rs, "licenseUuid") && rs.getString("licenseUuid") != null) {
@@ -699,7 +697,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
                     publishedAtMicros = value;
                 }
             }
-            return new ListedComponent(component, publishedAtMicros);
+            return new ListedComponent(component, publishedAtMicros, scorecardScore);
         }
     }
 }
