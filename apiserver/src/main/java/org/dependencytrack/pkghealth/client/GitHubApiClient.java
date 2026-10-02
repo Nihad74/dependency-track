@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 public final class GitHubApiClient extends ApiClient {
 
@@ -164,45 +165,21 @@ public final class GitHubApiClient extends ApiClient {
     }
 
     private IssueStatistics fetchIssueStatistics(final String repositoryUrl) throws IOException, InterruptedException {
-        final List<JsonNode> issues = fetchAllPages(repositoryUrl + "/issues?state=open");
-
-        long openIssues = 0;
-        long openPullRequests = 0;
-        double totalIssueAgeDays = 0;
-
         final Instant now = clock.instant();
+        final var counter = new IssueCounter();
 
-        for (final JsonNode issue : issues) {
-            if (issue.hasNonNull("pull_request")) {
-                openPullRequests++;
-                continue;
-            }
+        forEachItem(repositoryUrl + "/issues?state=open", issue -> counter.add(issue, now));
 
-            openIssues++;
-
-            final Instant createdAt = instantOrNull(issue.get("created_at"));
-            if (createdAt != null) {
-                final long ageSeconds =
-                        Math.max(0, Duration.between(createdAt, now).toSeconds());
-                totalIssueAgeDays += ageSeconds / 86_400.0;
-            }
-        }
-
-        final float averageIssueAgeDays = openIssues == 0 ? 0 : (float) (totalIssueAgeDays / openIssues);
-
-        return new IssueStatistics(openIssues, openPullRequests, averageIssueAgeDays);
+        return counter.toStatistics();
     }
 
     private ContributorStatistics fetchContributorStatistics(final String repositoryUrl)
             throws IOException, InterruptedException {
-        final List<JsonNode> contributors = fetchAllPages(repositoryUrl + "/contributors?anon=1");
+        final var counter = new ContributorCounter();
 
-        final List<Long> contributions = contributors.stream()
-                .map(node -> longOrNull(node.get("contributions")))
-                .filter(value -> value != null)
-                .toList();
+        forEachItem(repositoryUrl + "/contributors?anon=1", counter::add);
 
-        return new ContributorStatistics((long) contributors.size(), contributions);
+        return counter.toStatistics();
     }
 
     private @Nullable Instant fetchLastCommit(final String repositoryUrl, final @Nullable String defaultBranch)
@@ -270,17 +247,24 @@ public final class GitHubApiClient extends ApiClient {
         return requestJson(url).isPresent();
     }
 
-    private List<JsonNode> fetchAllPages(final String baseUrl) throws IOException, InterruptedException {
-        final var results = new ArrayList<JsonNode>();
+    /**
+     * Visits every item of a paginated GitHub list, one page at a time.
+     */
+    private void forEachItem(final String baseUrl, final Consumer<JsonNode> itemConsumer)
+            throws IOException, InterruptedException {
+        final String separator = baseUrl.contains("?") ? "&" : "?";
         int page = 1;
 
         while (true) {
-            final String separator = baseUrl.contains("?") ? "&" : "?";
+            if (Thread.interrupted()) {
+                throw new InterruptedException("Interrupted before all pages of %s were fetched".formatted(baseUrl));
+            }
+
             final Optional<JsonNode> response =
                     requestJson(baseUrl + separator + "per_page=" + PAGE_SIZE + "&page=" + page);
 
             if (response.isEmpty()) {
-                break;
+                return;
             }
 
             final JsonNode values = response.get();
@@ -288,16 +272,14 @@ public final class GitHubApiClient extends ApiClient {
                 throw new IOException("Expected GitHub response to be an array");
             }
 
-            values.forEach(results::add);
+            values.forEach(itemConsumer);
 
             if (values.size() < PAGE_SIZE) {
-                break;
+                return;
             }
 
             page++;
         }
-
-        return results;
     }
 
     private @Nullable Float calculateCommitFrequency(
@@ -386,6 +368,51 @@ public final class GitHubApiClient extends ApiClient {
     }
 
     private record RepositoryCoordinates(String owner, String repository) {}
+
+    private static final class IssueCounter {
+
+        private long openIssues;
+        private long openPullRequests;
+        private double totalIssueAgeDays;
+
+        private void add(final JsonNode issue, final Instant now) {
+            if (issue.hasNonNull("pull_request")) {
+                openPullRequests++;
+                return;
+            }
+
+            openIssues++;
+
+            final Instant createdAt = instantOrNull(issue.get("created_at"));
+            if (createdAt != null) {
+                final long ageSeconds = Math.max(0, Duration.between(createdAt, now).toSeconds());
+                totalIssueAgeDays += ageSeconds / 86_400.0;
+            }
+        }
+
+        private IssueStatistics toStatistics() {
+            final float averageIssueAgeDays = openIssues == 0 ? 0 : (float) (totalIssueAgeDays / openIssues);
+            return new IssueStatistics(openIssues, openPullRequests, averageIssueAgeDays);
+        }
+    }
+
+    private static final class ContributorCounter {
+
+        private final List<Long> contributions = new ArrayList<>();
+        private long count;
+
+        private void add(final JsonNode contributor) {
+            count++;
+            final Long value = longOrNull(contributor.get("contributions"));
+            if (value != null) {
+                contributions.add(value);
+            }
+        }
+
+        private ContributorStatistics toStatistics() {
+            return new ContributorStatistics(count, contributions);
+        }
+    }
 
     private record IssueStatistics(long openIssues, long openPullRequests, float averageIssueAgeDays) {}
 
