@@ -102,6 +102,9 @@ class PackageHealthPolicyDeltaTest {
                 null,
                 null,
                 null,
+                null,
+                null,
+                null,
                 FETCHED_AT,
                 PackageHealthMetadataStatus.PROCESSED,
                 checks);

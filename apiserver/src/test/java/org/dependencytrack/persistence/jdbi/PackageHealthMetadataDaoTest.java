@@ -39,6 +39,7 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
 
     private static final Instant LAST_COMMIT = Instant.parse("2026-01-10T12:00:00Z");
     private static final Instant SCORECARD_TIMESTAMP = Instant.parse("2026-01-11T12:00:00Z");
+    private static final Instant PROJECT_METADATA_OBSERVED_AT = Instant.ofEpochSecond(1658223503);
     private static final Instant LAST_FETCH = Instant.parse("2026-01-12T12:00:00Z");
 
     private Handle jdbiHandle;
@@ -79,6 +80,9 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
     void shouldPersistNullableValues() {
         final var metadata = new PackageHealthMetadata(
                 purl,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -185,6 +189,9 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
                 8.7f,
                 "v5.0.0",
                 SCORECARD_TIMESTAMP,
+                PROJECT_METADATA_OBSERVED_AT,
+                "https://deps.dev/npm/example",
+                "https://github.com/acme/example",
                 6.5f,
                 LAST_FETCH,
                 PackageHealthMetadataStatus.PROCESSED,

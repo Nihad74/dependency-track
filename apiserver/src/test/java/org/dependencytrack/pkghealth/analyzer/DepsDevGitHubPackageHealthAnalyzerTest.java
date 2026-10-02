@@ -189,6 +189,8 @@ class DepsDevGitHubPackageHealthAnalyzerTest {
 
         when(depsDevApiClient.fetchLatestVersion("NPM", "example")).thenReturn(Optional.of("1.0.0"));
 
+        when(depsDevApiClient.packagePageUrl("NPM", "example")).thenReturn("https://deps.dev/npm/example");
+
         when(depsDevApiClient.fetchDependents("NPM", "example", "1.0.0")).thenReturn(Optional.of(42L));
 
         when(depsDevApiClient.fetchSourceRepository("NPM", "example", "1.0.0")).thenReturn(Optional.of(repository));
@@ -207,6 +209,8 @@ class DepsDevGitHubPackageHealthAnalyzerTest {
 
         assertThat(metadata.getPurl()).isEqualTo(packagePurl);
         assertThat(metadata.getDependents()).isEqualTo(42L);
+        assertThat(metadata.getDepsDevUrl()).isEqualTo("https://deps.dev/npm/example");
+        assertThat(metadata.getGithubUrl()).isEqualTo("https://github.com/acme/example");
 
         // deps.dev data
         assertThat(metadata.getStars()).isEqualTo(100L);
