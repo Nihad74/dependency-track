@@ -129,7 +129,7 @@ abstract class ApiClient {
         // Subclasses may add headers, for example GitHub authentication.
     }
 
-    protected final String urlEncode(String value) {
+    protected static String urlEncode(String value) {
         requireNonNull(value, "value must not be null");
 
         return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");

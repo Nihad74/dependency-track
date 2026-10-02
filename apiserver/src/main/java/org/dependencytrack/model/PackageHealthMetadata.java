@@ -19,6 +19,7 @@
 package org.dependencytrack.model;
 
 import com.github.packageurl.PackageURL;
+import org.dependencytrack.util.PurlUtil;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
@@ -61,15 +62,9 @@ public record PackageHealthMetadata(
         List<PackageHealthScorecardCheck> scorecardChecks) {
 
     public PackageHealthMetadata {
-        requireNonNull(purl, "purl must not be null");
+        PurlUtil.requirePackageOnly(requireNonNull(purl, "purl must not be null"));
         requireNonNull(status, "status must not be null");
         requireNonNull(scorecardChecks, "scorecardChecks must not be null");
-
-        if (purl.getVersion() != null
-                || (purl.getQualifiers() != null && !purl.getQualifiers().isEmpty())
-                || purl.getSubpath() != null) {
-            throw new IllegalArgumentException("purl must not contain version, qualifiers, or subpath: " + purl);
-        }
 
         for (final PackageHealthScorecardCheck check : scorecardChecks) {
             if (!purl.equals(check.purl())) {
