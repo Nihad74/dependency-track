@@ -513,7 +513,7 @@ public class ProjectsResourceTest extends ResourceTest {
     }
 
     @Test
-    public void listProjectComponentsSortByScorecardScoreTreatsMissingScoreAsWorst() throws Exception {
+    public void listProjectComponentsSortByScorecardScoreShouldPageOverTiesAndMissingScores() throws Exception {
         initializeWithPermissions(Permissions.VIEW_PORTFOLIO);
 
         final Project project = qm.createProject("acme-app", null, "1.0", null, null, null, null, false);
@@ -536,6 +536,12 @@ public class ProjectsResourceTest extends ResourceTest {
         none.setPurl(new PackageURL("maven", "test", "none", "1.0", null, null));
         qm.createComponent(none, false);
 
+        final var tied = new Component();
+        tied.setProject(project);
+        tied.setName("tied");
+        tied.setPurl(new PackageURL("maven", "test", "tied", "1.0", null, null));
+        qm.createComponent(tied, false);
+
         final Instant fetchedAt = Instant.parse("2026-01-12T12:00:00Z");
         useJdbiHandle(handle -> {
             new PackageMetadataDao(handle)
@@ -553,14 +559,24 @@ public class ProjectsResourceTest extends ResourceTest {
                                     null,
                                     fetchedAt,
                                     null,
+                                    null),
+                            new PackageMetadata(
+                                    new PackageURL("maven", "test", "tied", null, null, null),
+                                    null,
+                                    null,
+                                    fetchedAt,
+                                    null,
                                     null)));
             final var healthDao = new PackageHealthMetadataDao(handle);
             healthDao.upsert(scorecardMetadata("pkg:maven/test/low", 2.5f));
-            healthDao.upsert(scorecardMetadata("pkg:maven/test/high", 9.0f));
+            // 7.3 is not exactly representable as a float, so ties at that score
+            // must still page correctly when the cursor round-trips through a double.
+            healthDao.upsert(scorecardMetadata("pkg:maven/test/high", 7.3f));
+            healthDao.upsert(scorecardMetadata("pkg:maven/test/tied", 7.3f));
         });
 
-        assertThat(collectScorecardSort(project, "ASC")).containsExactly("none", "low", "high");
-        assertThat(collectScorecardSort(project, "DESC")).containsExactly("high", "low", "none");
+        assertThat(collectScorecardSort(project, "ASC")).containsExactly("none", "low", "high", "tied");
+        assertThat(collectScorecardSort(project, "DESC")).containsExactly("high", "tied", "low", "none");
     }
 
     private java.util.List<String> collectScorecardSort(final Project project, final String direction) {
@@ -580,7 +596,7 @@ public class ProjectsResourceTest extends ResourceTest {
             body.getJsonArray("items")
                     .forEach(v -> collected.add(v.asJsonObject().getString("name")));
             pageToken = body.containsKey("next_page_token") ? body.getString("next_page_token") : null;
-        } while (pageToken != null);
+        } while (pageToken != null && collected.size() <= 10);
         return collected;
     }
 
