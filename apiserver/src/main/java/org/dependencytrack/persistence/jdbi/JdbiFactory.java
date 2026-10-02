@@ -30,7 +30,6 @@ import org.dependencytrack.persistence.jdbi.mapping.ExternalReferencesColumnMapp
 import org.dependencytrack.persistence.jdbi.mapping.OrganizationalContactsColumnMapper;
 import org.dependencytrack.persistence.jdbi.mapping.OrganizationalEntityColumnMapper;
 import org.dependencytrack.persistence.jdbi.mapping.PackageArtifactMetadataRowMapper;
-import org.dependencytrack.persistence.jdbi.mapping.PackageHealthMetadataRowMapper;
 import org.dependencytrack.persistence.jdbi.mapping.PackageHealthScorecardCheckRowMapper;
 import org.dependencytrack.persistence.jdbi.mapping.PackageMetadataRowMapper;
 import org.dependencytrack.support.jdbi.exception.ExceptionTranslationPlugin;
@@ -164,7 +163,6 @@ public class JdbiFactory {
                 .registerColumnMapper(new PurlColumnMapper())
                 .registerRowMapper(new PackageMetadataRowMapper())
                 .registerRowMapper(new PackageArtifactMetadataRowMapper())
-                .registerRowMapper(new PackageHealthMetadataRowMapper())
                 .registerRowMapper(new PackageHealthScorecardCheckRowMapper());
 
         preparedJdbi.getConfig(PaginationConfig.class).setPageTokenEncoder(new SimplePageTokenEncoder());

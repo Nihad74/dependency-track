@@ -39,6 +39,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
@@ -88,12 +89,15 @@ public final class ResolvePackageHealthMetadataActivity
 
         final List<String> changedPurls = inJdbiTransaction(handle -> {
             final var dao = new PackageHealthMetadataDao(handle);
+            final Map<String, PackageHealthMetadata> previousByPurl = dao.getAll(
+                    metadataToPersist.stream().map(PackageHealthMetadata::purl).toList());
+            dao.upsertAll(metadataToPersist);
+
             final var changed = new ArrayList<String>(metadataToPersist.size());
             for (final PackageHealthMetadata metadata : metadataToPersist) {
-                final PackageHealthMetadata previous = dao.get(metadata.purl());
-                dao.upsert(metadata);
-                if (PackageHealthPolicyDelta.changed(previous, metadata)) {
-                    changed.add(metadata.purl().canonicalize());
+                final String packagePurl = metadata.purl().canonicalize();
+                if (PackageHealthPolicyDelta.changed(previousByPurl.get(packagePurl), metadata)) {
+                    changed.add(packagePurl);
                 }
             }
             return changed;

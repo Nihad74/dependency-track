@@ -21,12 +21,20 @@ package org.dependencytrack.persistence.jdbi;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
+import org.dependencytrack.persistence.jdbi.mapping.PackageHealthMetadataRowMapper;
 import org.dependencytrack.util.PurlUtil;
 import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.statement.PreparedBatch;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Provides persistence operations for package health metadata.
@@ -43,9 +51,39 @@ public final class PackageHealthMetadataDao {
     }
 
     public @Nullable PackageHealthMetadata get(final PackageURL purl) {
-        final String canonicalPurl = PurlUtil.purlPackageOnly(purl);
+        return getAll(List.of(purl)).get(PurlUtil.purlPackageOnly(purl));
+    }
 
-        final PackageHealthMetadata metadata = jdbiHandle
+    /**
+     * @return Health metadata by canonical package PURL
+     */
+    public Map<String, PackageHealthMetadata> getAll(final Collection<PackageURL> purls) {
+        if (purls.isEmpty()) {
+            return Map.of();
+        }
+
+        final Set<String> packagePurls =
+                purls.stream().map(PurlUtil::purlPackageOnly).collect(Collectors.toSet());
+
+        final Map<String, List<PackageHealthScorecardCheck>> checksByPurl = jdbiHandle
+                .createQuery("""
+                        SELECT "PURL"
+                             , "CHECK_NAME"
+                             , "DESCRIPTION"
+                             , "SCORE"
+                             , "REASON"
+                             , "DETAILS"
+                             , "DOCUMENTATION_URL"
+                          FROM "PACKAGE_HEALTH_SCORECARD_CHECK"
+                         WHERE "PURL" = ANY(:purls)
+                         ORDER BY "PURL"
+                                , "CHECK_NAME"
+                        """)
+                .bindArray("purls", String.class, packagePurls)
+                .mapTo(PackageHealthScorecardCheck.class)
+                .collect(Collectors.groupingBy(check -> check.purl().canonicalize()));
+
+        return jdbiHandle
                 .createQuery("""
                         SELECT "PURL"
                              , "STARS"
@@ -72,50 +110,38 @@ public final class PackageHealthMetadataDao {
                              , "LAST_FETCH"
                              , "STATUS"
                           FROM "PACKAGE_HEALTH_METADATA"
-                         WHERE "PURL" = :purl
+                         WHERE "PURL" = ANY(:purls)
                         """)
-                .bind("purl", canonicalPurl)
-                .mapTo(PackageHealthMetadata.class)
-                .findOne()
-                .orElse(null);
-
-        if (metadata == null) {
-            return null;
-        }
-
-        final List<PackageHealthScorecardCheck> checks = jdbiHandle
-                .createQuery("""
-                        SELECT "PURL"
-                             , "CHECK_NAME"
-                             , "DESCRIPTION"
-                             , "SCORE"
-                             , "REASON"
-                             , "DETAILS"
-                             , "DOCUMENTATION_URL"
-                          FROM "PACKAGE_HEALTH_SCORECARD_CHECK"
-                         WHERE "PURL" = :purl
-                         ORDER BY "CHECK_NAME"
-                        """)
-                .bind("purl", canonicalPurl)
-                .mapTo(PackageHealthScorecardCheck.class)
-                .list();
-
-        return withScorecardChecks(metadata, checks);
+                .bindArray("purls", String.class, packagePurls)
+                .map(new PackageHealthMetadataRowMapper(checksByPurl))
+                .collect(Collectors.toMap(metadata -> metadata.purl().canonicalize(), Function.identity()));
     }
 
     public void upsert(final PackageHealthMetadata metadata) {
-        jdbiHandle.useTransaction(handle -> {
-            final String canonicalPurl = PurlUtil.purlPackageOnly(metadata.purl());
+        upsertAll(List.of(metadata));
+    }
 
-            upsertMetadata(handle, canonicalPurl, metadata);
-            replaceScorecardChecks(handle, canonicalPurl, metadata.scorecardChecks());
+    /**
+     * Inserts or updates health metadata, and replaces its scorecard checks.
+     */
+    public void upsertAll(final Collection<PackageHealthMetadata> metadataList) {
+        if (metadataList.isEmpty()) {
+            return;
+        }
+
+        // Write in a stable order, so that concurrent writers lock rows in the same order.
+        final List<PackageHealthMetadata> sortedMetadata = metadataList.stream()
+                .sorted(Comparator.comparing(metadata -> metadata.purl().canonicalize()))
+                .toList();
+
+        jdbiHandle.useTransaction(handle -> {
+            upsertMetadata(handle, sortedMetadata);
+            replaceScorecardChecks(handle, sortedMetadata);
         });
     }
 
-    private static void upsertMetadata(
-            final Handle handle, final String canonicalPurl, final PackageHealthMetadata metadata) {
-
-        handle.createUpdate("""
+    private static void upsertMetadata(final Handle handle, final List<PackageHealthMetadata> metadataList) {
+        final PreparedBatch batch = handle.prepareBatch("""
                         INSERT INTO "PACKAGE_HEALTH_METADATA" (
                           "PURL"
                         , "STARS"
@@ -192,47 +218,53 @@ public final class PackageHealthMetadataDao {
                           , "AVG_ISSUE_AGE_DAYS" = EXCLUDED."AVG_ISSUE_AGE_DAYS"
                           , "LAST_FETCH" = EXCLUDED."LAST_FETCH"
                           , "STATUS" = EXCLUDED."STATUS"
-                        """)
-                .bind("purl", canonicalPurl)
-                .bind("stars", metadata.stars())
-                .bind("forks", metadata.forks())
-                .bind("contributors", metadata.contributors())
-                .bind("commitFrequencyWeekly", metadata.commitFrequencyWeekly())
-                .bind("openIssues", metadata.openIssues())
-                .bind("openPullRequests", metadata.openPullRequests())
-                .bind("lastCommit", metadata.lastCommit())
-                .bind("busFactor", metadata.busFactor())
-                .bind("hasReadme", metadata.hasReadme())
-                .bind("hasCodeOfConduct", metadata.hasCodeOfConduct())
-                .bind("hasSecurityPolicy", metadata.hasSecurityPolicy())
-                .bind("dependents", metadata.dependents())
-                .bind("files", metadata.files())
-                .bind("repositoryArchived", metadata.repositoryArchived())
-                .bind("scorecardScore", metadata.scorecardScore())
-                .bind("scorecardReferenceVersion", metadata.scorecardReferenceVersion())
-                .bind("scorecardTimestamp", metadata.scorecardTimestamp())
-                .bind("projectMetadataObservedAt", metadata.projectMetadataObservedAt())
-                .bind("depsDevUrl", metadata.depsDevUrl())
-                .bind("githubUrl", metadata.githubUrl())
-                .bind("averageIssueAgeDays", metadata.averageIssueAgeDays())
-                .bind("lastFetch", metadata.lastFetch())
-                .bind("status", metadata.status().name())
-                .execute();
-    }
+                        """);
 
-    private static void replaceScorecardChecks(
-            final Handle handle, final String canonicalPurl, final List<PackageHealthScorecardCheck> checks) {
-
-        handle.createUpdate("""
-                        DELETE FROM "PACKAGE_HEALTH_SCORECARD_CHECK"
-                         WHERE "PURL" = :purl
-                        """).bind("purl", canonicalPurl).execute();
-
-        if (checks.isEmpty()) {
-            return;
+        for (final PackageHealthMetadata metadata : metadataList) {
+            batch.bind("purl", PurlUtil.purlPackageOnly(metadata.purl()))
+                    .bind("stars", metadata.stars())
+                    .bind("forks", metadata.forks())
+                    .bind("contributors", metadata.contributors())
+                    .bind("commitFrequencyWeekly", metadata.commitFrequencyWeekly())
+                    .bind("openIssues", metadata.openIssues())
+                    .bind("openPullRequests", metadata.openPullRequests())
+                    .bind("lastCommit", metadata.lastCommit())
+                    .bind("busFactor", metadata.busFactor())
+                    .bind("hasReadme", metadata.hasReadme())
+                    .bind("hasCodeOfConduct", metadata.hasCodeOfConduct())
+                    .bind("hasSecurityPolicy", metadata.hasSecurityPolicy())
+                    .bind("dependents", metadata.dependents())
+                    .bind("files", metadata.files())
+                    .bind("repositoryArchived", metadata.repositoryArchived())
+                    .bind("scorecardScore", metadata.scorecardScore())
+                    .bind("scorecardReferenceVersion", metadata.scorecardReferenceVersion())
+                    .bind("scorecardTimestamp", metadata.scorecardTimestamp())
+                    .bind("projectMetadataObservedAt", metadata.projectMetadataObservedAt())
+                    .bind("depsDevUrl", metadata.depsDevUrl())
+                    .bind("githubUrl", metadata.githubUrl())
+                    .bind("averageIssueAgeDays", metadata.averageIssueAgeDays())
+                    .bind("lastFetch", metadata.lastFetch())
+                    .bind("status", metadata.status().name())
+                    .add();
         }
 
-        final var batch = handle.prepareBatch("""
+        batch.execute();
+    }
+
+    private static void replaceScorecardChecks(final Handle handle, final List<PackageHealthMetadata> metadataList) {
+        handle.createUpdate("""
+                        DELETE FROM "PACKAGE_HEALTH_SCORECARD_CHECK"
+                         WHERE "PURL" = ANY(:purls)
+                        """)
+                .bindArray(
+                        "purls",
+                        String.class,
+                        metadataList.stream()
+                                .map(metadata -> PurlUtil.purlPackageOnly(metadata.purl()))
+                                .toList())
+                .execute();
+
+        final PreparedBatch batch = handle.prepareBatch("""
                 INSERT INTO "PACKAGE_HEALTH_SCORECARD_CHECK" (
                   "PURL"
                 , "CHECK_NAME"
@@ -253,48 +285,22 @@ public final class PackageHealthMetadataDao {
                 )
                 """);
 
-        for (final PackageHealthScorecardCheck check : checks) {
-            batch.bind("purl", canonicalPurl)
-                    .bind("checkName", check.name())
-                    .bind("description", check.description())
-                    .bind("score", check.score())
-                    .bind("reason", check.reason())
-                    .bindArray("details", String.class, check.details())
-                    .bind("documentationUrl", check.documentationUrl())
-                    .add();
+        for (final PackageHealthMetadata metadata : metadataList) {
+            final String packagePurl = PurlUtil.purlPackageOnly(metadata.purl());
+            for (final PackageHealthScorecardCheck check : metadata.scorecardChecks()) {
+                batch.bind("purl", packagePurl)
+                        .bind("checkName", check.name())
+                        .bind("description", check.description())
+                        .bind("score", check.score())
+                        .bind("reason", check.reason())
+                        .bindArray("details", String.class, check.details())
+                        .bind("documentationUrl", check.documentationUrl())
+                        .add();
+            }
         }
 
-        batch.execute();
-    }
-
-    private static PackageHealthMetadata withScorecardChecks(
-            final PackageHealthMetadata metadata, final List<PackageHealthScorecardCheck> checks) {
-
-        return new PackageHealthMetadata(
-                metadata.purl(),
-                metadata.stars(),
-                metadata.forks(),
-                metadata.contributors(),
-                metadata.commitFrequencyWeekly(),
-                metadata.openIssues(),
-                metadata.openPullRequests(),
-                metadata.lastCommit(),
-                metadata.busFactor(),
-                metadata.hasReadme(),
-                metadata.hasCodeOfConduct(),
-                metadata.hasSecurityPolicy(),
-                metadata.dependents(),
-                metadata.files(),
-                metadata.repositoryArchived(),
-                metadata.scorecardScore(),
-                metadata.scorecardReferenceVersion(),
-                metadata.scorecardTimestamp(),
-                metadata.projectMetadataObservedAt(),
-                metadata.depsDevUrl(),
-                metadata.githubUrl(),
-                metadata.averageIssueAgeDays(),
-                metadata.lastFetch(),
-                metadata.status(),
-                checks);
+        if (batch.size() > 0) {
+            batch.execute();
+        }
     }
 }
