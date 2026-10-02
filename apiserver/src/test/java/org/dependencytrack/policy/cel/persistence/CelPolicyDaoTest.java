@@ -566,6 +566,22 @@ public class CelPolicyDaoTest extends PersistenceCapableTest {
         assertThat(findProjects("pkg:npm/react")).containsExactly(untagged.getUuid());
     }
 
+    @Test
+    public void testFindProjectUuidsForComponentWithQualifiersButNoVersion() {
+        createHealthPolicy(null, false, null, false);
+        final var project = new Project();
+        project.setName("acme-app");
+        qm.persist(project);
+
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("react");
+        component.setPurl("pkg:npm/react?repository_url=https://registry.example.com");
+        qm.persist(component);
+
+        assertThat(findProjects("pkg:npm/react")).containsExactly(project.getUuid());
+    }
+
     private List<UUID> findProjects(final String packagePurl) {
         return withJdbiHandle(
                 handle -> new CelPolicyDao(handle).findProjectUuidsForPackageHealthPolicies(List.of(packagePurl)));

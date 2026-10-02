@@ -282,7 +282,7 @@ public final class CelPolicyDao {
                       FROM "PROJECT" AS proj
                      INNER JOIN "COMPONENT" AS c
                         ON c."PROJECT_ID" = proj."ID"
-                     WHERE split_part(COALESCE(c."PURLCOORDINATES", c."PURL"), '@', 1) = ANY(:packagePurls)
+                     WHERE regexp_replace(c."PURL", '[@?#].*$', '') = ANY(:packagePurls)
                        AND EXISTS (
                          SELECT 1
                            FROM "POLICYCONDITION" AS pc
