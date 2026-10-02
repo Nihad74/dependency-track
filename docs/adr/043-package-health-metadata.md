@@ -1,6 +1,6 @@
-| Status   | Date       | Author(s)     |
-|:---------|:-----------|:--------------|
-| Accepted | 2026-09-29 | Nihad Uddin   |
+| Status   | Date       | Author(s)                              |
+|:---------|:-----------|:---------------------------------------|
+| Accepted | 2026-09-29 | [@Nihad74](https://github.com/Nihad74) |
 
 ## Context
 
