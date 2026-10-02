@@ -10,7 +10,6 @@ properties:
   status:
     type: string
     enum:
-      - IN_PROGRESS
       - PROCESSED
       - NOT_AVAILABLE
   last_fetch:
