@@ -47,6 +47,7 @@ import org.dependencytrack.metrics.VulnerabilityMetricsUpdateTask;
 import org.dependencytrack.notification.ProcessScheduledNotificationsWorkflow;
 import org.dependencytrack.notification.ScheduledNotificationDao;
 import org.dependencytrack.persistence.jdbi.ConfigPropertyDao;
+import org.dependencytrack.pkghealth.PackageHealthSettings;
 import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataWorkflow;
 import org.dependencytrack.pkgmetadata.ResolvePackageMetadataWorkflow;
 import org.dependencytrack.plugin.runtime.PluginManager;
@@ -79,7 +80,6 @@ import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static java.util.Objects.requireNonNull;
-import static org.dependencytrack.model.ConfigPropertyConstants.PACKAGE_HEALTH_RESOLUTION_ENABLED;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.dependencytrack.util.TaskUtil.getCronScheduleFromConfig;
 
@@ -185,12 +185,6 @@ public final class TaskSchedulerInitializer implements ServletContextListener {
         }
     }
 
-    static boolean isPackageHealthResolutionEnabled() {
-        return withJdbiHandle(handle -> handle.attach(ConfigPropertyDao.class)
-                .getOptionalValue(PACKAGE_HEALTH_RESOLUTION_ENABLED, Boolean.class)
-                .orElse(true));
-    }
-
     static List<RecurringTask<Void>> recurringTasks(
             Config config, DexEngine dexEngine, PluginManager pluginManager, SecretManager secretManager) {
         final var kevDataSourceMirrorService = new KevDataSourceMirrorService(pluginManager, dexEngine);
@@ -245,7 +239,7 @@ public final class TaskSchedulerInitializer implements ServletContextListener {
                         "Package Health Metadata Resolution",
                         getCronScheduleFromConfig(config, ConfigKeys.TASK_PACKAGE_HEALTH_METADATA_RESOLUTION_CRON),
                         () -> {
-                            if (!isPackageHealthResolutionEnabled()) {
+                            if (!withJdbiHandle(PackageHealthSettings::isEnabled)) {
                                 LOGGER.info("Package health metadata resolution is disabled");
                                 return;
                             }

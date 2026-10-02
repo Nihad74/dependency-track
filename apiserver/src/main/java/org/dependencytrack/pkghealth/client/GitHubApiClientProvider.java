@@ -18,8 +18,9 @@
  */
 package org.dependencytrack.pkghealth.client;
 
-import org.dependencytrack.model.Repository;
 import org.dependencytrack.model.RepositoryType;
+import org.dependencytrack.persistence.jdbi.RepositoryDao;
+import org.dependencytrack.persistence.jdbi.RepositoryDao.EnabledRepository;
 import org.dependencytrack.secret.management.SecretManager;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -89,25 +90,19 @@ public final class GitHubApiClientProvider {
     }
 
     private @Nullable String resolveAccessToken() {
-        final Optional<Repository> repository = withJdbiHandle(handle -> handle.createQuery("""
-                                SELECT *
-                                  FROM "REPOSITORY"
-                                 WHERE "TYPE" = :type
-                                   AND "ENABLED"
-                                   AND "AUTHENTICATIONREQUIRED"
-                                 ORDER BY "RESOLUTION_ORDER"
-                                 LIMIT 1
-                                """)
-                .bind("type", RepositoryType.GITHUB.name())
-                .mapToBean(Repository.class)
-                .findOne());
+        final Optional<EnabledRepository> repository =
+                withJdbiHandle(handle ->
+                                handle.attach(RepositoryDao.class).getEnabledRepositories(RepositoryType.GITHUB))
+                        .stream()
+                        .filter(EnabledRepository::authenticationRequired)
+                        .findFirst();
 
         if (repository.isEmpty()) {
             LOGGER.debug("No authenticated GitHub repository is configured");
             return null;
         }
 
-        final String secretReference = repository.get().getPassword();
+        final String secretReference = repository.get().password();
 
         if (secretReference == null || secretReference.isBlank()) {
             LOGGER.warn("GitHub authentication is enabled, but no token is configured");

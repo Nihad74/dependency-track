@@ -66,6 +66,12 @@ public final class FetchPackageHealthMetadataCandidatesActivity
     @Override
     public FetchPackageHealthMetadataCandidatesRes execute(
             final ActivityContext ctx, final @Nullable FetchPackageHealthMetadataCandidatesArg arg) {
+        // Checked for every batch, so that turning the setting off also stops a run in progress.
+        if (!withJdbiHandle(PackageHealthSettings::isEnabled)) {
+            LOGGER.info("Package health metadata resolution is disabled");
+            return FetchPackageHealthMetadataCandidatesRes.getDefaultInstance();
+        }
+
         final Cursor cursor;
         try {
             cursor = Cursor.decode(arg != null ? arg.getCursor() : null);

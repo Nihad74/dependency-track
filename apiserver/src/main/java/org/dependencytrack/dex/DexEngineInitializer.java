@@ -58,7 +58,7 @@ import org.dependencytrack.pkghealth.FetchPackageHealthMetadataCandidatesActivit
 import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataActivity;
 import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataWorkflow;
 import org.dependencytrack.pkghealth.ScheduleHealthPolicyEvaluationsActivity;
-import org.dependencytrack.pkghealth.analyzer.DepsDevGitHubPackageHealthAnalyzer;
+import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
 import org.dependencytrack.pkghealth.client.DepsDevApiClient;
 import org.dependencytrack.pkghealth.client.GitHubApiClientProvider;
 import org.dependencytrack.pkgmetadata.FetchPackageMetadataResolutionCandidatesActivity;
@@ -190,8 +190,8 @@ public final class DexEngineInitializer implements ServletContextListener {
                         .getOptionalValue(GENERAL_BASE_URL)
                         .orElse(null))));
 
-        final var packageHealthAnalyzer = new DepsDevGitHubPackageHealthAnalyzer(
-                new DepsDevApiClient(), new GitHubApiClientProvider(secretManager));
+        final var packageHealthAnalyzer =
+                new PackageHealthAnalyzer(new DepsDevApiClient(), new GitHubApiClientProvider(secretManager));
 
         final var engineFactory =
                 ServiceLoader.load(DexEngineFactory.class).findFirst().orElseThrow();

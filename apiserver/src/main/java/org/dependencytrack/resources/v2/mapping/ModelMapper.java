@@ -152,10 +152,6 @@ public class ModelMapper {
                         metadata.scorecardTimestamp() != null
                                 ? metadata.scorecardTimestamp().toEpochMilli()
                                 : null)
-                .projectMetadataObservedAt(
-                        metadata.projectMetadataObservedAt() != null
-                                ? metadata.projectMetadataObservedAt().toEpochMilli()
-                                : null)
                 .depsDevUrl(metadata.depsDevUrl() != null ? URI.create(metadata.depsDevUrl()) : null)
                 .githubUrl(metadata.githubUrl() != null ? URI.create(metadata.githubUrl()) : null)
                 .build();

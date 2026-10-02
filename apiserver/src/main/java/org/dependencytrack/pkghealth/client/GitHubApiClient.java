@@ -118,7 +118,6 @@ public final class GitHubApiClient extends ApiClient {
             });
         } catch (RepositoryFetchException e) {
             if (e.getCause() instanceof InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
                 throw interrupted;
             }
             if (e.getCause() instanceof IOException io) {

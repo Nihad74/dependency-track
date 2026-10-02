@@ -46,6 +46,7 @@ import org.dependencytrack.pkgmetadata.PackageArtifactMetadataDao;
 import org.dependencytrack.pkgmetadata.PackageMetadata;
 import org.dependencytrack.pkgmetadata.PackageMetadataDao;
 import org.dependencytrack.proto.policy.v1.HealthMeta;
+import org.dependencytrack.util.PurlUtil;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -58,6 +59,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import static java.util.Objects.requireNonNull;
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
@@ -567,7 +569,7 @@ public class CelPolicyDaoTest extends PersistenceCapableTest {
     }
 
     @Test
-    public void testFindProjectUuidsForComponentWithQualifiersButNoVersion() {
+    public void testFindProjectUuidsForComponentWithQualifiersButNoVersion() throws Exception {
         createHealthPolicy(null, false, null, false);
         final var project = new Project();
         project.setName("acme-app");
@@ -576,8 +578,9 @@ public class CelPolicyDaoTest extends PersistenceCapableTest {
         final var component = new Component();
         component.setProject(project);
         component.setName("react");
-        component.setPurl("pkg:npm/react?repository_url=https://registry.example.com");
+        component.setPurl(new PackageURL("pkg:npm/react?repository_url=https://registry.example.com"));
         qm.persist(component);
+        persistArtifactMetadata(component.getPurl().canonicalize());
 
         assertThat(findProjects("pkg:npm/react")).containsExactly(project.getUuid());
     }
@@ -599,6 +602,7 @@ public class CelPolicyDaoTest extends PersistenceCapableTest {
         component.setPurl(purl);
         component.setPurlCoordinates(purl);
         qm.persist(component);
+        persistArtifactMetadata(purl);
         return project;
     }
 
@@ -613,6 +617,7 @@ public class CelPolicyDaoTest extends PersistenceCapableTest {
         component.setPurl(purl);
         component.setPurlCoordinates(purl);
         qm.persist(component);
+        persistArtifactMetadata(purl);
         return project;
     }
 
@@ -637,5 +642,20 @@ public class CelPolicyDaoTest extends PersistenceCapableTest {
         if (tags != null) {
             qm.bind(policy, tags);
         }
+    }
+
+    /**
+     * Package health is matched to components through their package artifact metadata.
+     */
+    private static void persistArtifactMetadata(final String purl) {
+        final PackageURL artifactPurl = requireNonNull(PurlUtil.silentPurl(purl));
+        final PackageURL packagePurl = requireNonNull(PurlUtil.silentPurlPackageOnly(artifactPurl));
+        useJdbiHandle(handle -> {
+            new PackageMetadataDao(handle)
+                    .upsertAll(List.of(new PackageMetadata(packagePurl, null, null, Instant.now(), null, null)));
+            new PackageArtifactMetadataDao(handle)
+                    .upsertAll(List.of(new PackageArtifactMetadata(
+                            artifactPurl, packagePurl, null, null, null, null, null, null, "test", Instant.now())));
+        });
     }
 }

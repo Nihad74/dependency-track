@@ -23,6 +23,7 @@ import com.github.kagkarlsson.scheduler.task.TaskInstance;
 import com.github.kagkarlsson.scheduler.task.helper.RecurringTask;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.dex.engine.api.DexEngine;
+import org.dependencytrack.pkghealth.PackageHealthSettings;
 import org.dependencytrack.plugin.runtime.PluginManager;
 import org.dependencytrack.secret.management.SecretManager;
 import org.eclipse.microprofile.config.ConfigProvider;
@@ -32,6 +33,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.dependencytrack.model.ConfigPropertyConstants.PACKAGE_HEALTH_RESOLUTION_ENABLED;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -53,7 +55,7 @@ class PackageHealthResolutionScheduleTest extends PersistenceCapableTest {
         final DexEngine dexEngine = executePackageHealthTask();
 
         verify(dexEngine).createRun(any());
-        assertThat(TaskSchedulerInitializer.isPackageHealthResolutionEnabled()).isTrue();
+        assertThat(withJdbiHandle(PackageHealthSettings::isEnabled)).isTrue();
     }
 
     @Test
@@ -63,7 +65,7 @@ class PackageHealthResolutionScheduleTest extends PersistenceCapableTest {
         final DexEngine dexEngine = executePackageHealthTask();
 
         verify(dexEngine, never()).createRun(any());
-        assertThat(TaskSchedulerInitializer.isPackageHealthResolutionEnabled()).isFalse();
+        assertThat(withJdbiHandle(PackageHealthSettings::isEnabled)).isFalse();
     }
 
     private void createEnabledProperty(final String value) {

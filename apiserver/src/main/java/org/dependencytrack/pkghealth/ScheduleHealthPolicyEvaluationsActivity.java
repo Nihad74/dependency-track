@@ -18,6 +18,7 @@
  */
 package org.dependencytrack.pkghealth;
 
+import org.dependencytrack.analysis.AnalyzeProjectWorkflow;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
@@ -70,7 +71,7 @@ public final class ScheduleHealthPolicyEvaluationsActivity
         final var requests = new ArrayList<CreateWorkflowRunRequest<?>>(projectUuids.size());
         for (final UUID projectUuid : projectUuids) {
             requests.add(new CreateWorkflowRunRequest<>(EvalProjectPoliciesWorkflow.class)
-                    .withConcurrencyKey(EvalProjectPoliciesWorkflow.concurrencyKey(projectUuid))
+                    .withConcurrencyKey(AnalyzeProjectWorkflow.concurrencyKeyForProject(projectUuid))
                     .withArgument(EvalProjectPoliciesArg.newBuilder()
                             .setProjectUuid(projectUuid.toString())
                             .build()));

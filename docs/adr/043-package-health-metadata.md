@@ -1,6 +1,6 @@
 | Status   | Date       | Author(s)                              |
 |:---------|:-----------|:---------------------------------------|
-| Accepted | 2026-09-29 | [@Nihad74](https://github.com/Nihad74) |
+| Proposed | 2026-09-29 | [@Nihad74](https://github.com/Nihad74) |
 
 ## Context
 
@@ -69,7 +69,9 @@ package data is kept: the existing package metadata maintenance decides it.
 
 The new tables are only read and written through JDBI with plain SQL, as required for new
 persistence code. They do not have JDO model classes. The component list queries of the REST API v2
-join the health table to read the scorecard score.
+join the health table to read the scorecard score. Like package metadata, they reach it through the
+package artifact metadata of the component, so a component gets its score once its artifact
+metadata has been resolved.
 
 Each health record has a status. `PROCESSED` means the external services returned data.
 `NOT_AVAILABLE` means there was nothing to fetch, for example because the package is unknown to
@@ -97,9 +99,12 @@ packages that have package metadata, a type that deps.dev supports, and either n
 a last fetch that is at least 24 hours old. The hourly trigger keeps the real refresh interval close
 to 24 hours. A daily trigger would refresh most packages only every 48 hours.
 
-For each batch, all external calls finish before the batch is written in one database transaction.
-Rate limit responses pause the batch until the limit resets. Cancellation surfaces as an interrupt,
-not as a failure that is retried.
+For each batch, the external calls finish before the batch is written in one database transaction.
+When a service answers with a rate limit, the packages fetched so far are written, and the workflow
+waits until the limit resets before it fetches the rest of the batch. The wait happens in the
+workflow, so it does not use up the retries that are meant for real failures. GitHub's primary and
+secondary rate limits are both recognized, and a 429 response without a reset time waits one minute.
+Cancellation surfaces as an interrupt, not as a failure that is retried.
 
 ### External services and data that leaves the server
 
@@ -126,9 +131,12 @@ uses to keep internal packages away from public repositories. An internal packag
 
 The feature is enabled by default, so that health policies work without extra setup. Administrators
 can turn it off with the `package-health.enabled` setting. When it is off, the scheduled workflow
-does not start and no request leaves the server. Deployments without internet access should turn it
-off. Otherwise every run fails on its first request and is retried. With the feature off, health
-fields stay absent, and health conditions do not match.
+does not start and no request leaves the server. A run that is already in progress checks the
+setting before each batch and stops. Deployments without internet access should turn it off.
+Otherwise every run tries each due batch, each batch fails and is retried a few times, and the run
+then moves on to the next batch. With the feature off, stored health stays in the database but is
+hidden: the component lists return no scorecard score, the health resource returns 404, and health
+conditions do not match, so violations they reported earlier are cleared.
 
 ### Policies
 

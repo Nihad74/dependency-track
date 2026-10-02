@@ -27,10 +27,6 @@ import org.dependencytrack.proto.internal.workflow.v1.EvalProjectPoliciesArg;
 import org.dependencytrack.proto.internal.workflow.v1.UpdateProjectMetricsArg;
 import org.jspecify.annotations.Nullable;
 
-import java.util.UUID;
-
-import static java.util.Objects.requireNonNull;
-
 /**
  * Evaluates policies for one project and then updates that project's metrics.
  *
@@ -38,11 +34,6 @@ import static java.util.Objects.requireNonNull;
  */
 @WorkflowSpec(name = "eval-project-policies")
 public final class EvalProjectPoliciesWorkflow implements Workflow<EvalProjectPoliciesArg, Void> {
-
-    public static String concurrencyKey(final UUID projectUuid) {
-        requireNonNull(projectUuid, "projectUuid must not be null");
-        return "eval-project-policies:" + projectUuid;
-    }
 
     @Override
     public @Nullable Void execute(

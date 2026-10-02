@@ -36,18 +36,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-class DepsDevGitHubPackageHealthAnalyzerTest {
+class PackageHealthAnalyzerTest {
 
     private DepsDevApiClient depsDevApiClient;
     private GitHubApiClientProvider gitHubApiClientProvider;
-    private DepsDevGitHubPackageHealthAnalyzer analyzer;
+    private PackageHealthAnalyzer analyzer;
 
     @BeforeEach
     void beforeEach() {
         depsDevApiClient = mock(DepsDevApiClient.class);
         gitHubApiClientProvider = mock(GitHubApiClientProvider.class);
 
-        analyzer = new DepsDevGitHubPackageHealthAnalyzer(depsDevApiClient, gitHubApiClientProvider);
+        analyzer = new PackageHealthAnalyzer(depsDevApiClient, gitHubApiClientProvider);
     }
 
     @Test

@@ -18,6 +18,7 @@
  */
 package org.dependencytrack.pkghealth;
 
+import com.google.protobuf.util.Timestamps;
 import org.dependencytrack.dex.api.ActivityCallOptions;
 import org.dependencytrack.dex.api.ContinueAsNewOptions;
 import org.dependencytrack.dex.api.RetryPolicy;
@@ -34,6 +35,8 @@ import org.dependencytrack.proto.internal.workflow.v1.ScheduleHealthPolicyEvalua
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 
 @WorkflowSpec(name = "resolve-package-health-metadata")
 public final class ResolvePackageHealthMetadataWorkflow
@@ -47,6 +50,14 @@ public final class ResolvePackageHealthMetadataWorkflow
             /* randomizationFactor */ 0.3,
             /* maxDelay */ Duration.ofHours(2),
             /* maxAttempts */ 3);
+
+    private static final Duration RATE_LIMIT_RESET_MARGIN = Duration.ofSeconds(2);
+
+    /**
+     * Lower bound for a rate limit wait, so that a reset time in the past, for example
+     * because of clock skew, does not call the external APIs in a tight loop.
+     */
+    private static final Duration MIN_RATE_LIMIT_WAIT = Duration.ofSeconds(10);
 
     @Override
     public @Nullable Void execute(
@@ -68,31 +79,54 @@ public final class ResolvePackageHealthMetadataWorkflow
             return null;
         }
 
-        if (!fetchResult.getPurlsList().isEmpty()) {
-            ctx.logger().debug("Resolving health metadata for {} packages", fetchResult.getPurlsCount());
+        List<String> pendingPurls = fetchResult.getPurlsList();
+        while (!pendingPurls.isEmpty()) {
+            ctx.logger().debug("Resolving health metadata for {} packages", pendingPurls.size());
 
-            ResolvePackageHealthMetadataActivityRes resolveResult = null;
+            final ResolvePackageHealthMetadataActivityRes resolveResult;
             try {
                 resolveResult = ctx.activity(ResolvePackageHealthMetadataActivity.class)
                         .call(new ActivityCallOptions<ResolvePackageHealthMetadataActivityArg>()
                                 .withRetryPolicy(RESOLVE_RETRY_POLICY)
                                 .withArgument(ResolvePackageHealthMetadataActivityArg.newBuilder()
-                                        .addAllPurls(fetchResult.getPurlsList())
+                                        .addAllPurls(pendingPurls)
                                         .build()))
                         .await();
-
-                ctx.logger().debug("Package health metadata resolution completed");
             } catch (ActivityFailureException e) {
                 ctx.logger().warn("Package health metadata resolution failed", e);
+                break;
             }
 
-            if (resolveResult != null && resolveResult.getChangedPurlsCount() > 0) {
+            if (resolveResult == null) {
+                break;
+            }
+
+            if (resolveResult.getChangedPurlsCount() > 0) {
                 ctx.activity(ScheduleHealthPolicyEvaluationsActivity.class)
                         .call(ScheduleHealthPolicyEvaluationsArg.newBuilder()
                                 .addAllPurls(resolveResult.getChangedPurlsList())
                                 .build())
                         .await();
             }
+
+            if (resolveResult.getUnresolvedPurlsCount() == 0) {
+                break;
+            }
+
+            // Wait in the workflow, not through activity retries, so that waiting
+            // for a rate limit does not use up the attempts meant for real failures.
+            final Instant resumeAt = Instant.ofEpochMilli(Timestamps.toMillis(resolveResult.getRateLimitResetAt()))
+                    .plus(RATE_LIMIT_RESET_MARGIN);
+            final Duration wait = Duration.between(ctx.currentTime(), resumeAt);
+            ctx.logger()
+                    .info(
+                            "External API rate limit reached; Resuming {} packages at {}",
+                            resolveResult.getUnresolvedPurlsCount(),
+                            resumeAt);
+            ctx.createTimer("rate-limit-reset", wait.compareTo(MIN_RATE_LIMIT_WAIT) > 0 ? wait : MIN_RATE_LIMIT_WAIT)
+                    .await();
+
+            pendingPurls = resolveResult.getUnresolvedPurlsList();
         }
 
         if (fetchResult.getHasMore()) {

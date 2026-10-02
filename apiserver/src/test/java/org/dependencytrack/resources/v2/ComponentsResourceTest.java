@@ -31,6 +31,7 @@ import org.dependencytrack.model.Project;
 import org.dependencytrack.model.Scope;
 import org.dependencytrack.persistence.jdbi.MetricsTestDao;
 import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadata;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadataDao;
 import org.dependencytrack.pkgmetadata.PackageMetadata;
@@ -50,6 +51,7 @@ import java.util.List;
 
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.dependencytrack.model.ConfigPropertyConstants.PACKAGE_HEALTH_RESOLUTION_ENABLED;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 
 public class ComponentsResourceTest extends ResourceTest {
@@ -1020,14 +1022,13 @@ public class ComponentsResourceTest extends ResourceTest {
                 7.5f,
                 null,
                 null,
-                Instant.ofEpochSecond(1658223503),
                 "https://deps.dev/maven/test%3Acomp",
                 "https://github.com/test/comp",
                 null,
                 fetchedAt,
                 PackageHealthMetadataStatus.PROCESSED,
                 List.of(check));
-        useJdbiHandle(handle -> new PackageHealthMetadataDao(handle).upsert(metadata));
+        useJdbiHandle(handle -> new PackageHealthMetadataDao(handle).upsertAll(List.of(metadata)));
 
         final Response response = jersey.target("/components/" + component.getUuid() + "/health")
                 .request()
@@ -1044,7 +1045,6 @@ public class ComponentsResourceTest extends ResourceTest {
           "stars": 42,
           "has_readme": true,
           "scorecard_score": 7.5,
-          "project_metadata_observed_at": 1658223503000,
           "deps_dev_url": "https://deps.dev/maven/test%3Acomp",
           "github_url": "https://github.com/test/comp",
           "scorecard_checks": [{
@@ -1056,6 +1056,29 @@ public class ComponentsResourceTest extends ResourceTest {
           }]
         }
         """);
+    }
+
+    @Test
+    public void getComponentHealthShouldReturn404WhenPackageHealthIsDisabled() throws Exception {
+        initializeWithPermissions(Permissions.VIEW_PORTFOLIO);
+        final Component component = createComponentWithPackageMetadataForHealthTest();
+        final var packagePurl = new PackageURL("maven", "test", "comp", null, null, null);
+        useJdbiHandle(handle -> new PackageHealthMetadataDao(handle)
+                .upsertAll(List.of(new AnalyzedPackageHealth(packagePurl)
+                        .toMetadata(PackageHealthMetadataStatus.PROCESSED, Instant.now()))));
+        qm.createConfigProperty(
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getGroupName(),
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getPropertyName(),
+                "false",
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getPropertyType(),
+                PACKAGE_HEALTH_RESOLUTION_ENABLED.getDescription());
+
+        final Response response = jersey.target("/components/" + component.getUuid() + "/health")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get();
+
+        assertThat(response.getStatus()).isEqualTo(404);
     }
 
     @Test
@@ -1108,10 +1131,9 @@ public class ComponentsResourceTest extends ResourceTest {
                 null,
                 null,
                 null,
-                null,
                 PackageHealthMetadataStatus.NOT_AVAILABLE,
                 List.of());
-        useJdbiHandle(handle -> new PackageHealthMetadataDao(handle).upsert(metadata));
+        useJdbiHandle(handle -> new PackageHealthMetadataDao(handle).upsertAll(List.of(metadata)));
 
         final Response response = jersey.target("/components/" + component.getUuid() + "/health")
                 .request()
