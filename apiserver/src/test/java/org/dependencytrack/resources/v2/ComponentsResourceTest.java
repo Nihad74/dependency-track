@@ -1080,7 +1080,7 @@ public class ComponentsResourceTest extends ResourceTest {
     }
 
     @Test
-    public void getComponentHealthInProgressTest() throws Exception {
+    public void getComponentHealthNotAvailableTest() throws Exception {
         initializeWithPermissions(Permissions.VIEW_PORTFOLIO);
         final Component component = createComponentWithPackageMetadataForHealthTest();
         final var packagePurl = new PackageURL("maven", "test", "comp", null, null, null);
@@ -1109,7 +1109,7 @@ public class ComponentsResourceTest extends ResourceTest {
                 null,
                 null,
                 null,
-                PackageHealthMetadataStatus.IN_PROGRESS,
+                PackageHealthMetadataStatus.NOT_AVAILABLE,
                 List.of());
         useJdbiHandle(handle -> new PackageHealthMetadataDao(handle).upsert(metadata));
 
@@ -1122,7 +1122,7 @@ public class ComponentsResourceTest extends ResourceTest {
         assertThatJson(getPlainTextBody(response)).isEqualTo(/* language=JSON */ """
             {
               "purl": "pkg:maven/test/comp",
-              "status": "IN_PROGRESS",
+              "status": "NOT_AVAILABLE",
               "scorecard_checks": []
             }
             """);

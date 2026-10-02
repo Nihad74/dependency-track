@@ -28,7 +28,7 @@ CREATE TABLE "PACKAGE_HEALTH_METADATA" (
     "AVG_ISSUE_AGE_DAYS" real,
 
     "LAST_FETCH" timestamp with time zone,
-    "STATUS" text NOT NULL DEFAULT 'IN_PROGRESS',
+    "STATUS" text NOT NULL,
 
     CONSTRAINT "PACKAGE_HEALTH_METADATA_PK"
        PRIMARY KEY ("PURL"),
@@ -40,7 +40,6 @@ CREATE TABLE "PACKAGE_HEALTH_METADATA" (
 
     CONSTRAINT "PACKAGE_HEALTH_METADATA_STATUS_CHECK"
        CHECK ("STATUS" IN (
-                           'IN_PROGRESS',
                            'PROCESSED',
                            'NOT_AVAILABLE'
            )),

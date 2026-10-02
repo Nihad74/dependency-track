@@ -24,7 +24,6 @@ package org.dependencytrack.model;
  * @since 5.2.0
  */
 public enum PackageHealthMetadataStatus {
-    IN_PROGRESS,
     PROCESSED,
     NOT_AVAILABLE
 }
