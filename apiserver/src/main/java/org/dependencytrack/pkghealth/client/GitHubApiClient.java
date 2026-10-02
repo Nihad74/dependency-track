@@ -27,9 +27,7 @@ import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
-import java.net.URLEncoder;
 import java.net.http.HttpRequest;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -103,7 +101,7 @@ public final class GitHubApiClient extends ApiClient {
     public static @Nullable String repositoryPageUrl(final @Nullable String project) {
         return parseProject(project)
                 .map(coordinates -> "https://github.com/%s/%s"
-                        .formatted(encodePathSegment(coordinates.owner()), encodePathSegment(coordinates.repository())))
+                        .formatted(urlEncode(coordinates.owner()), urlEncode(coordinates.repository())))
                 .orElse(null);
     }
 
@@ -339,10 +337,6 @@ public final class GitHubApiClient extends ApiClient {
         }
 
         return null;
-    }
-
-    private static String encodePathSegment(final String value) {
-        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
     }
 
     private static Optional<RepositoryCoordinates> parseProject(final @Nullable String project) {
