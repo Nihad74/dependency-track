@@ -173,7 +173,9 @@ when a string in the condition contains that text. It never misses a condition t
 
 The external services set the pace. A package costs three to six requests to deps.dev. A GitHub
 repository costs at least eight requests, more for repositories with many open issues or
-contributors, against a budget of 5,000 requests per hour for a token. The first full pass over a
+contributors. All GitHub requests count against the hourly [GitHub rate limit] of the configured
+token. For a personal access token, that limit is 5,000 requests per hour. Tokens of GitHub Apps
+that a GitHub Enterprise Cloud organization owns get a higher limit. The first full pass over a
 large portfolio can therefore take hours. Each `apiserver` instance keeps fetched GitHub
 repositories in memory for one hour, so packages that share a repository cost one set of GitHub
 requests in that hour. Separate instances do not share that memory.
@@ -185,4 +187,5 @@ Package names that are not internal now leave the deployment by default. Adminis
 want that must turn the feature off.
 
 [deps.dev]: https://deps.dev
+[GitHub rate limit]: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
 [OpenSSF Scorecard]: https://securityscorecards.dev
