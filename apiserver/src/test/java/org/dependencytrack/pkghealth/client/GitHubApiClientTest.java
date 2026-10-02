@@ -72,6 +72,15 @@ class GitHubApiClientTest {
     }
 
     @Test
+    void shouldBuildRepositoryPageUrl() {
+        assertThat(GitHubApiClient.repositoryPageUrl("github.com/acme/example"))
+                .isEqualTo("https://github.com/acme/example");
+        assertThat(GitHubApiClient.repositoryPageUrl("github.com/acme/example.git"))
+                .isEqualTo("https://github.com/acme/example");
+        assertThat(GitHubApiClient.repositoryPageUrl("gitlab.com/acme/example")).isNull();
+    }
+
+    @Test
     void shouldReturnEmptyForUnsupportedProject() throws Exception {
         final var result = client.fetchRepositoryMetadata(packagePurl, "gitlab.com/acme/example");
 
@@ -111,6 +120,7 @@ class GitHubApiClientTest {
         stubJson("/repos/acme/example", """
             {
               "archived": true,
+              "html_url": "https://github.com/acme/example",
               "created_at": "2026-08-27T12:00:00Z",
               "default_branch": "main"
             }
@@ -189,6 +199,7 @@ class GitHubApiClientTest {
         final var metadata = result.orElseThrow();
 
         assertThat(metadata.getPurl()).isEqualTo(packagePurl);
+        assertThat(metadata.getGithubUrl()).isEqualTo("https://github.com/acme/example");
         assertThat(metadata.getRepositoryArchived()).isTrue();
         assertThat(metadata.getContributors()).isEqualTo(2L);
         assertThat(metadata.getOpenIssues()).isEqualTo(2L);

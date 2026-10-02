@@ -50,6 +50,9 @@ public final class AnalyzedPackageHealth {
     private @Nullable Float scorecardScore;
     private @Nullable String scorecardReferenceVersion;
     private @Nullable Instant scorecardTimestamp;
+    private @Nullable Instant projectMetadataObservedAt;
+    private @Nullable String depsDevUrl;
+    private @Nullable String githubUrl;
     private @Nullable Float averageIssueAgeDays;
 
     private List<PackageHealthScorecardCheck> scorecardChecks = List.of();
@@ -103,6 +106,15 @@ public final class AnalyzedPackageHealth {
         }
         if (other.scorecardTimestamp != null) {
             scorecardTimestamp = other.scorecardTimestamp;
+        }
+        if (other.projectMetadataObservedAt != null) {
+            projectMetadataObservedAt = other.projectMetadataObservedAt;
+        }
+        if (other.depsDevUrl != null) {
+            depsDevUrl = other.depsDevUrl;
+        }
+        if (other.githubUrl != null) {
+            githubUrl = other.githubUrl;
         }
         if (other.averageIssueAgeDays != null) {
             averageIssueAgeDays = other.averageIssueAgeDays;
@@ -182,6 +194,18 @@ public final class AnalyzedPackageHealth {
 
     public @Nullable Instant getScorecardTimestamp() {
         return scorecardTimestamp;
+    }
+
+    public @Nullable Instant getProjectMetadataObservedAt() {
+        return projectMetadataObservedAt;
+    }
+
+    public @Nullable String getDepsDevUrl() {
+        return depsDevUrl;
+    }
+
+    public @Nullable String getGithubUrl() {
+        return githubUrl;
     }
 
     public @Nullable Float getAverageIssueAgeDays() {
@@ -272,7 +296,10 @@ public final class AnalyzedPackageHealth {
                 + repositoryArchived + ", scorecardScore="
                 + scorecardScore + ", scorecardReferenceVersion='"
                 + scorecardReferenceVersion + '\'' + ", scorecardTimestamp="
-                + scorecardTimestamp + ", averageIssueAgeDays="
+                + scorecardTimestamp + ", projectMetadataObservedAt="
+                + projectMetadataObservedAt + ", depsDevUrl='"
+                + depsDevUrl + '\'' + ", githubUrl='"
+                + githubUrl + '\'' + ", averageIssueAgeDays="
                 + averageIssueAgeDays + ", scorecardChecks="
                 + scorecardChecks + '}';
     }
@@ -283,6 +310,18 @@ public final class AnalyzedPackageHealth {
 
     public void setScorecardTimestamp(@Nullable Instant scorecardTimestamp) {
         this.scorecardTimestamp = scorecardTimestamp;
+    }
+
+    public void setProjectMetadataObservedAt(@Nullable Instant projectMetadataObservedAt) {
+        this.projectMetadataObservedAt = projectMetadataObservedAt;
+    }
+
+    public void setDepsDevUrl(@Nullable String depsDevUrl) {
+        this.depsDevUrl = depsDevUrl;
+    }
+
+    public void setGithubUrl(@Nullable String githubUrl) {
+        this.githubUrl = githubUrl;
     }
 
     public void setAverageIssueAgeDays(@Nullable Float averageIssueAgeDays) {

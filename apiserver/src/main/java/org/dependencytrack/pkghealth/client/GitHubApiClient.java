@@ -27,7 +27,9 @@ import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
+import java.net.URLEncoder;
 import java.net.http.HttpRequest;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -98,6 +100,13 @@ public final class GitHubApiClient extends ApiClient {
         return cachedRepositoryData(repositoryUrl(coordinates.get())).map(data -> data.forPackage(packagePurl));
     }
 
+    public static @Nullable String repositoryPageUrl(final @Nullable String project) {
+        return parseProject(project)
+                .map(coordinates -> "https://github.com/%s/%s"
+                        .formatted(encodePathSegment(coordinates.owner()), encodePathSegment(coordinates.repository())))
+                .orElse(null);
+    }
+
     private Optional<RepositoryMetadata> cachedRepositoryData(final String repositoryUrl)
             throws IOException, InterruptedException {
         try {
@@ -139,6 +148,7 @@ public final class GitHubApiClient extends ApiClient {
         final String defaultBranch = textOrNull(repository.get("default_branch"));
 
         return Optional.of(new RepositoryMetadata(
+                textOrNull(repository.get("html_url")),
                 booleanOrNull(repository.get("archived")),
                 issues.openIssues(),
                 issues.openPullRequests(),
@@ -331,6 +341,10 @@ public final class GitHubApiClient extends ApiClient {
         return null;
     }
 
+    private static String encodePathSegment(final String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
     private static Optional<RepositoryCoordinates> parseProject(final @Nullable String project) {
         if (project == null || !project.toLowerCase(Locale.ROOT).startsWith("github.com/")) {
             return Optional.empty();
@@ -389,6 +403,7 @@ public final class GitHubApiClient extends ApiClient {
     }
 
     private record RepositoryMetadata(
+            @Nullable String htmlUrl,
             @Nullable Boolean archived,
             long openIssues,
             long openPullRequests,
@@ -404,6 +419,7 @@ public final class GitHubApiClient extends ApiClient {
 
         private AnalyzedPackageHealth forPackage(final PackageURL packagePurl) {
             final var model = new AnalyzedPackageHealth(packagePurl);
+            model.setGithubUrl(htmlUrl);
             model.setRepositoryArchived(archived);
             model.setOpenIssues(openIssues);
             model.setOpenPullRequests(openPullRequests);

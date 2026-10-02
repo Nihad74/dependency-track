@@ -71,6 +71,9 @@ class PackageHealthMetadataMapperTest {
         source.setScorecardScore(8.7f);
         source.setScorecardReferenceVersion("v5.0.0");
         source.setScorecardTimestamp(scorecardTimestamp);
+        source.setProjectMetadataObservedAt(Instant.ofEpochSecond(1658223503));
+        source.setDepsDevUrl("https://deps.dev/npm/example");
+        source.setGithubUrl("https://github.com/example/example");
         source.setScorecardChecks(List.of(check));
 
         final var result = PackageHealthMetadataMapper.map(source, PackageHealthMetadataStatus.PROCESSED, lastFetch);
@@ -78,6 +81,9 @@ class PackageHealthMetadataMapperTest {
         assertThat(result.scorecardScore()).isEqualTo(8.7f);
         assertThat(result.scorecardReferenceVersion()).isEqualTo("v5.0.0");
         assertThat(result.scorecardTimestamp()).isEqualTo(scorecardTimestamp);
+        assertThat(result.projectMetadataObservedAt()).isEqualTo(Instant.ofEpochSecond(1658223503));
+        assertThat(result.depsDevUrl()).isEqualTo("https://deps.dev/npm/example");
+        assertThat(result.githubUrl()).isEqualTo("https://github.com/example/example");
         assertThat(result.scorecardChecks()).containsExactly(check);
     }
 

@@ -65,6 +65,9 @@ public final class PackageHealthMetadataDao {
                              , "SCORECARD_SCORE"
                              , "SCORECARD_REF_VERSION"
                              , "SCORECARD_TIMESTAMP"
+                             , "PROJECT_METADATA_OBSERVED_AT"
+                             , "DEPS_DEV_URL"
+                             , "GITHUB_URL"
                              , "AVG_ISSUE_AGE_DAYS"
                              , "LAST_FETCH"
                              , "STATUS"
@@ -132,6 +135,9 @@ public final class PackageHealthMetadataDao {
                         , "SCORECARD_SCORE"
                         , "SCORECARD_REF_VERSION"
                         , "SCORECARD_TIMESTAMP"
+                        , "PROJECT_METADATA_OBSERVED_AT"
+                        , "DEPS_DEV_URL"
+                        , "GITHUB_URL"
                         , "AVG_ISSUE_AGE_DAYS"
                         , "LAST_FETCH"
                         , "STATUS"
@@ -155,6 +161,9 @@ public final class PackageHealthMetadataDao {
                         , :scorecardScore
                         , :scorecardReferenceVersion
                         , :scorecardTimestamp
+                        , :projectMetadataObservedAt
+                        , :depsDevUrl
+                        , :githubUrl
                         , :averageIssueAgeDays
                         , :lastFetch
                         , :status
@@ -177,6 +186,9 @@ public final class PackageHealthMetadataDao {
                           , "SCORECARD_SCORE" = EXCLUDED."SCORECARD_SCORE"
                           , "SCORECARD_REF_VERSION" = EXCLUDED."SCORECARD_REF_VERSION"
                           , "SCORECARD_TIMESTAMP" = EXCLUDED."SCORECARD_TIMESTAMP"
+                          , "PROJECT_METADATA_OBSERVED_AT" = EXCLUDED."PROJECT_METADATA_OBSERVED_AT"
+                          , "DEPS_DEV_URL" = EXCLUDED."DEPS_DEV_URL"
+                          , "GITHUB_URL" = EXCLUDED."GITHUB_URL"
                           , "AVG_ISSUE_AGE_DAYS" = EXCLUDED."AVG_ISSUE_AGE_DAYS"
                           , "LAST_FETCH" = EXCLUDED."LAST_FETCH"
                           , "STATUS" = EXCLUDED."STATUS"
@@ -199,6 +211,9 @@ public final class PackageHealthMetadataDao {
                 .bind("scorecardScore", metadata.scorecardScore())
                 .bind("scorecardReferenceVersion", metadata.scorecardReferenceVersion())
                 .bind("scorecardTimestamp", metadata.scorecardTimestamp())
+                .bind("projectMetadataObservedAt", metadata.projectMetadataObservedAt())
+                .bind("depsDevUrl", metadata.depsDevUrl())
+                .bind("githubUrl", metadata.githubUrl())
                 .bind("averageIssueAgeDays", metadata.averageIssueAgeDays())
                 .bind("lastFetch", metadata.lastFetch())
                 .bind("status", metadata.status().name())
@@ -274,6 +289,9 @@ public final class PackageHealthMetadataDao {
                 metadata.scorecardScore(),
                 metadata.scorecardReferenceVersion(),
                 metadata.scorecardTimestamp(),
+                metadata.projectMetadataObservedAt(),
+                metadata.depsDevUrl(),
+                metadata.githubUrl(),
                 metadata.averageIssueAgeDays(),
                 metadata.lastFetch(),
                 metadata.status(),

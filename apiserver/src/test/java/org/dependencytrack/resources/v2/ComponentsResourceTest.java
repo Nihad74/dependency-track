@@ -1020,6 +1020,9 @@ public class ComponentsResourceTest extends ResourceTest {
                 7.5f,
                 null,
                 null,
+                Instant.ofEpochSecond(1658223503),
+                "https://deps.dev/maven/test%3Acomp",
+                "https://github.com/test/comp",
                 null,
                 fetchedAt,
                 PackageHealthMetadataStatus.PROCESSED,
@@ -1041,6 +1044,9 @@ public class ComponentsResourceTest extends ResourceTest {
           "stars": 42,
           "has_readme": true,
           "scorecard_score": 7.5,
+          "project_metadata_observed_at": 1658223503000,
+          "deps_dev_url": "https://deps.dev/maven/test%3Acomp",
+          "github_url": "https://github.com/test/comp",
           "scorecard_checks": [{
             "name": "Maintained",
             "score": 8.0,
@@ -1081,6 +1087,9 @@ public class ComponentsResourceTest extends ResourceTest {
 
         final var metadata = new org.dependencytrack.model.PackageHealthMetadata(
                 packagePurl,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,

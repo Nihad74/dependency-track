@@ -72,6 +72,7 @@ public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHea
             return new AnalysisResult.NotAvailable();
         }
         final String name = toDepsDevPackageName(purl);
+        metadata.setDepsDevUrl(depsDevClient.packagePageUrl(system, name));
 
         /*
          * We fetch package health metadata through a combination of deps.dev and the GitHub API.
@@ -112,6 +113,8 @@ public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHea
                 logger.debug("Source repository for {} is not hosted on GitHub", packagePurl);
                 return new AnalysisResult.Available(metadata);
             }
+
+            metadata.setGithubUrl(GitHubApiClient.repositoryPageUrl(repository));
 
             final Optional<GitHubApiClient> gitHubClient = gitHubClientProvider.get();
 
