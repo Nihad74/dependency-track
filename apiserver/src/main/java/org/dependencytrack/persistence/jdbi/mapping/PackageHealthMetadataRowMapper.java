@@ -21,9 +21,8 @@ package org.dependencytrack.persistence.jdbi.mapping;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.PackageHealthMetadataStatus;
-import org.jdbi.v3.core.config.ConfigRegistry;
+import org.dependencytrack.model.PackageHealthScorecardCheck;
 import org.jdbi.v3.core.mapper.ColumnMapper;
-import org.jdbi.v3.core.mapper.ColumnMappers;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.statement.StatementContext;
 import org.jspecify.annotations.NullMarked;
@@ -34,33 +33,34 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
-
-import static java.util.Objects.requireNonNull;
+import java.util.Map;
 
 /**
  * Maps rows from {@code PACKAGE_HEALTH_METADATA} to
- * {@link PackageHealthMetadata}.
+ * {@link PackageHealthMetadata}, together with their previously loaded scorecard checks.
  *
  * @since 5.2.0
  */
 @NullMarked
 public final class PackageHealthMetadataRowMapper implements RowMapper<PackageHealthMetadata> {
 
-    private @Nullable ColumnMapper<PackageURL> purlColumnMapper;
+    private final Map<String, List<PackageHealthScorecardCheck>> checksByPurl;
 
-    @Override
-    public void init(final ConfigRegistry registry) {
-        purlColumnMapper =
-                registry.get(ColumnMappers.class).findFor(PackageURL.class).orElseThrow();
+    /**
+     * @param checksByPurl Scorecard checks by canonical package PURL
+     */
+    public PackageHealthMetadataRowMapper(final Map<String, List<PackageHealthScorecardCheck>> checksByPurl) {
+        this.checksByPurl = checksByPurl;
     }
 
     @Override
     public PackageHealthMetadata map(final ResultSet rs, final StatementContext ctx) throws SQLException {
-
-        requireNonNull(purlColumnMapper);
+        final ColumnMapper<PackageURL> purlColumnMapper =
+                ctx.findColumnMapperFor(PackageURL.class).orElseThrow();
+        final PackageURL purl = purlColumnMapper.map(rs, "PURL", ctx);
 
         return new PackageHealthMetadata(
-                purlColumnMapper.map(rs, "PURL", ctx),
+                purl,
                 rs.getObject("STARS", Long.class),
                 rs.getObject("FORKS", Long.class),
                 rs.getObject("CONTRIBUTORS", Long.class),
@@ -84,7 +84,7 @@ public final class PackageHealthMetadataRowMapper implements RowMapper<PackageHe
                 rs.getObject("AVG_ISSUE_AGE_DAYS", Float.class),
                 getInstant(rs, "LAST_FETCH"),
                 PackageHealthMetadataStatus.valueOf(rs.getString("STATUS")),
-                List.of());
+                checksByPurl.getOrDefault(purl.canonicalize(), List.of()));
     }
 
     private static @Nullable Instant getInstant(final ResultSet rs, final String columnName) throws SQLException {

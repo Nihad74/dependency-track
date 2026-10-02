@@ -29,7 +29,7 @@ import org.dependencytrack.persistence.QueryManager;
 import org.dependencytrack.persistence.jdbi.mapping.ExternalReferencesColumnMapper;
 import org.dependencytrack.persistence.jdbi.mapping.OrganizationalContactsColumnMapper;
 import org.dependencytrack.persistence.jdbi.mapping.OrganizationalEntityColumnMapper;
-import org.dependencytrack.persistence.jdbi.mapping.PackageHealthMetadataRowMapper;
+
 import org.dependencytrack.persistence.jdbi.mapping.PackageHealthScorecardCheckRowMapper;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadataRowMapper;
 import org.dependencytrack.pkgmetadata.PackageMetadataRowMapper;
@@ -224,7 +224,6 @@ public class JdbiFactory {
                 // Register it ad-hoc on handles or queries where data quality is ensured.
                 .registerRowMapper(new PackageMetadataRowMapper())
                 .registerRowMapper(new PackageArtifactMetadataRowMapper())
-                .registerRowMapper(new PackageHealthMetadataRowMapper())
                 .registerRowMapper(new PackageHealthScorecardCheckRowMapper());
 
         preparedJdbi.getConfig(PaginationConfig.class).setPageTokenEncoder(new SimplePageTokenEncoder());

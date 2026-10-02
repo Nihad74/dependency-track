@@ -168,6 +168,33 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
         assertThat(countScorecardChecks()).isZero();
     }
 
+    @Test
+    void shouldPersistAndRetrieveMultiplePackagesWithTheirOwnChecks() throws Exception {
+        final var otherPurl = new PackageURL("pkg:npm/other");
+        new PackageMetadataDao(jdbiHandle)
+                .upsertAll(List.of(new PackageMetadata(otherPurl, "2.0.0", null, LAST_FETCH, "test", "test")));
+
+        final PackageHealthMetadata first =
+                createMetadata(100L, List.of(createCheck("Branch-Protection", 8.0f, List.of("detail"))));
+        final var otherCheck =
+                new PackageHealthScorecardCheck(otherPurl, "Maintained", null, 2.0f, null, List.of(), null);
+        final var second = new PackageHealthMetadata(
+                otherPurl, 5L, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, LAST_FETCH, PackageHealthMetadataStatus.PROCESSED,
+                List.of(otherCheck));
+
+        healthMetadataDao.upsertAll(List.of(second, first));
+
+        final var actual = healthMetadataDao.getAll(List.of(
+                new PackageURL("pkg:maven/org.example/example@1.0.0"),
+                new PackageURL("pkg:npm/other@2.0.0"),
+                new PackageURL("pkg:npm/unknown")));
+
+        assertThat(actual).containsOnlyKeys(purl.canonicalize(), otherPurl.canonicalize());
+        assertThat(actual.get(purl.canonicalize())).isEqualTo(first);
+        assertThat(actual.get(otherPurl.canonicalize())).isEqualTo(second);
+    }
+
     private PackageHealthMetadata createMetadata(final Long stars, final List<PackageHealthScorecardCheck> checks) {
 
         return new PackageHealthMetadata(
