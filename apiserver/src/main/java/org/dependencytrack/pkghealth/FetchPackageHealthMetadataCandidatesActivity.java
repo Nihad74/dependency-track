@@ -18,14 +18,14 @@
  */
 package org.dependencytrack.pkghealth;
 
-import com.github.packageurl.MalformedPackageURLException;
-import com.github.packageurl.PackageURL;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
 import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
+import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageHealthMetadataCandidatesArg;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageHealthMetadataCandidatesRes;
+import org.dependencytrack.util.PurlUtil;
 import org.jdbi.v3.core.statement.SqlStatements;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -47,15 +47,19 @@ public final class FetchPackageHealthMetadataCandidatesActivity
     private static final Logger LOGGER = LoggerFactory.getLogger(FetchPackageHealthMetadataCandidatesActivity.class);
     private static final int DEFAULT_BATCH_SIZE = 25;
 
-    private final PackageHealthService packageHealthService;
+    private final List<String> purlPrefixes;
     private final int batchSize;
 
-    public FetchPackageHealthMetadataCandidatesActivity(final PackageHealthService packageHealthService) {
-        this(packageHealthService, DEFAULT_BATCH_SIZE);
+    public FetchPackageHealthMetadataCandidatesActivity(final PackageHealthAnalyzer analyzer) {
+        this(analyzer, DEFAULT_BATCH_SIZE);
     }
 
-    FetchPackageHealthMetadataCandidatesActivity(final PackageHealthService packageHealthService, final int batchSize) {
-        this.packageHealthService = packageHealthService;
+    FetchPackageHealthMetadataCandidatesActivity(final PackageHealthAnalyzer analyzer, final int batchSize) {
+        // Packages of other types would never get a health row, and would be selected again on every run.
+        this.purlPrefixes = analyzer.supportedPurlTypes().stream()
+                .map(type -> "pkg:" + type + "/%")
+                .sorted()
+                .toList();
         this.batchSize = batchSize;
     }
 
@@ -74,20 +78,17 @@ public final class FetchPackageHealthMetadataCandidatesActivity
         final boolean hasMore = fetched.size() > batchSize;
         final List<Candidate> page = hasMore ? fetched.subList(0, batchSize) : fetched;
 
-        final var supportedPurls = new ArrayList<String>();
+        final var purls = new ArrayList<String>(page.size());
         for (final Candidate candidate : page) {
-            try {
-                final var purl = new PackageURL(candidate.purl());
-                if (packageHealthService.supports(purl)) {
-                    supportedPurls.add(candidate.purl());
-                }
-            } catch (MalformedPackageURLException e) {
-                LOGGER.warn("Failed to parse package health candidate PURL '{}'", candidate.purl(), e);
+            if (PurlUtil.silentPurl(candidate.purl()) != null) {
+                purls.add(candidate.purl());
+            } else {
+                LOGGER.warn("Failed to parse package health candidate PURL '{}'", candidate.purl());
             }
         }
 
         final var result = FetchPackageHealthMetadataCandidatesRes.newBuilder()
-                .addAllPurls(supportedPurls)
+                .addAllPurls(purls)
                 .setHasMore(hasMore);
 
         if (hasMore) {
@@ -107,7 +108,8 @@ public final class FetchPackageHealthMetadataCandidatesActivity
                           FROM "PACKAGE_METADATA" AS pm
                           LEFT JOIN "PACKAGE_HEALTH_METADATA" AS phm
                             ON phm."PURL" = pm."PURL"
-                         WHERE (
+                         WHERE pm."PURL" LIKE ANY(:purlPrefixes)
+                           AND (
                                    phm."PURL" IS NULL
                                 OR phm."LAST_FETCH"
                                    <= NOW() - INTERVAL '24 hours'
@@ -135,6 +137,7 @@ public final class FetchPackageHealthMetadataCandidatesActivity
                 .define(
                         ATTRIBUTE_QUERY_NAME,
                         "%s#fetchDueCandidates".formatted(getClass().getSimpleName()))
+                .bindArray("purlPrefixes", String.class, purlPrefixes)
                 .bind("cursorLastFetch", cursor != null ? cursor.lastFetch() : null)
                 .bind("cursorPurl", cursor != null ? cursor.purl() : null)
                 .bind("limit", limit)

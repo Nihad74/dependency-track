@@ -55,7 +55,6 @@ import org.dependencytrack.notification.api.templating.NotificationTemplateVaria
 import org.dependencytrack.notification.templating.pebble.PebbleNotificationTemplateRendererFactory;
 import org.dependencytrack.persistence.jdbi.ConfigPropertyDao;
 import org.dependencytrack.pkghealth.FetchPackageHealthMetadataCandidatesActivity;
-import org.dependencytrack.pkghealth.PackageHealthService;
 import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataActivity;
 import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataWorkflow;
 import org.dependencytrack.pkghealth.ScheduleHealthPolicyEvaluationsActivity;
@@ -191,8 +190,8 @@ public final class DexEngineInitializer implements ServletContextListener {
                         .getOptionalValue(GENERAL_BASE_URL)
                         .orElse(null))));
 
-        final var packageHealthService = new PackageHealthService(new DepsDevGitHubPackageHealthAnalyzer(
-                new DepsDevApiClient(), new GitHubApiClientProvider(secretManager)));
+        final var packageHealthAnalyzer = new DepsDevGitHubPackageHealthAnalyzer(
+                new DepsDevApiClient(), new GitHubApiClientProvider(secretManager));
 
         final var engineFactory =
                 ServiceLoader.load(DexEngineFactory.class).findFirst().orElseThrow();
@@ -339,12 +338,12 @@ public final class DexEngineInitializer implements ServletContextListener {
                 voidConverter());
         registerActivity(
                 engine,
-                new FetchPackageHealthMetadataCandidatesActivity(packageHealthService),
+                new FetchPackageHealthMetadataCandidatesActivity(packageHealthAnalyzer),
                 protoConverter(FetchPackageHealthMetadataCandidatesArg.class),
                 protoConverter(FetchPackageHealthMetadataCandidatesRes.class));
         registerActivity(
                 engine,
-                new ResolvePackageHealthMetadataActivity(packageHealthService),
+                new ResolvePackageHealthMetadataActivity(packageHealthAnalyzer),
                 protoConverter(ResolvePackageHealthMetadataActivityArg.class),
                 protoConverter(ResolvePackageHealthMetadataActivityRes.class));
         registerActivity(

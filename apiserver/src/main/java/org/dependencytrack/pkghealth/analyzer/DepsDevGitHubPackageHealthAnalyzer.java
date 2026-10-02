@@ -24,6 +24,8 @@ import org.dependencytrack.pkghealth.client.GitHubApiClient;
 import org.dependencytrack.pkghealth.client.GitHubApiClientProvider;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.util.PurlUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Locale;
@@ -32,7 +34,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
-public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHealthAnalyzer {
+public final class DepsDevGitHubPackageHealthAnalyzer implements PackageHealthAnalyzer {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(DepsDevGitHubPackageHealthAnalyzer.class);
 
     private static final Map<String, String> DEPS_DEV_SYSTEM_BY_PURL_TYPE = Map.ofEntries(
             Map.entry(PackageURL.StandardTypes.NPM, "NPM"),
@@ -55,8 +59,8 @@ public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHea
     }
 
     @Override
-    public boolean supports(final PackageURL purl) {
-        return purl != null && DEPS_DEV_SYSTEM_BY_PURL_TYPE.containsKey(purl.getType());
+    public Set<String> supportedPurlTypes() {
+        return DEPS_DEV_SYSTEM_BY_PURL_TYPE.keySet();
     }
 
     @Override
@@ -91,7 +95,7 @@ public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHea
             final Optional<String> latestVersion = depsDevClient.fetchLatestVersion(system, name);
 
             if (latestVersion.isEmpty()) {
-                logger.debug("Could not determine latest version for {}", packagePurl);
+                LOGGER.debug("Could not determine latest version for {}", packagePurl);
                 return new AnalysisResult.NotAvailable();
             }
 
@@ -101,7 +105,7 @@ public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHea
                     depsDevClient.fetchSourceRepository(system, name, latestVersion.get());
 
             if (sourceRepository.isEmpty()) {
-                logger.debug("Could not determine source repository for {}", packagePurl);
+                LOGGER.debug("Could not determine source repository for {}", packagePurl);
                 return new AnalysisResult.Available(metadata);
             }
 
@@ -110,7 +114,7 @@ public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHea
             depsDevClient.fetchProjectMetadata(packagePurl, repository).ifPresent(metadata::mergeFrom);
 
             if (!isGitHubRepository(repository)) {
-                logger.debug("Source repository for {} is not hosted on GitHub", packagePurl);
+                LOGGER.debug("Source repository for {} is not hosted on GitHub", packagePurl);
                 return new AnalysisResult.Available(metadata);
             }
 
@@ -119,7 +123,7 @@ public final class DepsDevGitHubPackageHealthAnalyzer extends AbstractPackageHea
             final Optional<GitHubApiClient> gitHubClient = gitHubClientProvider.get();
 
             if (gitHubClient.isEmpty()) {
-                logger.debug("GitHub metadata analysis is not configured");
+                LOGGER.debug("GitHub metadata analysis is not configured");
                 return new AnalysisResult.Available(metadata);
             }
 

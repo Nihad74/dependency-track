@@ -47,15 +47,15 @@ import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction
 public final class ResolvePackageHealthMetadataActivity
         implements Activity<ResolvePackageHealthMetadataActivityArg, ResolvePackageHealthMetadataActivityRes> {
 
-    private final PackageHealthService packageHealthService;
+    private final PackageHealthAnalyzer analyzer;
     private final Clock clock;
 
-    public ResolvePackageHealthMetadataActivity(final PackageHealthService packageHealthService) {
-        this(packageHealthService, Clock.systemUTC());
+    public ResolvePackageHealthMetadataActivity(final PackageHealthAnalyzer analyzer) {
+        this(analyzer, Clock.systemUTC());
     }
 
-    ResolvePackageHealthMetadataActivity(final PackageHealthService packageHealthService, final Clock clock) {
-        this.packageHealthService = requireNonNull(packageHealthService, "packageHealthService must not be null");
+    ResolvePackageHealthMetadataActivity(final PackageHealthAnalyzer analyzer, final Clock clock) {
+        this.analyzer = requireNonNull(analyzer, "analyzer must not be null");
         this.clock = requireNonNull(clock, "clock must not be null");
     }
 
@@ -106,7 +106,7 @@ public final class ResolvePackageHealthMetadataActivity
 
     private PackageHealthMetadata fetchMetadata(final PackageURL purl)
             throws PackageHealthAnalyzer.AnalysisException, InterruptedException {
-        final var result = packageHealthService.fetch(purl);
+        final var result = analyzer.analyze(purl);
 
         if (result instanceof PackageHealthAnalyzer.AnalysisResult.Available available) {
             return PackageHealthMetadataMapper.map(
