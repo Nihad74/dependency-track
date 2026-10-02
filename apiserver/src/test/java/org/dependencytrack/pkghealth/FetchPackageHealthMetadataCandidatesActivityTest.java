@@ -79,8 +79,7 @@ class FetchPackageHealthMetadataCandidatesActivityTest extends PersistenceCapabl
 
         // Unsupported packages never get a health row, and "pkg:generic" sorts before "pkg:npm".
         final var supportedPurl = new PackageURL("pkg:npm/example");
-        createPackageMetadata(
-                new PackageURL("pkg:generic/a"), new PackageURL("pkg:generic/b"), supportedPurl);
+        createPackageMetadata(new PackageURL("pkg:generic/a"), new PackageURL("pkg:generic/b"), supportedPurl);
 
         final var result = activity.execute(
                 mock(ActivityContext.class),

@@ -156,8 +156,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
         final var npmModel = new AnalyzedPackageHealth(npmPackagePurl);
         npmModel.setStars(100L);
 
-        when(analyzer.analyze(npmPurl))
-                .thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(npmModel));
+        when(analyzer.analyze(npmPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(npmModel));
 
         when(analyzer.analyze(pypiPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.NotAvailable());
 

@@ -385,7 +385,8 @@ public final class GitHubApiClient extends ApiClient {
 
             final Instant createdAt = instantOrNull(issue.get("created_at"));
             if (createdAt != null) {
-                final long ageSeconds = Math.max(0, Duration.between(createdAt, now).toSeconds());
+                final long ageSeconds =
+                        Math.max(0, Duration.between(createdAt, now).toSeconds());
                 totalIssueAgeDays += ageSeconds / 86_400.0;
             }
         }

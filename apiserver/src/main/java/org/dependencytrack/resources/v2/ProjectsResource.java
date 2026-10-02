@@ -133,8 +133,9 @@ public class ProjectsResource extends AbstractApiResource implements ProjectsApi
                             sortByEnum,
                             mapSortDirection(sortDirection)));
 
-            final List<Component> components =
-                    componentsPage.items().stream().map(ListedComponent::component).toList();
+            final List<Component> components = componentsPage.items().stream()
+                    .map(ListedComponent::component)
+                    .toList();
 
             var metricsByComponentId = Map.<Long, DependencyMetrics>of();
             var pkgMetaByPackagePurl = Map.<String, PackageMetadata>of();
@@ -142,9 +143,8 @@ public class ProjectsResource extends AbstractApiResource implements ProjectsApi
 
             if (!components.isEmpty()) {
                 if (expandMetrics) {
-                    final Set<Long> componentIds = components.stream()
-                            .map(Component::getId)
-                            .collect(Collectors.toSet());
+                    final Set<Long> componentIds =
+                            components.stream().map(Component::getId).collect(Collectors.toSet());
                     metricsByComponentId =
                             handle.attach(MetricsDao.class).getMostRecentDependencyMetrics(componentIds).stream()
                                     .collect(Collectors.toMap(DependencyMetrics::getComponentId, Function.identity()));

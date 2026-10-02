@@ -517,9 +517,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
                     effectiveSortBy == ListComponentsQuery.SortBy.LAST_RISKSCORE
                             ? lastComponent.getLastInheritedRiskScore()
                             : null,
-                    effectiveSortBy == ListComponentsQuery.SortBy.SCORECARD_SCORE
-                            ? lastRow.scorecardScore()
-                            : null,
+                    effectiveSortBy == ListComponentsQuery.SortBy.SCORECARD_SCORE ? lastRow.scorecardScore() : null,
                     effectiveSortBy,
                     effectiveSortDirection,
                     totalCount);
@@ -650,7 +648,9 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             @Define boolean hasCursor);
 
     record ListedComponent(
-            Component component, @Nullable Long publishedAtMicros, @Nullable Double scorecardScore) {}
+            Component component,
+            @Nullable Long publishedAtMicros,
+            @Nullable Double scorecardScore) {}
 
     class ComponentListRowMapper implements RowMapper<ListedComponent> {
 

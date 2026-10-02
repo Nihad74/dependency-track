@@ -125,7 +125,9 @@ public final class GitHubApiClientProvider {
     }
 
     private record Resolution(
-            Instant resolvedAt, @Nullable String accessToken, @Nullable GitHubApiClient client) {
+            Instant resolvedAt,
+            @Nullable String accessToken,
+            @Nullable GitHubApiClient client) {
 
         private boolean isFresh(final Instant now) {
             return now.isBefore(resolvedAt.plus(RESOLUTION_TTL));
