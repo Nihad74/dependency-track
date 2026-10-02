@@ -24,21 +24,30 @@ import org.dependencytrack.secret.management.SecretManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class GitHubApiClientProviderTest extends PersistenceCapableTest {
 
+    private static final Instant NOW = Instant.parse("2026-09-24T12:00:00Z");
+
     private SecretManager secretManager;
+    private Clock clock;
     private GitHubApiClientProvider provider;
 
     @BeforeEach
     void setUp() {
         secretManager = mock(SecretManager.class);
-        provider = new GitHubApiClientProvider(secretManager);
+        clock = mock(Clock.class);
+        when(clock.instant()).thenReturn(NOW);
+        provider = new GitHubApiClientProvider(secretManager, clock);
     }
 
     @Test
@@ -97,9 +106,26 @@ class GitHubApiClientProviderTest extends PersistenceCapableTest {
     }
 
     @Test
-    void shouldReuseClientUntilTokenChanges() {
+    void shouldResolveTokenOnceWithinResolutionTtl() {
+        createGitHubRepository(true, true, "github-token-reference");
+        when(secretManager.getSecretValue("github-token-reference")).thenReturn("token-1");
+
+        final var first = provider.get().orElseThrow();
+        final var second = provider.get().orElseThrow();
+
+        assertThat(second).isSameAs(first);
+        verify(secretManager, times(1)).getSecretValue("github-token-reference");
+    }
+
+    @Test
+    void shouldReuseClientAcrossResolutionsUntilTokenChanges() {
         createGitHubRepository(true, true, "github-token-reference");
         when(secretManager.getSecretValue("github-token-reference")).thenReturn("token-1", "token-1", "token-2");
+        when(clock.instant())
+                .thenReturn(
+                        NOW,
+                        NOW.plus(GitHubApiClientProvider.RESOLUTION_TTL),
+                        NOW.plus(GitHubApiClientProvider.RESOLUTION_TTL.multipliedBy(2)));
 
         final var first = provider.get().orElseThrow();
         final var second = provider.get().orElseThrow();
@@ -107,6 +133,7 @@ class GitHubApiClientProviderTest extends PersistenceCapableTest {
 
         assertThat(second).isSameAs(first);
         assertThat(afterRotation).isNotSameAs(first);
+        verify(secretManager, times(3)).getSecretValue("github-token-reference");
     }
 
     private void createGitHubRepository(

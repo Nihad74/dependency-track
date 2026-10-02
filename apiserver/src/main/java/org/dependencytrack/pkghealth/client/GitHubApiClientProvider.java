@@ -25,6 +25,9 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -34,15 +37,58 @@ public final class GitHubApiClientProvider {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GitHubApiClientProvider.class);
 
-    private final SecretManager secretManager;
+    /**
+     * How long a resolved client, or the absence of one, is reused before the
+     * repository configuration and token are looked up again.
+     */
+    static final Duration RESOLUTION_TTL = Duration.ofMinutes(1);
 
-    private volatile @Nullable CachedClient cachedClient;
+    private final SecretManager secretManager;
+    private final Clock clock;
+
+    private volatile @Nullable Resolution resolution;
 
     public GitHubApiClientProvider(final SecretManager secretManager) {
+        this(secretManager, Clock.systemUTC());
+    }
+
+    GitHubApiClientProvider(final SecretManager secretManager, final Clock clock) {
         this.secretManager = Objects.requireNonNull(secretManager);
+        this.clock = Objects.requireNonNull(clock);
     }
 
     public Optional<GitHubApiClient> get() {
+        final Instant now = clock.instant();
+
+        @Nullable Resolution current = resolution;
+        if (current != null && current.isFresh(now)) {
+            return Optional.ofNullable(current.client());
+        }
+
+        synchronized (this) {
+            current = resolution;
+            if (current != null && current.isFresh(now)) {
+                return Optional.ofNullable(current.client());
+            }
+
+            final @Nullable String accessToken = resolveAccessToken();
+            final @Nullable GitHubApiClient previousClient = current != null ? current.client() : null;
+            final @Nullable GitHubApiClient client;
+            if (accessToken == null) {
+                client = null;
+            } else if (current != null && previousClient != null && accessToken.equals(current.accessToken())) {
+                // Keep the client, and the repository metadata it caches, while the token is unchanged.
+                client = previousClient;
+            } else {
+                client = new GitHubApiClient(accessToken);
+            }
+
+            resolution = new Resolution(now, accessToken, client);
+            return Optional.ofNullable(client);
+        }
+    }
+
+    private @Nullable String resolveAccessToken() {
         final Optional<Repository> repository = withJdbiHandle(handle -> handle.createQuery("""
                                 SELECT *
                                   FROM "REPOSITORY"
@@ -58,41 +104,31 @@ public final class GitHubApiClientProvider {
 
         if (repository.isEmpty()) {
             LOGGER.debug("No authenticated GitHub repository is configured");
-            return Optional.empty();
+            return null;
         }
 
         final String secretReference = repository.get().getPassword();
 
         if (secretReference == null || secretReference.isBlank()) {
             LOGGER.warn("GitHub authentication is enabled, but no token is configured");
-            return Optional.empty();
+            return null;
         }
 
         final String accessToken = secretManager.getSecretValue(secretReference);
 
         if (accessToken == null || accessToken.isBlank()) {
             LOGGER.warn("Configured GitHub token could not be resolved");
-            return Optional.empty();
+            return null;
         }
 
-        return Optional.of(clientFor(accessToken));
+        return accessToken;
     }
 
-    private record CachedClient(String token, GitHubApiClient client) {}
+    private record Resolution(
+            Instant resolvedAt, @Nullable String accessToken, @Nullable GitHubApiClient client) {
 
-    private GitHubApiClient clientFor(final String accessToken) {
-        var current = cachedClient;
-        if (current != null && current.token().equals(accessToken)) {
-            return current.client();
-        }
-
-        synchronized (this) {
-            current = cachedClient;
-            if (current == null || !current.token().equals(accessToken)) {
-                current = new CachedClient(accessToken, new GitHubApiClient(accessToken));
-                cachedClient = current;
-            }
-            return current.client();
+        private boolean isFresh(final Instant now) {
+            return now.isBefore(resolvedAt.plus(RESOLUTION_TTL));
         }
     }
 }
