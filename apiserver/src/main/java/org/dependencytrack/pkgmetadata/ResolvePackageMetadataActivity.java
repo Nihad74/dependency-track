@@ -25,7 +25,6 @@ import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
 import org.dependencytrack.dex.api.failure.ApplicationFailureException;
 import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
-import org.dependencytrack.model.Component;
 import org.dependencytrack.model.PackageMetadataResolutionStatus;
 import org.dependencytrack.model.Repository;
 import org.dependencytrack.model.RepositoryType;
@@ -125,7 +124,7 @@ public final class ResolvePackageMetadataActivity implements Activity<ResolvePac
             final var passwordByRepoTypeAndName = new HashMap<String, Optional<String>>();
 
             final var internalIdentifier = new InternalComponentIdentifier();
-            final Function<PackageURL, Boolean> isInternalFunc = purl -> isInternal(purl, internalIdentifier);
+            final Function<PackageURL, Boolean> isInternalFunc = internalIdentifier::isInternal;
 
             final var resultBuffer = new ResultBuffer();
 
@@ -357,18 +356,6 @@ public final class ResolvePackageMetadataActivity implements Activity<ResolvePac
                 .bind("type", repoType.name())
                 .mapToBean(Repository.class)
                 .list());
-    }
-
-    private static boolean isInternal(PackageURL purl, InternalComponentIdentifier internalIdentifier) {
-        if (!internalIdentifier.hasPatterns()) {
-            return false;
-        }
-
-        final var component = new Component();
-        component.setGroup(purl.getNamespace());
-        component.setName(purl.getName());
-
-        return internalIdentifier.isInternal(component);
     }
 
     private static final class ResultBuffer {
