@@ -179,8 +179,30 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
         final var otherCheck =
                 new PackageHealthScorecardCheck(otherPurl, "Maintained", null, 2.0f, null, List.of(), null);
         final var second = new PackageHealthMetadata(
-                otherPurl, 5L, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, LAST_FETCH, PackageHealthMetadataStatus.PROCESSED,
+                otherPurl,
+                5L,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                LAST_FETCH,
+                PackageHealthMetadataStatus.PROCESSED,
                 List.of(otherCheck));
 
         healthMetadataDao.upsertAll(List.of(second, first));
