@@ -26,6 +26,7 @@ import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.model.PackageMetadata;
 import org.dependencytrack.persistence.jdbi.PackageHealthMetadataDao;
 import org.dependencytrack.persistence.jdbi.PackageMetadataDao;
+import org.dependencytrack.pkghealth.analyzer.PackageHealthAnalyzer;
 import org.dependencytrack.pkghealth.mapping.PackageHealthMetadataMapper;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageHealthMetadataCandidatesArg;
@@ -35,24 +36,25 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class FetchPackageHealthMetadataCandidatesActivityTest extends PersistenceCapableTest {
 
-    private PackageHealthService packageHealthService;
+    private PackageHealthAnalyzer analyzer;
     private FetchPackageHealthMetadataCandidatesActivity activity;
 
     @BeforeEach
     void beforeEach() {
-        packageHealthService = mock(PackageHealthService.class);
-        activity = new FetchPackageHealthMetadataCandidatesActivity(packageHealthService, 25);
+        analyzer = mock(PackageHealthAnalyzer.class);
+        when(analyzer.supportedPurlTypes()).thenReturn(Set.of("npm"));
+        activity = new FetchPackageHealthMetadataCandidatesActivity(analyzer, 25);
     }
 
     @Test
@@ -62,9 +64,6 @@ class FetchPackageHealthMetadataCandidatesActivityTest extends PersistenceCapabl
 
         createPackageMetadata(supportedPurl, unsupportedPurl);
 
-        when(packageHealthService.supports(supportedPurl)).thenReturn(true);
-        when(packageHealthService.supports(unsupportedPurl)).thenReturn(false);
-
         final var result = activity.execute(
                 mock(ActivityContext.class),
                 FetchPackageHealthMetadataCandidatesArg.newBuilder().build());
@@ -72,9 +71,23 @@ class FetchPackageHealthMetadataCandidatesActivityTest extends PersistenceCapabl
         assertThat(result.getPurlsList()).containsExactly(supportedPurl.toString());
         assertThat(result.getHasMore()).isFalse();
         assertThat(result.hasNextCursor()).isFalse();
+    }
 
-        verify(packageHealthService).supports(supportedPurl);
-        verify(packageHealthService).supports(unsupportedPurl);
+    @Test
+    void shouldNotPageThroughUnsupportedPackages() throws Exception {
+        activity = new FetchPackageHealthMetadataCandidatesActivity(analyzer, 1);
+
+        // Unsupported packages never get a health row, and "pkg:generic" sorts before "pkg:npm".
+        final var supportedPurl = new PackageURL("pkg:npm/example");
+        createPackageMetadata(
+                new PackageURL("pkg:generic/a"), new PackageURL("pkg:generic/b"), supportedPurl);
+
+        final var result = activity.execute(
+                mock(ActivityContext.class),
+                FetchPackageHealthMetadataCandidatesArg.newBuilder().build());
+
+        assertThat(result.getPurlsList()).containsExactly(supportedPurl.toString());
+        assertThat(result.getHasMore()).isFalse();
     }
 
     @Test
@@ -87,8 +100,6 @@ class FetchPackageHealthMetadataCandidatesActivityTest extends PersistenceCapabl
         createHealthMetadata(stalePurl, Instant.now().minus(Duration.ofHours(25)));
 
         createHealthMetadata(freshPurl, Instant.now().minus(Duration.ofHours(23)));
-
-        when(packageHealthService.supports(stalePurl)).thenReturn(true);
 
         final var result = activity.execute(
                 mock(ActivityContext.class),
@@ -116,17 +127,13 @@ class FetchPackageHealthMetadataCandidatesActivityTest extends PersistenceCapabl
 
     @Test
     void shouldPaginateCandidatesUsingCursor() throws Exception {
-        activity = new FetchPackageHealthMetadataCandidatesActivity(packageHealthService, 2);
+        activity = new FetchPackageHealthMetadataCandidatesActivity(analyzer, 2);
 
         final var firstPurl = new PackageURL("pkg:npm/a");
         final var secondPurl = new PackageURL("pkg:npm/b");
         final var thirdPurl = new PackageURL("pkg:npm/c");
 
         createPackageMetadata(firstPurl, secondPurl, thirdPurl);
-
-        when(packageHealthService.supports(firstPurl)).thenReturn(true);
-        when(packageHealthService.supports(secondPurl)).thenReturn(true);
-        when(packageHealthService.supports(thirdPurl)).thenReturn(true);
 
         final var firstPage = activity.execute(
                 mock(ActivityContext.class),

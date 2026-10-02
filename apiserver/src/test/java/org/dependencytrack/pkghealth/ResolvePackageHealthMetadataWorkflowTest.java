@@ -60,6 +60,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,8 +68,10 @@ import static org.awaitility.Awaitility.await;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.protoConverter;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.voidConverter;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
@@ -79,11 +82,12 @@ class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
     private final WorkflowTestExtension workflowTest =
             new WorkflowTestExtension(DataSourceRegistry.getInstance().getDefault());
 
-    private PackageHealthService packageHealthService;
+    private PackageHealthAnalyzer analyzer;
 
     @BeforeEach
     void beforeEach() {
-        packageHealthService = mock(PackageHealthService.class);
+        analyzer = mock(PackageHealthAnalyzer.class);
+        when(analyzer.supportedPurlTypes()).thenReturn(Set.of("npm"));
 
         final DexEngine engine = workflowTest.getEngine();
 
@@ -94,12 +98,12 @@ class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
                 Duration.ofSeconds(10));
 
         engine.registerActivity(
-                new FetchPackageHealthMetadataCandidatesActivity(packageHealthService, 2),
+                new FetchPackageHealthMetadataCandidatesActivity(analyzer, 2),
                 protoConverter(FetchPackageHealthMetadataCandidatesArg.class),
                 protoConverter(FetchPackageHealthMetadataCandidatesRes.class));
 
         engine.registerActivity(
-                new ResolvePackageHealthMetadataActivity(packageHealthService, Clock.fixed(NOW, ZoneOffset.UTC)),
+                new ResolvePackageHealthMetadataActivity(analyzer, Clock.fixed(NOW, ZoneOffset.UTC)),
                 protoConverter(ResolvePackageHealthMetadataActivityArg.class),
                 protoConverter(ResolvePackageHealthMetadataActivityRes.class));
         engine.registerActivity(
@@ -149,14 +153,14 @@ class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
     }
 
     @Test
-    void shouldCompleteWhenNoCandidates() {
+    void shouldCompleteWhenNoCandidates() throws Exception {
         final UUID runId = workflowTest
                 .getEngine()
                 .createRun(new CreateWorkflowRunRequest<>(ResolvePackageHealthMetadataWorkflow.class));
 
         workflowTest.awaitRunStatus(runId, WorkflowRunStatus.COMPLETED);
 
-        verifyNoInteractions(packageHealthService);
+        verify(analyzer, never()).analyze(any());
     }
 
     @Test
@@ -176,16 +180,9 @@ class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
         final var thirdModel = new AnalyzedPackageHealth(thirdPurl);
         thirdModel.setStars(30L);
 
-        when(packageHealthService.supports(firstPurl)).thenReturn(true);
-        when(packageHealthService.supports(secondPurl)).thenReturn(true);
-        when(packageHealthService.supports(thirdPurl)).thenReturn(true);
-
-        when(packageHealthService.fetch(firstPurl))
-                .thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(firstModel));
-        when(packageHealthService.fetch(secondPurl))
-                .thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(secondModel));
-        when(packageHealthService.fetch(thirdPurl))
-                .thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(thirdModel));
+        when(analyzer.analyze(firstPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(firstModel));
+        when(analyzer.analyze(secondPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(secondModel));
+        when(analyzer.analyze(thirdPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(thirdModel));
 
         final UUID runId = workflowTest
                 .getEngine()
@@ -244,9 +241,7 @@ class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
 
         final var model = new AnalyzedPackageHealth(packagePurl);
         model.setStars(10L);
-        when(packageHealthService.supports(packagePurl)).thenReturn(true);
-        when(packageHealthService.fetch(packagePurl))
-                .thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(model));
+        when(analyzer.analyze(packagePurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(model));
 
         final DexEngine engine = workflowTest.getEngine();
         final UUID firstRunId =

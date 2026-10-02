@@ -21,14 +21,19 @@ package org.dependencytrack.pkghealth.analyzer;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 
+import java.util.Set;
+
 public interface PackageHealthAnalyzer {
 
-    boolean supports(PackageURL purl);
-    ;
+    /**
+     * @return PURL types that {@link #analyze(PackageURL)} can return health metadata for
+     */
+    Set<String> supportedPurlTypes();
 
+    /**
+     * @return {@link AnalysisResult.NotAvailable} for PURL types outside {@link #supportedPurlTypes()}
+     */
     AnalysisResult analyze(PackageURL purl) throws AnalysisException, InterruptedException;
-
-    String getName();
 
     sealed interface AnalysisResult {
 

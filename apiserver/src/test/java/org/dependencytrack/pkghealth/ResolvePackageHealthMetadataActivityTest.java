@@ -53,14 +53,14 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
 
     private static final Instant NOW = Instant.parse("2026-09-24T12:00:00Z");
 
-    private PackageHealthService packageHealthService;
+    private PackageHealthAnalyzer analyzer;
     private ResolvePackageHealthMetadataActivity activity;
 
     @BeforeEach
     void beforeEach() {
-        packageHealthService = mock(PackageHealthService.class);
+        analyzer = mock(PackageHealthAnalyzer.class);
 
-        activity = new ResolvePackageHealthMetadataActivity(packageHealthService, Clock.fixed(NOW, ZoneOffset.UTC));
+        activity = new ResolvePackageHealthMetadataActivity(analyzer, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test
@@ -74,7 +74,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
         model.setStars(100L);
         model.setHasReadme(true);
 
-        when(packageHealthService.fetch(purl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(model));
+        when(analyzer.analyze(purl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(model));
 
         final var arg = ResolvePackageHealthMetadataActivityArg.newBuilder()
                 .addPurls(purl.toString())
@@ -107,7 +107,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
 
         createPackageMetadata(packagePurl);
 
-        when(packageHealthService.fetch(purl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.NotAvailable());
+        when(analyzer.analyze(purl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.NotAvailable());
 
         final var arg = ResolvePackageHealthMetadataActivityArg.newBuilder()
                 .addPurls(purl.toString())
@@ -130,7 +130,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
     void shouldIgnoreNullArgument() throws Exception {
         activity.execute(mock(ActivityContext.class), null);
 
-        verifyNoInteractions(packageHealthService);
+        verifyNoInteractions(analyzer);
     }
 
     @Test
@@ -139,7 +139,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
 
         activity.execute(mock(ActivityContext.class), arg);
 
-        verifyNoInteractions(packageHealthService);
+        verifyNoInteractions(analyzer);
     }
 
     @Test
@@ -156,10 +156,10 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
         final var npmModel = new AnalyzedPackageHealth(npmPackagePurl);
         npmModel.setStars(100L);
 
-        when(packageHealthService.fetch(npmPurl))
+        when(analyzer.analyze(npmPurl))
                 .thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(npmModel));
 
-        when(packageHealthService.fetch(pypiPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.NotAvailable());
+        when(analyzer.analyze(pypiPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.NotAvailable());
 
         final var arg = ResolvePackageHealthMetadataActivityArg.newBuilder()
                 .addPurls(npmPurl.toString())
@@ -179,8 +179,8 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
         assertThat(pypiMetadata).isNotNull();
         assertThat(pypiMetadata.status()).isEqualTo(PackageHealthMetadataStatus.NOT_AVAILABLE);
 
-        verify(packageHealthService).fetch(npmPurl);
-        verify(packageHealthService).fetch(pypiPurl);
+        verify(analyzer).analyze(npmPurl);
+        verify(analyzer).analyze(pypiPurl);
     }
 
     @Test
@@ -190,7 +190,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
         final var expectedException =
                 new PackageHealthAnalyzer.AnalysisException("Analysis failed", new IOException("deps.dev unavailable"));
 
-        when(packageHealthService.fetch(purl)).thenThrow(expectedException);
+        when(analyzer.analyze(purl)).thenThrow(expectedException);
 
         final var arg = ResolvePackageHealthMetadataActivityArg.newBuilder()
                 .addPurls(purl.toString())
@@ -206,7 +206,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
         final var purl = new PackageURL("pkg:npm/example@1.0.0");
         final var resetAt = NOW.plus(Duration.ofMinutes(10));
 
-        when(packageHealthService.fetch(purl))
+        when(analyzer.analyze(purl))
                 .thenThrow(new PackageHealthAnalyzer.AnalysisException(
                         "GitHub request failed", new ApiRateLimitException(resetAt)));
 

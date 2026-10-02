@@ -25,8 +25,6 @@ import org.dependencytrack.pkghealth.client.GitHubApiClientProvider;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.util.Optional;
@@ -52,26 +50,19 @@ class DepsDevGitHubPackageHealthAnalyzerTest {
         analyzer = new DepsDevGitHubPackageHealthAnalyzer(depsDevApiClient, gitHubApiClientProvider);
     }
 
-    @ParameterizedTest
-    @ValueSource(
-            strings = {
-                "pkg:npm/lodash@4.17.21",
-                "pkg:golang/github.com/acme/example@v1.0.0",
-                "pkg:maven/org.example/example@1.0.0",
-                "pkg:pypi/requests@2.32.0",
-                "pkg:nuget/Newtonsoft.Json@13.0.3",
-                "pkg:cargo/serde@1.0.0",
-                "pkg:gem/rails@8.0.0"
-            })
-    void shouldSupportDepsDevPackageTypes(final String purl) throws Exception {
-        assertThat(analyzer.supports(new PackageURL(purl))).isTrue();
+    @Test
+    void shouldSupportDepsDevPackageTypes() {
+        assertThat(analyzer.supportedPurlTypes())
+                .containsExactlyInAnyOrder("npm", "golang", "maven", "pypi", "nuget", "cargo", "gem");
     }
 
     @Test
-    void shouldNotSupportUnknownPackageType() throws Exception {
+    void shouldReturnNotAvailableForUnsupportedPackageType() throws Exception {
         final var purl = new PackageURL("pkg:docker/library/nginx@1.27");
 
-        assertThat(analyzer.supports(purl)).isFalse();
+        assertThat(analyzer.analyze(purl)).isInstanceOf(PackageHealthAnalyzer.AnalysisResult.NotAvailable.class);
+
+        verifyNoInteractions(depsDevApiClient, gitHubApiClientProvider);
     }
 
     @Test
