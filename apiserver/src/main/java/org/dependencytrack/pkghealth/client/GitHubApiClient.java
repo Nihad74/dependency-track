@@ -27,6 +27,7 @@ import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
+import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.time.Clock;
 import java.time.Duration;
@@ -69,7 +70,7 @@ public final class GitHubApiClient extends ApiClient {
     }
 
     GitHubApiClient(
-            final java.net.http.HttpClient httpClient,
+            final HttpClient httpClient,
             final ObjectMapper objectMapper,
             final @Nullable String accessToken,
             final Clock clock,
@@ -350,7 +351,7 @@ public final class GitHubApiClient extends ApiClient {
     }
 
     private static @Nullable Boolean booleanOrNull(final @Nullable JsonNode node) {
-        return node != null && node.isBoolean() ? node.booleanValue() : null;
+        return (node != null && node.isBoolean()) ? node.booleanValue() : null;
     }
 
     private static @Nullable Instant instantOrNull(final @Nullable JsonNode node) {

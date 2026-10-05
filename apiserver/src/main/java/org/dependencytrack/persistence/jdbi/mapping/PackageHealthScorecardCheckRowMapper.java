@@ -18,23 +18,17 @@
  */
 package org.dependencytrack.persistence.jdbi.mapping;
 
-import com.github.packageurl.PackageURL;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
-import org.jdbi.v3.core.config.ConfigRegistry;
-import org.jdbi.v3.core.mapper.ColumnMapper;
-import org.jdbi.v3.core.mapper.ColumnMappers;
+import org.dependencytrack.support.jdbi.mapping.PurlColumnMapper;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.statement.StatementContext;
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 
 import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.List;
-
-import static java.util.Objects.requireNonNull;
 
 /**
  * Maps rows from {@code PACKAGE_HEALTH_SCORECARD_CHECK} to
@@ -45,19 +39,12 @@ import static java.util.Objects.requireNonNull;
 @NullMarked
 public final class PackageHealthScorecardCheckRowMapper implements RowMapper<PackageHealthScorecardCheck> {
 
-    private @Nullable ColumnMapper<PackageURL> purlColumnMapper;
-
-    @Override
-    public void init(final ConfigRegistry registry) {
-        purlColumnMapper =
-                registry.get(ColumnMappers.class).findFor(PackageURL.class).orElseThrow();
-    }
+    // Not registered globally, see JdbiFactory. Health rows only hold PURLs written by package
+    // metadata resolution, so they always parse.
+    private final PurlColumnMapper purlColumnMapper = new PurlColumnMapper();
 
     @Override
     public PackageHealthScorecardCheck map(final ResultSet rs, final StatementContext ctx) throws SQLException {
-
-        requireNonNull(purlColumnMapper);
-
         return new PackageHealthScorecardCheck(
                 purlColumnMapper.map(rs, "PURL", ctx),
                 rs.getString("CHECK_NAME"),

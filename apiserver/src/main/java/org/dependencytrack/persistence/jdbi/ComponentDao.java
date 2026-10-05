@@ -31,11 +31,13 @@ import org.dependencytrack.persistence.jdbi.mapping.OptionalColumnRowMapper.Colu
 import org.dependencytrack.persistence.jdbi.query.ListComponentsQuery;
 import org.dependencytrack.persistence.jdbi.query.ListProjectComponentsQuery;
 import org.dependencytrack.pkghealth.PackageHealthSettings;
+import org.dependencytrack.support.jdbi.mapping.PurlColumnMapper;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.mapper.reflect.BeanMapper;
 import org.jdbi.v3.core.statement.StatementContext;
 import org.jdbi.v3.sqlobject.SqlObject;
 import org.jdbi.v3.sqlobject.config.RegisterBeanMapper;
+import org.jdbi.v3.sqlobject.config.RegisterColumnMapper;
 import org.jdbi.v3.sqlobject.config.RegisterRowMapper;
 import org.jdbi.v3.sqlobject.customizer.Bind;
 import org.jdbi.v3.sqlobject.customizer.BindMap;
@@ -114,6 +116,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             ON "PAM"."PURL" = "C"."PURL"
          WHERE "C"."UUID" = :componentUuid
         """)
+    @RegisterColumnMapper(PurlColumnMapper.class)
     @Nullable
     PackageURL getPackagePurl(@Bind UUID componentUuid);
 

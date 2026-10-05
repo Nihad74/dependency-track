@@ -246,10 +246,9 @@ public final class CelPolicyDao {
                     """)
                     .define("fetchColumns", scalarColumns)
                     .bindArray("packagePurls", String.class, packagePurls)
-                    .reduceResultSet(builders, (result, rs, ctx) -> {
-                        result.put(rs.getString("package_purl"), rowMapper.mapToBuilder(rs));
-                        return result;
-                    });
+                    .map((OptionalColumnRowMapper<Map.Entry<String, HealthMeta.Builder>>) (rs, ctx, columns) ->
+                            Map.entry(rs.getString("package_purl"), rowMapper.mapToBuilder(rs, columns)))
+                    .forEach(entry -> builders.put(entry.getKey(), entry.getValue()));
         }
 
         if (includeChecks) {

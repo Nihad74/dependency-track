@@ -101,27 +101,45 @@ public final class AnalyzedPackageHealth {
             throw new IllegalArgumentException("Can not merge health metadata for different PURLs");
         }
 
-        if (other.stars != null) stars = other.stars;
-        if (other.forks != null) forks = other.forks;
-        if (other.contributors != null) contributors = other.contributors;
+        if (other.stars != null) {
+            stars = other.stars;
+        }
+        if (other.forks != null) {
+            forks = other.forks;
+        }
+        if (other.contributors != null) {
+            contributors = other.contributors;
+        }
         if (other.commitFrequencyWeekly != null) {
             commitFrequencyWeekly = other.commitFrequencyWeekly;
         }
-        if (other.openIssues != null) openIssues = other.openIssues;
+        if (other.openIssues != null) {
+            openIssues = other.openIssues;
+        }
         if (other.openPullRequests != null) {
             openPullRequests = other.openPullRequests;
         }
-        if (other.lastCommit != null) lastCommit = other.lastCommit;
-        if (other.busFactor != null) busFactor = other.busFactor;
-        if (other.hasReadme != null) hasReadme = other.hasReadme;
+        if (other.lastCommit != null) {
+            lastCommit = other.lastCommit;
+        }
+        if (other.busFactor != null) {
+            busFactor = other.busFactor;
+        }
+        if (other.hasReadme != null) {
+            hasReadme = other.hasReadme;
+        }
         if (other.hasCodeOfConduct != null) {
             hasCodeOfConduct = other.hasCodeOfConduct;
         }
         if (other.hasSecurityPolicy != null) {
             hasSecurityPolicy = other.hasSecurityPolicy;
         }
-        if (other.dependents != null) dependents = other.dependents;
-        if (other.files != null) files = other.files;
+        if (other.dependents != null) {
+            dependents = other.dependents;
+        }
+        if (other.files != null) {
+            files = other.files;
+        }
         if (other.repositoryArchived != null) {
             repositoryArchived = other.repositoryArchived;
         }

@@ -29,7 +29,6 @@ import org.dependencytrack.persistence.QueryManager;
 import org.dependencytrack.persistence.jdbi.mapping.ExternalReferencesColumnMapper;
 import org.dependencytrack.persistence.jdbi.mapping.OrganizationalContactsColumnMapper;
 import org.dependencytrack.persistence.jdbi.mapping.OrganizationalEntityColumnMapper;
-
 import org.dependencytrack.persistence.jdbi.mapping.PackageHealthScorecardCheckRowMapper;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadataRowMapper;
 import org.dependencytrack.pkgmetadata.PackageMetadataRowMapper;

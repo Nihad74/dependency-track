@@ -18,6 +18,7 @@
  */
 package org.dependencytrack.pkghealth;
 
+import com.github.packageurl.MalformedPackageURLException;
 import com.github.packageurl.PackageURL;
 import com.google.protobuf.util.Timestamps;
 import org.dependencytrack.dex.api.Activity;
@@ -81,7 +82,8 @@ public final class ResolvePackageHealthMetadataActivity
 
     @Override
     public @Nullable ResolvePackageHealthMetadataActivityRes execute(
-            final ActivityContext ctx, final @Nullable ResolvePackageHealthMetadataActivityArg arg) throws Exception {
+            final ActivityContext ctx, final @Nullable ResolvePackageHealthMetadataActivityArg arg)
+            throws InterruptedException, MalformedPackageURLException {
         if (arg == null || (arg.getPurlsCount() == 0 && arg.getGithubFetchesCount() == 0)) {
             return ResolvePackageHealthMetadataActivityRes.getDefaultInstance();
         }

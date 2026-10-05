@@ -46,7 +46,6 @@ import org.dependencytrack.metrics.UpdatePortfolioMetricsWorkflow;
 import org.dependencytrack.metrics.VulnerabilityMetricsUpdateTask;
 import org.dependencytrack.notification.ProcessScheduledNotificationsWorkflow;
 import org.dependencytrack.notification.ScheduledNotificationDao;
-import org.dependencytrack.persistence.jdbi.ConfigPropertyDao;
 import org.dependencytrack.pkghealth.PackageHealthSettings;
 import org.dependencytrack.pkghealth.ResolvePackageHealthMetadataWorkflow;
 import org.dependencytrack.pkgmetadata.ResolvePackageMetadataWorkflow;

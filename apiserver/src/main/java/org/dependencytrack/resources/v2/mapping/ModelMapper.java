@@ -30,6 +30,7 @@ import org.dependencytrack.api.v2.model.PackageMetadata;
 import org.dependencytrack.api.v2.model.Scope;
 import org.dependencytrack.api.v2.model.SortDirection;
 import org.dependencytrack.model.Component;
+import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.Project;
 import org.jspecify.annotations.Nullable;
 
@@ -122,7 +123,7 @@ public class ModelMapper {
                 .build();
     }
 
-    public static ComponentHealth map(org.dependencytrack.model.PackageHealthMetadata metadata) {
+    public static ComponentHealth map(PackageHealthMetadata metadata) {
         return ComponentHealth.builder()
                 .purl(metadata.purl().canonicalize())
                 .status(ComponentHealth.StatusEnum.valueOf(metadata.status().name()))

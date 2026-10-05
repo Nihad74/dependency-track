@@ -22,7 +22,7 @@ import com.github.packageurl.PackageURL;
 import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
-import org.jdbi.v3.core.mapper.ColumnMapper;
+import org.dependencytrack.support.jdbi.mapping.PurlColumnMapper;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.statement.StatementContext;
 import org.jspecify.annotations.NullMarked;
@@ -44,6 +44,9 @@ import java.util.Map;
 @NullMarked
 public final class PackageHealthMetadataRowMapper implements RowMapper<PackageHealthMetadata> {
 
+    // Not registered globally, see JdbiFactory. Health rows only hold PURLs written by package
+    // metadata resolution, so they always parse.
+    private final PurlColumnMapper purlColumnMapper = new PurlColumnMapper();
     private final Map<String, List<PackageHealthScorecardCheck>> checksByPurl;
 
     /**
@@ -55,8 +58,6 @@ public final class PackageHealthMetadataRowMapper implements RowMapper<PackageHe
 
     @Override
     public PackageHealthMetadata map(final ResultSet rs, final StatementContext ctx) throws SQLException {
-        final ColumnMapper<PackageURL> purlColumnMapper =
-                ctx.findColumnMapperFor(PackageURL.class).orElseThrow();
         final PackageURL purl = purlColumnMapper.map(rs, "PURL", ctx);
 
         return new PackageHealthMetadata(

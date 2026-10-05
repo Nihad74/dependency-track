@@ -28,6 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.http.HttpClient;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -51,13 +52,12 @@ public final class DepsDevApiClient extends ApiClient {
         this.websiteBaseUrl = DEFAULT_WEBSITE_BASE_URL;
     }
 
-    DepsDevApiClient(
-            final java.net.http.HttpClient httpClient, final ObjectMapper objectMapper, final String apiBaseUrl) {
+    DepsDevApiClient(final HttpClient httpClient, final ObjectMapper objectMapper, final String apiBaseUrl) {
         this(httpClient, objectMapper, apiBaseUrl, apiBaseUrl);
     }
 
     DepsDevApiClient(
-            final java.net.http.HttpClient httpClient,
+            final HttpClient httpClient,
             final ObjectMapper objectMapper,
             final String apiBaseUrl,
             final String websiteBaseUrl) {

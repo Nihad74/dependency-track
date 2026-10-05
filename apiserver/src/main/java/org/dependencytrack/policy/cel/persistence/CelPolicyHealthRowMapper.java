@@ -18,43 +18,43 @@
  */
 package org.dependencytrack.policy.cel.persistence;
 
+import org.dependencytrack.persistence.jdbi.mapping.OptionalColumnRowMapper;
 import org.dependencytrack.proto.policy.v1.HealthMeta;
-import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.statement.StatementContext;
 import org.jspecify.annotations.Nullable;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-import static org.dependencytrack.persistence.jdbi.mapping.RowMapperUtil.maybeSet;
 import static org.dependencytrack.persistence.jdbi.mapping.RowMapperUtil.nullableTimestamp;
 
-public final class CelPolicyHealthRowMapper implements RowMapper<HealthMeta> {
+public final class CelPolicyHealthRowMapper implements OptionalColumnRowMapper<HealthMeta> {
 
     @Override
-    public HealthMeta map(ResultSet rs, StatementContext ctx) throws SQLException {
-        return mapToBuilder(rs).build();
+    public HealthMeta map(ResultSet rs, StatementContext ctx, Columns columns) throws SQLException {
+        return mapToBuilder(rs, columns).build();
     }
 
-    HealthMeta.Builder mapToBuilder(ResultSet rs) throws SQLException {
+    HealthMeta.Builder mapToBuilder(ResultSet rs, Columns columns) throws SQLException {
         final HealthMeta.Builder builder = HealthMeta.newBuilder();
-        maybeSet(rs, "scorecard_score", CelPolicyHealthRowMapper::nullableFloat, builder::setScorecardScore);
-        maybeSet(rs, "avg_issue_age_days", CelPolicyHealthRowMapper::nullableFloat, builder::setAvgIssueAgeDays);
-        maybeSet(
+        columns.maybeSet(rs, "scorecard_score", CelPolicyHealthRowMapper::nullableFloat, builder::setScorecardScore);
+        columns.maybeSet(
+                rs, "avg_issue_age_days", CelPolicyHealthRowMapper::nullableFloat, builder::setAvgIssueAgeDays);
+        columns.maybeSet(
                 rs,
                 "commit_frequency_weekly",
                 CelPolicyHealthRowMapper::nullableFloat,
                 builder::setCommitFrequencyWeekly);
-        maybeSet(
+        columns.maybeSet(
                 rs,
                 "last_commit",
                 (resultSet, columnName) -> nullableTimestamp(resultSet, columnName),
                 builder::setLastCommit);
-        maybeSet(rs, "dependents", CelPolicyHealthRowMapper::nullableLong, builder::setDependents);
-        maybeSet(rs, "bus_factor", CelPolicyHealthRowMapper::nullableInt, builder::setBusFactor);
-        maybeSet(rs, "stars", CelPolicyHealthRowMapper::nullableLong, builder::setStars);
-        maybeSet(rs, "forks", CelPolicyHealthRowMapper::nullableLong, builder::setForks);
-        maybeSet(rs, "is_repo_archived", CelPolicyHealthRowMapper::nullableBoolean, builder::setIsRepoArchived);
+        columns.maybeSet(rs, "dependents", CelPolicyHealthRowMapper::nullableLong, builder::setDependents);
+        columns.maybeSet(rs, "bus_factor", CelPolicyHealthRowMapper::nullableInt, builder::setBusFactor);
+        columns.maybeSet(rs, "stars", CelPolicyHealthRowMapper::nullableLong, builder::setStars);
+        columns.maybeSet(rs, "forks", CelPolicyHealthRowMapper::nullableLong, builder::setForks);
+        columns.maybeSet(rs, "is_repo_archived", CelPolicyHealthRowMapper::nullableBoolean, builder::setIsRepoArchived);
         return builder;
     }
 
