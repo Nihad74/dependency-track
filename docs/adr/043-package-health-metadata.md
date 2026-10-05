@@ -207,10 +207,18 @@ can be sorted by it.
 Shared packages are fetched once. Projects that import the same package see the same health record.
 
 A policy saved before the first fetch does not match until health arrives and the policy run
-starts. An unchanged refresh updates the fetch time and does not start policy evaluation. Average
-issue age and commit frequency move with time alone, so small changes in them count as unchanged.
-A policy that compares them with a threshold sees the crossing at its next evaluation, not at
-the refresh.
+starts. An unchanged refresh updates the fetch time and does not start policy evaluation.
+
+Average issue age and commit frequency move with time alone. A refresh therefore ignores a change
+in average issue age of up to one day beyond the time elapsed since the last fetch, and a change in
+commit frequency below 5%. Each refresh is compared with the previous one, which it then replaces,
+so a slow drift never adds up to a change.
+A policy that compares these values with a threshold, for example an average issue age above 365
+days, sees the crossing at the next policy evaluation of the project, not at the refresh. Projects
+are evaluated again at every BOM upload and at the portfolio analysis, which by default analyzes
+each project again after 24 hours, so the crossing shows up within about a day. Comparing against
+the values at the last policy evaluation would close this gap, but it needs more stored state per
+package for a delay of at most a day.
 
 The project lookup repeats the existing rules for which policies apply to a project, so a limited
 policy does not schedule every project that contains the package. It finds conditions that read
