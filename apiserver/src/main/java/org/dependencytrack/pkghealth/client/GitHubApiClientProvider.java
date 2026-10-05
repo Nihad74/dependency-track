@@ -26,6 +26,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -90,15 +91,17 @@ public final class GitHubApiClientProvider {
     }
 
     private @Nullable String resolveAccessToken() {
+        // Requests only go to api.github.com, so tokens of GitHub Enterprise servers must not be sent.
         final Optional<EnabledRepository> repository =
                 withJdbiHandle(handle ->
                                 handle.attach(RepositoryDao.class).getEnabledRepositories(RepositoryType.GITHUB))
                         .stream()
                         .filter(EnabledRepository::authenticationRequired)
+                        .filter(GitHubApiClientProvider::isGitHubDotCom)
                         .findFirst();
 
         if (repository.isEmpty()) {
-            LOGGER.debug("No authenticated GitHub repository is configured");
+            LOGGER.debug("No authenticated github.com repository is configured");
             return null;
         }
 
@@ -117,6 +120,16 @@ public final class GitHubApiClientProvider {
         }
 
         return accessToken;
+    }
+
+    private static boolean isGitHubDotCom(final EnabledRepository repository) {
+        final String host;
+        try {
+            host = URI.create(repository.url()).getHost();
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        return "github.com".equalsIgnoreCase(host) || "api.github.com".equalsIgnoreCase(host);
     }
 
     private record Resolution(

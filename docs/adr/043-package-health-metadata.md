@@ -124,8 +124,9 @@ We will use two external services.
 * **The GitHub REST API**, only for source repositories hosted on github.com. It provides archive
   state, open issues and pull requests, contributors, commit frequency, bus factor, last commit,
   file count, and whether the repository has a README, a code of conduct, and a security policy.
-  GitHub is only called when an enabled GitHub repository with authentication is configured. Its
-  token is reused. Without it, the GitHub fields stay empty. That is not an error.
+  GitHub is only called when an enabled GitHub repository with authentication and a github.com URL
+  is configured. Its token is reused. Tokens of GitHub Enterprise Server repositories are never sent
+  to github.com. Without such a repository, the GitHub fields stay empty. That is not an error.
 
 Repositories on other hosts, such as GitLab or Bitbucket, only get the data that deps.dev returns.
 

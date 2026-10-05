@@ -29,6 +29,7 @@ import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -136,6 +137,29 @@ class GitHubApiClientProviderTest extends PersistenceCapableTest {
         verify(secretManager, times(3)).getSecretValue("github-token-reference");
     }
 
+    @Test
+    void shouldNotUseTokenOfGitHubEnterpriseRepository() {
+        createGitHubRepository("github-enterprise", "https://github.acme.example", "enterprise-token-reference");
+
+        final var result = provider.get();
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(secretManager);
+    }
+
+    @Test
+    void shouldUseTokenOfGitHubDotComRepositoryWhenEnterpriseRepositoryComesFirst() {
+        createGitHubRepository("github-enterprise", "https://github.acme.example", "enterprise-token-reference");
+        createGitHubRepository("github", "https://github.com", "github-token-reference");
+        when(secretManager.getSecretValue("github-token-reference")).thenReturn("resolved-github-token");
+
+        final var result = provider.get();
+
+        assertThat(result).isPresent();
+        verify(secretManager).getSecretValue("github-token-reference");
+        verify(secretManager, never()).getSecretValue("enterprise-token-reference");
+    }
+
     private void createGitHubRepository(
             final boolean enabled, final boolean authenticationRequired, final String password) {
         qm.createRepository(
@@ -147,5 +171,9 @@ class GitHubApiClientProviderTest extends PersistenceCapableTest {
                 authenticationRequired,
                 null,
                 password);
+    }
+
+    private void createGitHubRepository(final String identifier, final String url, final String password) {
+        qm.createRepository(RepositoryType.GITHUB, identifier, url, true, false, true, null, password);
     }
 }
