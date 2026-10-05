@@ -103,6 +103,7 @@ public final class PackageHealthMetadataDao {
                              , "SCORECARD_SCORE"
                              , "SCORECARD_REF_VERSION"
                              , "SCORECARD_TIMESTAMP"
+                             , "PROJECT_METADATA_OBSERVED_AT"
                              , "DEPS_DEV_URL"
                              , "GITHUB_URL"
                              , "AVG_ISSUE_AGE_DAYS"
@@ -156,6 +157,7 @@ public final class PackageHealthMetadataDao {
                         , "SCORECARD_SCORE"
                         , "SCORECARD_REF_VERSION"
                         , "SCORECARD_TIMESTAMP"
+                        , "PROJECT_METADATA_OBSERVED_AT"
                         , "DEPS_DEV_URL"
                         , "GITHUB_URL"
                         , "AVG_ISSUE_AGE_DAYS"
@@ -181,6 +183,7 @@ public final class PackageHealthMetadataDao {
                         , :scorecardScore
                         , :scorecardReferenceVersion
                         , :scorecardTimestamp
+                        , :projectMetadataObservedAt
                         , :depsDevUrl
                         , :githubUrl
                         , :averageIssueAgeDays
@@ -205,6 +208,7 @@ public final class PackageHealthMetadataDao {
                           , "SCORECARD_SCORE" = EXCLUDED."SCORECARD_SCORE"
                           , "SCORECARD_REF_VERSION" = EXCLUDED."SCORECARD_REF_VERSION"
                           , "SCORECARD_TIMESTAMP" = EXCLUDED."SCORECARD_TIMESTAMP"
+                          , "PROJECT_METADATA_OBSERVED_AT" = EXCLUDED."PROJECT_METADATA_OBSERVED_AT"
                           , "DEPS_DEV_URL" = EXCLUDED."DEPS_DEV_URL"
                           , "GITHUB_URL" = EXCLUDED."GITHUB_URL"
                           , "AVG_ISSUE_AGE_DAYS" = EXCLUDED."AVG_ISSUE_AGE_DAYS"
@@ -231,6 +235,7 @@ public final class PackageHealthMetadataDao {
                     .bind("scorecardScore", metadata.scorecardScore())
                     .bind("scorecardReferenceVersion", metadata.scorecardReferenceVersion())
                     .bind("scorecardTimestamp", metadata.scorecardTimestamp())
+                    .bind("projectMetadataObservedAt", metadata.projectMetadataObservedAt())
                     .bind("depsDevUrl", metadata.depsDevUrl())
                     .bind("githubUrl", metadata.githubUrl())
                     .bind("averageIssueAgeDays", metadata.averageIssueAgeDays())

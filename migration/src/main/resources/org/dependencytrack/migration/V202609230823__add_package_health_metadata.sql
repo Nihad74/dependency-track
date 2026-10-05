@@ -21,6 +21,7 @@ CREATE TABLE "PACKAGE_HEALTH_METADATA" (
     "SCORECARD_SCORE" real,
     "SCORECARD_REF_VERSION" text,
     "SCORECARD_TIMESTAMP" timestamp with time zone,
+    "PROJECT_METADATA_OBSERVED_AT" timestamp with time zone,
     "DEPS_DEV_URL" text,
     "GITHUB_URL" text,
 

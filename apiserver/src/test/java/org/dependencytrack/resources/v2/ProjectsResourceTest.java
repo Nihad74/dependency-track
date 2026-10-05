@@ -696,6 +696,7 @@ public class ProjectsResourceTest extends ResourceTest {
                 null,
                 null,
                 null,
+                null,
                 Instant.parse("2026-01-12T12:00:00Z"),
                 PackageHealthMetadataStatus.PROCESSED,
                 List.of());

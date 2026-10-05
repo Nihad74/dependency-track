@@ -112,7 +112,11 @@ We will use two external services.
 
 * **deps.dev**, without authentication. It provides the default version, the number of dependents,
   the source repository, project data such as stars and forks, and the OpenSSF Scorecard result.
-  Supported package types are npm, Go, Maven, PyPI, NuGet, Cargo, and RubyGems.
+  Supported package types are npm, Go, Maven, PyPI, NuGet, Cargo, and RubyGems. For source
+  repositories on github.com, we also call the endpoint behind the deps.dev project page
+  (`https://deps.dev/_/project/GITHUB/<owner>/<name>`). It returns when deps.dev last observed the
+  project data, which the public API does not provide. This endpoint is not part of the public API
+  and may change without notice. If it fails, the project data is kept and only that time is absent.
 * **The GitHub REST API**, only for source repositories hosted on github.com. It provides archive
   state, open issues and pull requests, contributors, commit frequency, bus factor, last commit,
   file count, and whether the repository has a README, a code of conduct, and a security policy.
@@ -122,9 +126,9 @@ We will use two external services.
 Repositories on other hosts, such as GitLab or Bitbucket, only get the data that deps.dev returns.
 
 Requests send the package type, namespace, name, and version to deps.dev, and the repository owner
-and name to GitHub. **Internal packages are never sent.** A package is internal when it matches the
-configured internal component patterns. This is the same rule that package metadata resolution
-uses to keep internal packages away from public repositories. An internal package gets a
+and name to deps.dev and GitHub. **Internal packages are never sent.** A package is internal when it
+matches the configured internal component patterns. This is the same rule that package metadata
+resolution uses to keep internal packages away from public repositories. An internal package gets a
 `NOT_AVAILABLE` record without any external call. Requests go through the configured HTTP proxy.
 
 ### Turning the feature off

@@ -24,6 +24,8 @@ import com.github.packageurl.PackageURL;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -35,8 +37,10 @@ import java.util.stream.StreamSupport;
 
 public final class DepsDevApiClient extends ApiClient {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(DepsDevApiClient.class);
     private static final String DEFAULT_API_BASE_URL = "https://api.deps.dev";
     private static final String DEFAULT_WEBSITE_BASE_URL = "https://deps.dev";
+    private static final String GITHUB_PROJECT_PREFIX = "github.com/";
 
     private final String apiBaseUrl;
     private final String websiteBaseUrl;
@@ -139,7 +143,7 @@ public final class DepsDevApiClient extends ApiClient {
 
         final String url = "%s/v3/projects/%s".formatted(apiBaseUrl, urlEncode(project));
 
-        return requestParseJsonForResult(url, root -> {
+        final Optional<AnalyzedPackageHealth> metadata = requestParseJsonForResult(url, root -> {
             final var health = new AnalyzedPackageHealth(packagePurl);
 
             health.setStars(longOrNull(root.get("starsCount")));
@@ -159,6 +163,54 @@ public final class DepsDevApiClient extends ApiClient {
 
             return Optional.of(health);
         });
+
+        if (metadata.isPresent()) {
+            attachProjectMetadataObservedAt(project, metadata.get());
+        }
+        return metadata;
+    }
+
+    private void attachProjectMetadataObservedAt(final String project, final AnalyzedPackageHealth metadata)
+            throws IOException, InterruptedException {
+        try {
+            fetchProjectMetadataObservedAt(project).ifPresent(metadata::setProjectMetadataObservedAt);
+        } catch (ApiRateLimitException e) {
+            throw e;
+        } catch (IOException e) {
+            LOGGER.debug("Could not determine project metadata timestamp for {}", project, e);
+        }
+    }
+
+    /**
+     * Returns the time deps.dev last observed GitHub project metadata, such as stars and forks.
+     * The public Insights API does not include this time. It is read from the deps.dev website
+     * endpoint used by the project page.
+     */
+    public Optional<Instant> fetchProjectMetadataObservedAt(final String project)
+            throws IOException, InterruptedException {
+        final String projectName = gitHubProjectName(project);
+        if (projectName == null) {
+            return Optional.empty();
+        }
+
+        final String url = "%s/_/project/GITHUB/%s".formatted(websiteBaseUrl, urlEncode(projectName));
+        final Optional<JsonNode> response = requestJson(url);
+        if (response.isEmpty()) {
+            return Optional.empty();
+        }
+
+        final Long observedAtSeconds = longOrNull(response.get().path("project").get("observedAt"));
+        return observedAtSeconds == null ? Optional.empty() : Optional.of(Instant.ofEpochSecond(observedAtSeconds));
+    }
+
+    private static @Nullable String gitHubProjectName(final @Nullable String project) {
+        if (project == null
+                || !project.regionMatches(true, 0, GITHUB_PROJECT_PREFIX, 0, GITHUB_PROJECT_PREFIX.length())) {
+            return null;
+        }
+
+        final String name = project.substring(GITHUB_PROJECT_PREFIX.length());
+        return name.isBlank() ? null : name;
     }
 
     private static List<PackageHealthScorecardCheck> mapScorecardChecks(
