@@ -120,6 +120,9 @@ public final class PackageHealthMetadataDao {
 
     /**
      * Inserts or updates health metadata, and replaces its scorecard checks.
+     * <p>
+     * Packages whose package metadata no longer exists, for example because package metadata
+     * maintenance deleted it during resolution, are skipped instead of failing the whole batch.
      */
     public void upsertAll(final Collection<PackageHealthMetadata> metadataList) {
         if (metadataList.isEmpty()) {
@@ -132,9 +135,43 @@ public final class PackageHealthMetadataDao {
                 .toList();
 
         jdbiHandle.useTransaction(handle -> {
-            upsertMetadata(handle, sortedMetadata);
-            replaceScorecardChecks(handle, sortedMetadata);
+            final List<PackageHealthMetadata> withPackageMetadata = withLockedPackageMetadata(handle, sortedMetadata);
+            if (withPackageMetadata.isEmpty()) {
+                return;
+            }
+
+            upsertMetadata(handle, withPackageMetadata);
+            replaceScorecardChecks(handle, withPackageMetadata);
         });
+    }
+
+    /**
+     * Locks the package metadata rows of the given health metadata until the transaction ends, so
+     * that package metadata maintenance can not delete them in between.
+     *
+     * @return The health metadata whose package metadata exists
+     */
+    private static List<PackageHealthMetadata> withLockedPackageMetadata(
+            final Handle handle, final List<PackageHealthMetadata> metadataList) {
+        final Set<String> existingPurls = handle.createQuery("""
+                        SELECT "PURL"
+                          FROM "PACKAGE_METADATA"
+                         WHERE "PURL" = ANY(:purls)
+                         ORDER BY "PURL"
+                           FOR KEY SHARE
+                        """)
+                .bindArray(
+                        "purls",
+                        String.class,
+                        metadataList.stream()
+                                .map(metadata -> PurlUtil.purlPackageOnly(metadata.purl()))
+                                .toList())
+                .mapTo(String.class)
+                .collect(Collectors.toSet());
+
+        return metadataList.stream()
+                .filter(metadata -> existingPurls.contains(PurlUtil.purlPackageOnly(metadata.purl())))
+                .toList();
     }
 
     /**
@@ -156,10 +193,15 @@ public final class PackageHealthMetadataDao {
                 .sorted()
                 .toList();
 
+        // Locks the package metadata rows, so that maintenance can not delete them before commit.
         jdbiHandle
                 .createUpdate("""
                         INSERT INTO "PACKAGE_HEALTH_METADATA" ("PURL", "LAST_FETCH", "STATUS")
-                        SELECT UNNEST(:purls), :fetchedAt, 'NOT_AVAILABLE'
+                        SELECT pm."PURL", :fetchedAt, 'NOT_AVAILABLE'
+                          FROM "PACKAGE_METADATA" AS pm
+                         WHERE pm."PURL" = ANY(:purls)
+                         ORDER BY pm."PURL"
+                           FOR KEY SHARE
                         ON CONFLICT ("PURL") DO UPDATE
                         SET "LAST_FETCH" = EXCLUDED."LAST_FETCH"
                         """)

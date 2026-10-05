@@ -23,6 +23,7 @@ import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.model.PackageHealthMetadata;
 import org.dependencytrack.model.PackageHealthMetadataStatus;
 import org.dependencytrack.model.PackageHealthScorecardCheck;
+import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.pkgmetadata.PackageMetadata;
 import org.dependencytrack.pkgmetadata.PackageMetadataDao;
 import org.jdbi.v3.core.Handle;
@@ -218,6 +219,26 @@ class PackageHealthMetadataDaoTest extends PersistenceCapableTest {
         assertThat(actual).containsOnlyKeys(purl.canonicalize(), otherPurl.canonicalize());
         assertThat(actual.get(purl.canonicalize())).isEqualTo(first);
         assertThat(actual.get(otherPurl.canonicalize())).isEqualTo(second);
+    }
+
+    @Test
+    void shouldSkipPackagesWhosePackageMetadataWasDeleted() throws Exception {
+        // For example deleted by package metadata maintenance while the package was being fetched.
+        final var deletedPurl = new PackageURL("pkg:npm/deleted");
+        final var deleted = new AnalyzedPackageHealth(deletedPurl);
+        deleted.setStars(1L);
+        deleted.setScorecardChecks(
+                List.of(new PackageHealthScorecardCheck(deletedPurl, "Maintained", null, 2.0f, null, List.of(), null)));
+        final PackageHealthMetadata stored =
+                createMetadata(100L, List.of(createCheck("Branch-Protection", 8.0f, List.of("detail"))));
+
+        healthMetadataDao.upsertAll(
+                List.of(deleted.toMetadata(PackageHealthMetadataStatus.PROCESSED, LAST_FETCH), stored));
+        healthMetadataDao.recordFailedFetches(List.of(deletedPurl), LAST_FETCH);
+
+        assertThat(healthMetadataDao.get(deletedPurl)).isNull();
+        assertThat(healthMetadataDao.get(purl)).isEqualTo(stored);
+        assertThat(countScorecardChecks()).isEqualTo(1);
     }
 
     private PackageHealthMetadata createMetadata(final Long stars, final List<PackageHealthScorecardCheck> checks) {
