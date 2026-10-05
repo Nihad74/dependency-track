@@ -106,6 +106,8 @@ workflow, so it does not use up the retries that are meant for real failures. Gi
 secondary rate limits are both recognized, and a 429 response without a reset time waits one minute.
 If three waits in a row resolve none of the remaining packages, the workflow skips them. They stay
 due and are fetched again by the next scheduled run, so one package cannot hold the workflow forever.
+A package whose fetch fails for another reason, for example a server error or a response that
+cannot be read, is skipped the same way, and the rest of its batch is still written.
 Cancellation surfaces as an interrupt, not as a failure that is retried.
 
 ### External services and data that leaves the server
@@ -139,8 +141,8 @@ The feature is enabled by default, so that health policies work without extra se
 can turn it off with the `package-health.enabled` setting. When it is off, the scheduled workflow
 does not start and no request leaves the server. A run that is already in progress checks the
 setting before each batch and stops. Deployments without internet access should turn it off.
-Otherwise every run tries each due batch, each batch fails and is retried a few times, and the run
-then moves on to the next batch. With the feature off, stored health stays in the database but is
+Otherwise every run sends a request for each due package, each request fails, and the packages are
+skipped until the next run. With the feature off, stored health stays in the database but is
 hidden: the component lists return no scorecard score, the health resource returns 404, and health
 conditions do not match, so violations they reported earlier are cleared.
 

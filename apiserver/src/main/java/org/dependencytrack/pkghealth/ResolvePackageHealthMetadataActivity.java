@@ -107,7 +107,8 @@ public final class ResolvePackageHealthMetadataActivity
                     unresolvedPurls = purls.subList(i, purls.size());
                     break;
                 }
-                throw e;
+                // Not stored, so the package stays due and is tried again by the next run.
+                LOGGER.warn("Failed to resolve health metadata for {}; Skipping it", purl, e);
             }
         }
 

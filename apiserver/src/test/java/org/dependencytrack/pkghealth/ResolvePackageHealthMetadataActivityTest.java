@@ -42,7 +42,6 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.dependencytrack.model.ConfigPropertyConstants.INTERNAL_COMPONENTS_GROUPS_REGEX;
 import static org.dependencytrack.model.ConfigPropertyConstants.PACKAGE_HEALTH_RESOLUTION_ENABLED;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
@@ -220,21 +219,35 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
     }
 
     @Test
-    void shouldPropagateAnalysisException() throws Exception {
-        final var purl = new PackageURL("pkg:npm/example@1.0.0");
+    void shouldSkipFailedPackageAndStoreTheRest() throws Exception {
+        final var failedPurl = new PackageURL("pkg:npm/failed@1.0.0");
+        final var failedPackagePurl = new PackageURL("pkg:npm/failed");
+        final var fetchedPurl = new PackageURL("pkg:npm/fetched@1.0.0");
+        final var fetchedPackagePurl = new PackageURL("pkg:npm/fetched");
+        createPackageMetadata(failedPackagePurl);
+        createPackageMetadata(fetchedPackagePurl);
 
-        final var expectedException =
-                new PackageHealthAnalyzer.AnalysisException("Analysis failed", new IOException("deps.dev unavailable"));
+        final var model = new AnalyzedPackageHealth(fetchedPackagePurl);
+        model.setStars(10L);
+        when(analyzer.analyze(failedPurl))
+                .thenThrow(new PackageHealthAnalyzer.AnalysisException(
+                        "Analysis failed", new IOException("deps.dev unavailable")));
+        when(analyzer.analyze(fetchedPurl)).thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(model));
 
-        when(analyzer.analyze(purl)).thenThrow(expectedException);
+        final var result = activity.execute(
+                mock(ActivityContext.class),
+                ResolvePackageHealthMetadataActivityArg.newBuilder()
+                        .addPurls(failedPurl.toString())
+                        .addPurls(fetchedPurl.toString())
+                        .build());
 
-        final var arg = ResolvePackageHealthMetadataActivityArg.newBuilder()
-                .addPurls(purl.toString())
-                .build();
-
-        final var thrown = catchThrowable(() -> activity.execute(mock(ActivityContext.class), arg));
-
-        assertThat(thrown).isSameAs(expectedException);
+        assertThat(result.getChangedPurlsList()).containsExactly(fetchedPackagePurl.canonicalize());
+        assertThat(result.getUnresolvedPurlsList()).isEmpty();
+        final var failed = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(failedPackagePurl));
+        assertThat(failed).isNull();
+        final var fetched = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(fetchedPackagePurl));
+        assertThat(fetched).isNotNull();
+        assertThat(fetched.stars()).isEqualTo(10L);
     }
 
     @Test
