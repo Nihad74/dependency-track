@@ -62,7 +62,7 @@ public final class GitHubApiClientProvider {
     public Optional<GitHubApiClient> get() {
         final Instant now = clock.instant();
 
-        @Nullable Resolution current = resolution;
+        Resolution current = resolution;
         if (current != null && current.isFresh(now)) {
             return Optional.ofNullable(current.client());
         }
@@ -73,9 +73,9 @@ public final class GitHubApiClientProvider {
                 return Optional.ofNullable(current.client());
             }
 
-            final @Nullable String accessToken = resolveAccessToken();
-            final @Nullable GitHubApiClient previousClient = current != null ? current.client() : null;
-            final @Nullable GitHubApiClient client;
+            final String accessToken = resolveAccessToken();
+            final GitHubApiClient previousClient = current != null ? current.client() : null;
+            final GitHubApiClient client;
             if (accessToken == null) {
                 client = null;
             } else if (current != null && previousClient != null && accessToken.equals(current.accessToken())) {

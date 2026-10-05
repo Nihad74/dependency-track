@@ -138,8 +138,8 @@ final class PackageHealthPolicyDelta {
             return false;
         }
 
-        final @Nullable Instant previousFetch = previous.lastFetch();
-        final @Nullable Instant nextFetch = next.lastFetch();
+        final Instant previousFetch = previous.lastFetch();
+        final Instant nextFetch = next.lastFetch();
         final double elapsedDays = previousFetch != null && nextFetch != null
                 ? Duration.between(previousFetch, nextFetch).toSeconds() / 86_400.0
                 : 0;
