@@ -32,6 +32,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThatExceptionOfType;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -80,12 +81,10 @@ class PackageHealthAnalyzerTest {
     }
 
     @Test
-    void shouldUseLatestVersionAsDependentsFallback() throws Exception {
+    void shouldCountDependentsOfDefaultVersion() throws Exception {
         final var purl = new PackageURL("pkg:npm/lodash@4.17.20");
 
         when(depsDevApiClient.fetchLatestVersion("NPM", "lodash")).thenReturn(Optional.of("4.17.21"));
-
-        when(depsDevApiClient.fetchDependents("NPM", "lodash", "4.17.20")).thenReturn(Optional.empty());
 
         when(depsDevApiClient.fetchDependents("NPM", "lodash", "4.17.21")).thenReturn(Optional.of(123L));
 
@@ -99,9 +98,8 @@ class PackageHealthAnalyzerTest {
 
         assertThat(available.metadata().getDependents()).isEqualTo(123L);
 
-        verify(depsDevApiClient).fetchDependents("NPM", "lodash", "4.17.20");
-
-        verify(depsDevApiClient).fetchDependents("NPM", "lodash", "4.17.21");
+        // Health is stored per package, so the version of the PURL must not select the dependents.
+        verify(depsDevApiClient, never()).fetchDependents("NPM", "lodash", "4.17.20");
 
         verifyNoInteractions(gitHubApiClientProvider);
     }

@@ -105,13 +105,17 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             """)
     Long getComponentId(@Bind UUID componentUuid);
 
+    /// Package PURL of the component, resolved through its package artifact metadata,
+    /// the same way the component lists and component policies resolve it.
     @SqlQuery("""
-        SELECT "PURL"
-          FROM "COMPONENT"
-         WHERE "UUID" = :componentUuid
+        SELECT "PAM"."PACKAGE_PURL"
+          FROM "COMPONENT" "C"
+         INNER JOIN "PACKAGE_ARTIFACT_METADATA" "PAM"
+            ON "PAM"."PURL" = "C"."PURL"
+         WHERE "C"."UUID" = :componentUuid
         """)
     @Nullable
-    PackageURL getPurl(@Bind UUID componentUuid);
+    PackageURL getPackagePurl(@Bind UUID componentUuid);
 
     /// @since 5.2.0
     @SqlQuery("""

@@ -88,8 +88,8 @@ public final class PackageHealthAnalyzer {
         /*
          * We fetch package health metadata through a combination of deps.dev and the GitHub API.
          *
-         * First, we retrieve the default package version from deps.dev. Dependents are fetched for the version
-         * specified by the PURL falling back to the default version when necessary.
+         * First, we retrieve the default package version from deps.dev. Health is stored per package, not per
+         * version, so dependents are counted for the default version.
          *
          * The default version is then used to determine the source repository. Project metadata, including OpenSSF
          * Scorecard data, is retrieved from deps.dev. For repositories hosted on GitHub, the remaining metadata is
@@ -106,7 +106,7 @@ public final class PackageHealthAnalyzer {
                 return new AnalysisResult.NotAvailable();
             }
 
-            fetchDependents(metadata, system, name, purl.getVersion(), latestVersion.get());
+            fetchDependents(metadata, system, name, latestVersion.get());
 
             final Optional<String> sourceRepository =
                     depsDevClient.fetchSourceRepository(system, name, latestVersion.get());
@@ -143,27 +143,13 @@ public final class PackageHealthAnalyzer {
     }
 
     private void fetchDependents(
-            final AnalyzedPackageHealth metadata,
-            final String system,
-            final String name,
-            final String actualVersion,
-            final String latestVersion)
+            final AnalyzedPackageHealth metadata, final String system, final String name, final String version)
             throws IOException, InterruptedException {
         if (!SYSTEMS_WITH_DEPENDENTS.contains(system)) {
             return;
         }
 
-        Optional<Long> dependents = Optional.empty();
-
-        if (actualVersion != null && !actualVersion.isBlank()) {
-            dependents = depsDevClient.fetchDependents(system, name, actualVersion);
-        }
-
-        if (dependents.isEmpty() && !latestVersion.equals(actualVersion)) {
-            dependents = depsDevClient.fetchDependents(system, name, latestVersion);
-        }
-
-        dependents.ifPresent(metadata::setDependents);
+        depsDevClient.fetchDependents(system, name, version).ifPresent(metadata::setDependents);
     }
 
     private static String toDepsDevPackageName(final PackageURL purl) {

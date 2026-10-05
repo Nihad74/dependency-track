@@ -38,6 +38,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -89,6 +90,7 @@ public final class ResolvePackageHealthMetadataActivity
 
         final List<String> purls = arg.getPurlsList();
         final var metadataToPersist = new ArrayList<PackageHealthMetadata>(purls.size());
+        final var failedPurls = new ArrayList<PackageURL>();
         @Nullable ApiRateLimitException rateLimit = null;
         List<String> unresolvedPurls = List.of();
 
@@ -107,8 +109,10 @@ public final class ResolvePackageHealthMetadataActivity
                     unresolvedPurls = purls.subList(i, purls.size());
                     break;
                 }
-                // Not stored, so the package stays due and is tried again by the next run.
+                // Recorded with a fetch time, so that the package is tried again at its next
+                // refresh instead of on every run, and its stored values are kept.
                 LOGGER.warn("Failed to resolve health metadata for {}; Skipping it", purl, e);
+                failedPurls.add(purl);
             }
         }
 
@@ -116,7 +120,9 @@ public final class ResolvePackageHealthMetadataActivity
             throw new InterruptedException("Interrupted before package health metadata was stored");
         }
 
-        final List<String> changedPurls = metadataToPersist.isEmpty() ? List.of() : persist(metadataToPersist);
+        final List<String> changedPurls = metadataToPersist.isEmpty() && failedPurls.isEmpty()
+                ? List.of()
+                : persist(metadataToPersist, failedPurls, clock.instant());
 
         final var result = ResolvePackageHealthMetadataActivityRes.newBuilder()
                 .addAllChangedPurls(changedPurls)
@@ -127,9 +133,17 @@ public final class ResolvePackageHealthMetadataActivity
         return result.build();
     }
 
-    private static List<String> persist(final List<PackageHealthMetadata> metadataToPersist) {
+    private static List<String> persist(
+            final List<PackageHealthMetadata> metadataToPersist,
+            final List<PackageURL> failedPurls,
+            final Instant fetchedAt) {
         return inJdbiTransaction(handle -> {
             final var dao = new PackageHealthMetadataDao(handle);
+            dao.recordFailedFetches(failedPurls, fetchedAt);
+            if (metadataToPersist.isEmpty()) {
+                return List.of();
+            }
+
             final Map<String, PackageHealthMetadata> previousByPurl = dao.getAll(
                     metadataToPersist.stream().map(PackageHealthMetadata::purl).toList());
             dao.upsertAll(metadataToPersist);

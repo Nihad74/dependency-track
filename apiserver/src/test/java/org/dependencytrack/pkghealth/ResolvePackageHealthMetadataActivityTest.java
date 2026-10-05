@@ -219,7 +219,7 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
     }
 
     @Test
-    void shouldSkipFailedPackageAndStoreTheRest() throws Exception {
+    void shouldRecordFailedPackageAndStoreTheRest() throws Exception {
         final var failedPurl = new PackageURL("pkg:npm/failed@1.0.0");
         final var failedPackagePurl = new PackageURL("pkg:npm/failed");
         final var fetchedPurl = new PackageURL("pkg:npm/fetched@1.0.0");
@@ -243,11 +243,48 @@ class ResolvePackageHealthMetadataActivityTest extends PersistenceCapableTest {
 
         assertThat(result.getChangedPurlsList()).containsExactly(fetchedPackagePurl.canonicalize());
         assertThat(result.getUnresolvedPurlsList()).isEmpty();
+        // Recorded with a fetch time, so that the next hourly run does not select it again.
         final var failed = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(failedPackagePurl));
-        assertThat(failed).isNull();
+        assertThat(failed).isNotNull();
+        assertThat(failed.status()).isEqualTo(PackageHealthMetadataStatus.NOT_AVAILABLE);
+        assertThat(failed.lastFetch()).isEqualTo(NOW);
         final var fetched = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(fetchedPackagePurl));
         assertThat(fetched).isNotNull();
         assertThat(fetched.stars()).isEqualTo(10L);
+    }
+
+    @Test
+    void shouldKeepStoredValuesWhenRefreshFails() throws Exception {
+        final var purl = new PackageURL("pkg:npm/example@1.0.0");
+        final var packagePurl = new PackageURL("pkg:npm/example");
+        createPackageMetadata(packagePurl);
+
+        final Instant previousFetch = NOW.minus(Duration.ofDays(1));
+        final var stored = new AnalyzedPackageHealth(packagePurl);
+        stored.setStars(100L);
+        withJdbiHandle(handle -> {
+            new PackageHealthMetadataDao(handle)
+                    .upsertAll(List.of(stored.toMetadata(PackageHealthMetadataStatus.PROCESSED, previousFetch)));
+            return null;
+        });
+
+        when(analyzer.analyze(purl))
+                .thenThrow(new PackageHealthAnalyzer.AnalysisException(
+                        "Analysis failed", new IOException("deps.dev unavailable")));
+
+        final var result = activity.execute(
+                mock(ActivityContext.class),
+                ResolvePackageHealthMetadataActivityArg.newBuilder()
+                        .addPurls(purl.toString())
+                        .build());
+
+        // A failure must not clear values that policies act on, nor start policy evaluation.
+        assertThat(result.getChangedPurlsList()).isEmpty();
+        final var persisted = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(packagePurl));
+        assertThat(persisted).isNotNull();
+        assertThat(persisted.status()).isEqualTo(PackageHealthMetadataStatus.PROCESSED);
+        assertThat(persisted.stars()).isEqualTo(100L);
+        assertThat(persisted.lastFetch()).isEqualTo(NOW);
     }
 
     @Test

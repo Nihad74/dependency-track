@@ -138,12 +138,12 @@ public class ComponentsResource extends AbstractApiResource implements Component
                 throw new NotFoundException("Package health is disabled");
             }
 
-            final PackageURL purl = handle.attach(ComponentDao.class).getPurl(uuid);
-            if (purl == null) {
-                throw new NotFoundException("Component has no package URL");
+            final PackageURL packagePurl = handle.attach(ComponentDao.class).getPackagePurl(uuid);
+            if (packagePurl == null) {
+                throw new NotFoundException("Package artifact metadata of the component could not be found");
             }
 
-            final PackageHealthMetadata metadata = new PackageHealthMetadataDao(handle).get(purl);
+            final PackageHealthMetadata metadata = new PackageHealthMetadataDao(handle).get(packagePurl);
             if (metadata == null) {
                 throw new NotFoundException("Package health metadata could not be found");
             }

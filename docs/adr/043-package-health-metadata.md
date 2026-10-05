@@ -68,15 +68,17 @@ package metadata also deletes its health record and its checks. This keeps one r
 package data is kept: the existing package metadata maintenance decides it.
 
 The new tables are only read and written through JDBI with plain SQL, as required for new
-persistence code. They do not have JDO model classes. The component list queries of the REST API v2
-and component policies read health the same way as package metadata: through the package artifact
-metadata of the component. A component gets health once its artifact metadata has been resolved, and
-the lookup that re-evaluates projects after a health change finds exactly those components.
+persistence code. They do not have JDO model classes. The component list queries of the REST API v2,
+the component health resource, and component policies read health the same way as package metadata:
+through the package artifact metadata of the component. A component gets health once its artifact
+metadata has been resolved, and the lookup that re-evaluates projects after a health change finds
+exactly those components.
 
 Each health record has a status. `PROCESSED` means the external services returned data.
 `NOT_AVAILABLE` means there was nothing to fetch, for example because the package is unknown to
-deps.dev or is internal. A `NOT_AVAILABLE` record still has a fetch time, so the package is not
-asked again for 24 hours. Policies and the component lists only read `PROCESSED` records.
+deps.dev or is internal, or because its first fetch failed. A `NOT_AVAILABLE` record still has a
+fetch time, so the package is not asked again for 24 hours. Policies and the component lists only
+read `PROCESSED` records.
 
 Every refresh replaces all scorecard checks of a package. Reads and writes happen for a whole batch
 of packages at a time, not one package at a time.
@@ -107,15 +109,19 @@ secondary rate limits are both recognized, and a 429 response without a reset ti
 If three waits in a row resolve none of the remaining packages, the workflow skips them. They stay
 due and are fetched again by the next scheduled run, so one package cannot hold the workflow forever.
 A package whose fetch fails for another reason, for example a server error or a response that
-cannot be read, is skipped the same way, and the rest of its batch is still written.
+cannot be read, gets its fetch time recorded, and the rest of its batch is still written. A package
+without a health record gets a `NOT_AVAILABLE` record; an existing record keeps its values. Either
+way the package is due again 24 hours later, not at the next hourly run, and a failure neither
+clears health that policies act on nor starts policy evaluation.
 Cancellation surfaces as an interrupt, not as a failure that is retried.
 
 ### External services and data that leaves the server
 
 We will use two external services.
 
-* **deps.dev**, without authentication. It provides the default version, the number of dependents,
-  the source repository, project data such as stars and forks, and the OpenSSF Scorecard result.
+* **deps.dev**, without authentication. It provides the default version, the number of dependents
+  of the default version, the source repository, project data such as stars and forks, and the
+  OpenSSF Scorecard result.
   Supported package types are npm, Go, Maven, PyPI, NuGet, Cargo, and RubyGems. For source
   repositories on github.com, we also call the endpoint behind the deps.dev project page
   (`https://deps.dev/_/project/GITHUB/<owner>/<name>`). It returns when deps.dev last observed the

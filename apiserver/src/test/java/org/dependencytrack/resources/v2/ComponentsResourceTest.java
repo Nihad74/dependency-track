@@ -1171,6 +1171,34 @@ public class ComponentsResourceTest extends ResourceTest {
         assertThat(response.getStatus()).isEqualTo(404);
     }
 
+    @Test
+    public void getComponentHealthWithoutArtifactMetadataTest() throws Exception {
+        initializeWithPermissions(Permissions.VIEW_PORTFOLIO);
+
+        final Project project = qm.createProject("test", null, "1.0", null, null, null, null, false);
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("comp");
+        component.setPurl(new PackageURL("maven", "test", "comp", "1.0", null, null));
+        qm.createComponent(component, false);
+
+        // Health exists for the package, but the component's artifact metadata is not resolved yet.
+        // The component lists and policies do not see health then, so the resource must not either.
+        final var packagePurl = new PackageURL("maven", "test", "comp", null, null, null);
+        useJdbiHandle(handle -> new PackageMetadataDao(handle)
+                .upsertAll(List.of(new PackageMetadata(packagePurl, null, null, Instant.now(), null, null))));
+        useJdbiHandle(handle -> new PackageHealthMetadataDao(handle)
+                .upsertAll(List.of(new AnalyzedPackageHealth(packagePurl)
+                        .toMetadata(PackageHealthMetadataStatus.PROCESSED, Instant.now()))));
+
+        final Response response = jersey.target("/components/" + component.getUuid() + "/health")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get();
+
+        assertThat(response.getStatus()).isEqualTo(404);
+    }
+
     private Component createComponentWithPublishedAt(
             final Project project, final String name, final Instant publishedAt) throws Exception {
         final var component = new Component();
@@ -1246,8 +1274,12 @@ public class ComponentsResourceTest extends ResourceTest {
         qm.createComponent(component, false);
 
         final var packagePurl = new PackageURL("maven", "test", "comp", null, null, null);
+        final Instant resolvedAt = Instant.now();
         useJdbiHandle(handle -> new PackageMetadataDao(handle)
-                .upsertAll(List.of(new PackageMetadata(packagePurl, null, null, Instant.now(), null, null))));
+                .upsertAll(List.of(new PackageMetadata(packagePurl, null, null, resolvedAt, null, null))));
+        useJdbiHandle(handle -> new PackageArtifactMetadataDao(handle)
+                .upsertAll(List.of(new PackageArtifactMetadata(
+                        component.getPurl(), packagePurl, null, null, null, null, null, null, "central", resolvedAt))));
         return component;
     }
 }

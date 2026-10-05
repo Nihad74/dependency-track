@@ -28,6 +28,7 @@ import org.jdbi.v3.core.statement.PreparedBatch;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
@@ -134,6 +135,37 @@ public final class PackageHealthMetadataDao {
             upsertMetadata(handle, sortedMetadata);
             replaceScorecardChecks(handle, sortedMetadata);
         });
+    }
+
+    /**
+     * Records a fetch that failed, so that the package is not due again until its next refresh.
+     * <p>
+     * A package without a health record gets a {@link org.dependencytrack.model.PackageHealthMetadataStatus#NOT_AVAILABLE}
+     * record. An existing record only gets the new fetch time and keeps its values, so that a failure
+     * does not clear health that policies already act on.
+     */
+    public void recordFailedFetches(final Collection<PackageURL> purls, final Instant fetchedAt) {
+        if (purls.isEmpty()) {
+            return;
+        }
+
+        // Sorted for the same lock order as upsertAll.
+        final List<String> packagePurls = purls.stream()
+                .map(PurlUtil::purlPackageOnly)
+                .distinct()
+                .sorted()
+                .toList();
+
+        jdbiHandle
+                .createUpdate("""
+                        INSERT INTO "PACKAGE_HEALTH_METADATA" ("PURL", "LAST_FETCH", "STATUS")
+                        SELECT UNNEST(:purls), :fetchedAt, 'NOT_AVAILABLE'
+                        ON CONFLICT ("PURL") DO UPDATE
+                        SET "LAST_FETCH" = EXCLUDED."LAST_FETCH"
+                        """)
+                .bindArray("purls", String.class, packagePurls)
+                .bind("fetchedAt", fetchedAt)
+                .execute();
     }
 
     private static void upsertMetadata(final Handle handle, final List<PackageHealthMetadata> metadataList) {
