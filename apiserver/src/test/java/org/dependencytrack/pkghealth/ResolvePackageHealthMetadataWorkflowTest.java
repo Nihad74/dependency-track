@@ -63,6 +63,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -265,6 +266,37 @@ class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
         verify(analyzer, times(4)).analyze(purl);
         final var persisted = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(purl));
         assertThat(persisted).isNull();
+    }
+
+    @Test
+    void shouldFetchOnlyGitHubAgainAfterGitHubRateLimit() throws Exception {
+        final var purl = new PackageURL("pkg:npm/a");
+        final var repository = "github.com/acme/a";
+        createPackageMetadata(purl);
+
+        final var depsDevPart = new AnalyzedPackageHealth(purl);
+        depsDevPart.setStars(10L);
+        when(analyzer.analyze(purl))
+                .thenReturn(new PackageHealthAnalyzer.AnalysisResult.Available(depsDevPart, repository));
+        final var gitHubPart = new AnalyzedPackageHealth(purl);
+        gitHubPart.setContributors(3L);
+        when(analyzer.analyzeGitHubRepository(purl, repository))
+                .thenThrow(new PackageHealthAnalyzer.AnalysisException(
+                        "GitHub request failed", new ApiRateLimitException(Instant.now())))
+                .thenReturn(Optional.of(gitHubPart));
+
+        final UUID runId = workflowTest
+                .getEngine()
+                .createRun(new CreateWorkflowRunRequest<>(ResolvePackageHealthMetadataWorkflow.class));
+
+        workflowTest.awaitRunStatus(runId, WorkflowRunStatus.COMPLETED, Duration.ofSeconds(90));
+
+        verify(analyzer, times(1)).analyze(purl);
+        verify(analyzer, times(2)).analyzeGitHubRepository(purl, repository);
+        final var persisted = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(purl));
+        assertThat(persisted).isNotNull();
+        assertThat(persisted.stars()).isEqualTo(10L);
+        assertThat(persisted.contributors()).isEqualTo(3L);
     }
 
     @Test

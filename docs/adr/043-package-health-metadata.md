@@ -111,17 +111,31 @@ workflow steps per few packages. Package metadata resolution writes its results 
 same size. The batch size does not change how many requests are sent per hour; the rate limits
 decide that.
 
-When a service answers with a rate limit, the packages fetched so far are written, and the workflow
-waits until the limit resets before it fetches the rest of the batch. The wait happens in the
-workflow, so it does not use up the retries that are meant for real failures. GitHub's primary and
-secondary rate limits are both recognized, and a 429 response without a reset time waits one minute.
-If three waits in a row resolve none of the remaining packages, the workflow skips them. They stay
-due and are fetched again by the next scheduled run, so one package cannot hold the workflow forever.
-A package whose fetch fails for another reason, for example a server error or a response that
-cannot be read, gets its fetch time recorded, and the rest of its batch is still written. A package
-without a health record gets a `NOT_AVAILABLE` record; an existing record keeps its values. Either
-way the package is due again 24 hours later, not at the next hourly run, and a failure neither
-clears health that policies act on nor starts policy evaluation.
+Each package is fetched in two parts. The deps.dev part comes first and names the source
+repository. For a repository on github.com, the GitHub part follows. The two parts fail
+independently, so a GitHub problem never discards deps.dev data:
+
+* When the GitHub part fails, for example with a server error, the deps.dev part is still written,
+  and the package keeps the GitHub values it had stored.
+* When GitHub answers with a rate limit, the deps.dev part is still written, and the batch goes on
+  with deps.dev only. After the limit resets, the workflow fetches only the missing GitHub parts
+  and adds them to the stored records, without asking deps.dev again.
+
+When deps.dev answers with a rate limit, the packages fetched so far are written, and the workflow
+waits until the limit resets before it fetches the rest of the batch. With pending work for both
+services, it waits for the earlier reset. The wait happens in the workflow, so it does not use up
+the retries that are meant for real failures. GitHub's primary and secondary rate limits are both
+recognized, and a 429 response without a reset time waits one minute. If three waits in a row
+resolve nothing, the workflow skips the rest of the batch, so one package cannot hold the workflow
+forever. Packages that still needed deps.dev stay due and are fetched again by the next scheduled
+run. Packages that only needed GitHub keep their stored GitHub values and get new ones at their
+next refresh, 24 hours later.
+
+A package whose deps.dev part fails for another reason, for example a server error or a response
+that cannot be read, gets its fetch time recorded, and the rest of its batch is still written. A
+package without a health record gets a `NOT_AVAILABLE` record; an existing record keeps its values.
+Either way the package is due again 24 hours later, not at the next hourly run, and a failure
+neither clears health that policies act on nor starts policy evaluation.
 Cancellation surfaces as an interrupt, not as a failure that is retried.
 
 ### External services and data that leaves the server

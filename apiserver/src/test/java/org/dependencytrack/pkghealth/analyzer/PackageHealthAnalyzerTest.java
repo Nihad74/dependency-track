@@ -126,6 +126,7 @@ class PackageHealthAnalyzerTest {
         final var available = (PackageHealthAnalyzer.AnalysisResult.Available) result;
 
         assertThat(available.metadata().getDependents()).isEqualTo(42L);
+        assertThat(available.gitHubRepository()).isNull();
 
         verify(depsDevApiClient).fetchProjectMetadata(packagePurl, "gitlab.com/acme/example");
 
@@ -133,35 +134,7 @@ class PackageHealthAnalyzerTest {
     }
 
     @Test
-    void shouldReturnDepsDevMetadataWhenGitHubIsNotConfigured() throws Exception {
-        final var purl = new PackageURL("pkg:npm/example@1.0.0");
-        final var packagePurl = new PackageURL("pkg:npm/example");
-
-        when(depsDevApiClient.fetchLatestVersion("NPM", "example")).thenReturn(Optional.of("1.0.0"));
-
-        when(depsDevApiClient.fetchDependents("NPM", "example", "1.0.0")).thenReturn(Optional.of(42L));
-
-        when(depsDevApiClient.fetchSourceRepository("NPM", "example", "1.0.0"))
-                .thenReturn(Optional.of("github.com/acme/example"));
-
-        when(depsDevApiClient.fetchProjectMetadata(packagePurl, "github.com/acme/example"))
-                .thenReturn(Optional.empty());
-
-        when(gitHubApiClientProvider.get()).thenReturn(Optional.empty());
-
-        final var result = analyzer.analyze(purl);
-
-        assertThat(result).isInstanceOf(PackageHealthAnalyzer.AnalysisResult.Available.class);
-
-        final var available = (PackageHealthAnalyzer.AnalysisResult.Available) result;
-
-        assertThat(available.metadata().getDependents()).isEqualTo(42L);
-
-        verify(gitHubApiClientProvider).get();
-    }
-
-    @Test
-    void shouldMergeDepsDevAndGitHubMetadata() throws Exception {
+    void shouldReturnDepsDevMetadataAndGitHubRepositoryWithoutCallingGitHub() throws Exception {
         final var purl = new PackageURL("pkg:npm/example@1.0.0");
         final var packagePurl = new PackageURL("pkg:npm/example");
         final var repository = "github.com/acme/example";
@@ -170,46 +143,53 @@ class PackageHealthAnalyzerTest {
         depsDevMetadata.setStars(100L);
         depsDevMetadata.setScorecardScore(8.5f);
 
-        final var gitHubMetadata = new AnalyzedPackageHealth(packagePurl);
-        gitHubMetadata.setContributors(12L);
-        gitHubMetadata.setHasReadme(true);
-
-        final var gitHubApiClient = mock(GitHubApiClient.class);
-
         when(depsDevApiClient.fetchLatestVersion("NPM", "example")).thenReturn(Optional.of("1.0.0"));
-
         when(depsDevApiClient.packagePageUrl("NPM", "example")).thenReturn("https://deps.dev/npm/example");
-
         when(depsDevApiClient.fetchDependents("NPM", "example", "1.0.0")).thenReturn(Optional.of(42L));
-
         when(depsDevApiClient.fetchSourceRepository("NPM", "example", "1.0.0")).thenReturn(Optional.of(repository));
-
         when(depsDevApiClient.fetchProjectMetadata(packagePurl, repository)).thenReturn(Optional.of(depsDevMetadata));
-
-        when(gitHubApiClientProvider.get()).thenReturn(Optional.of(gitHubApiClient));
-
-        when(gitHubApiClient.fetchRepositoryMetadata(packagePurl, repository)).thenReturn(Optional.of(gitHubMetadata));
 
         final var result = analyzer.analyze(purl);
 
         assertThat(result).isInstanceOf(PackageHealthAnalyzer.AnalysisResult.Available.class);
+        final var available = (PackageHealthAnalyzer.AnalysisResult.Available) result;
+        assertThat(available.gitHubRepository()).isEqualTo(repository);
 
-        final var metadata = ((PackageHealthAnalyzer.AnalysisResult.Available) result).metadata();
-
+        final var metadata = available.metadata();
         assertThat(metadata.getPurl()).isEqualTo(packagePurl);
         assertThat(metadata.getDependents()).isEqualTo(42L);
         assertThat(metadata.getDepsDevUrl()).isEqualTo("https://deps.dev/npm/example");
         assertThat(metadata.getGithubUrl()).isEqualTo("https://github.com/acme/example");
-
-        // deps.dev data
         assertThat(metadata.getStars()).isEqualTo(100L);
         assertThat(metadata.getScorecardScore()).isEqualTo(8.5f);
+        assertThat(metadata.getContributors()).isNull();
 
-        // GitHub data
-        assertThat(metadata.getContributors()).isEqualTo(12L);
-        assertThat(metadata.getHasReadme()).isTrue();
+        verifyNoInteractions(gitHubApiClientProvider);
+    }
 
-        verify(gitHubApiClient).fetchRepositoryMetadata(packagePurl, repository);
+    @Test
+    void shouldReturnNoGitHubPartWhenGitHubIsNotConfigured() throws Exception {
+        final var packagePurl = new PackageURL("pkg:npm/example");
+
+        when(gitHubApiClientProvider.get()).thenReturn(Optional.empty());
+
+        assertThat(analyzer.analyzeGitHubRepository(packagePurl, "github.com/acme/example"))
+                .isEmpty();
+    }
+
+    @Test
+    void shouldWrapGitHubIOExceptionInAnalysisException() throws Exception {
+        final var packagePurl = new PackageURL("pkg:npm/example");
+        final var repository = "github.com/acme/example";
+
+        final var gitHubApiClient = mock(GitHubApiClient.class);
+        when(gitHubApiClientProvider.get()).thenReturn(Optional.of(gitHubApiClient));
+        when(gitHubApiClient.fetchRepositoryMetadata(packagePurl, repository))
+                .thenThrow(new IOException("GitHub unavailable"));
+
+        assertThatExceptionOfType(PackageHealthAnalyzer.AnalysisException.class)
+                .isThrownBy(() -> analyzer.analyzeGitHubRepository(packagePurl, repository))
+                .withCauseInstanceOf(IOException.class);
     }
 
     @Test

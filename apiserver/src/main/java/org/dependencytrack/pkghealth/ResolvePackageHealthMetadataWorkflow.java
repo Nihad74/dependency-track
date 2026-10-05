@@ -28,6 +28,7 @@ import org.dependencytrack.dex.api.WorkflowSpec;
 import org.dependencytrack.dex.api.failure.ActivityFailureException;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageHealthMetadataCandidatesArg;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageHealthMetadataCandidatesRes;
+import org.dependencytrack.proto.internal.workflow.v1.PackageHealthGitHubFetch;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityArg;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataActivityRes;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageHealthMetadataWorkflowArg;
@@ -82,9 +83,14 @@ public final class ResolvePackageHealthMetadataWorkflow
         }
 
         List<String> pendingPurls = fetchResult.getPurlsList();
+        List<PackageHealthGitHubFetch> pendingGitHubFetches = List.of();
         int rateLimitWaitsWithoutProgress = 0;
-        while (!pendingPurls.isEmpty()) {
-            ctx.logger().debug("Resolving health metadata for {} packages", pendingPurls.size());
+        while (!pendingPurls.isEmpty() || !pendingGitHubFetches.isEmpty()) {
+            ctx.logger()
+                    .debug(
+                            "Resolving health metadata for {} packages and GitHub data for {} packages",
+                            pendingPurls.size(),
+                            pendingGitHubFetches.size());
 
             final ResolvePackageHealthMetadataActivityRes resolveResult;
             try {
@@ -93,6 +99,7 @@ public final class ResolvePackageHealthMetadataWorkflow
                                 .withRetryPolicy(RESOLVE_RETRY_POLICY)
                                 .withArgument(ResolvePackageHealthMetadataActivityArg.newBuilder()
                                         .addAllPurls(pendingPurls)
+                                        .addAllGithubFetches(pendingGitHubFetches)
                                         .build()))
                         .await();
             } catch (ActivityFailureException e) {
@@ -112,18 +119,20 @@ public final class ResolvePackageHealthMetadataWorkflow
                         .await();
             }
 
-            if (resolveResult.getUnresolvedPurlsCount() == 0) {
+            final int remaining =
+                    resolveResult.getUnresolvedPurlsCount() + resolveResult.getPendingGithubFetchesCount();
+            if (remaining == 0) {
                 break;
             }
 
-            if (resolveResult.getUnresolvedPurlsCount() < pendingPurls.size()) {
+            if (remaining < pendingPurls.size() + pendingGitHubFetches.size()) {
                 rateLimitWaitsWithoutProgress = 0;
             } else if (rateLimitWaitsWithoutProgress == MAX_RATE_LIMIT_WAITS_WITHOUT_PROGRESS) {
                 ctx.logger()
                         .warn(
                                 "External API rate limit still reached after {} waits; Skipping {} packages until the next run",
                                 rateLimitWaitsWithoutProgress,
-                                resolveResult.getUnresolvedPurlsCount());
+                                remaining);
                 break;
             }
             rateLimitWaitsWithoutProgress++;
@@ -133,15 +142,12 @@ public final class ResolvePackageHealthMetadataWorkflow
             final Instant resumeAt = Instant.ofEpochMilli(Timestamps.toMillis(resolveResult.getRateLimitResetAt()))
                     .plus(RATE_LIMIT_RESET_MARGIN);
             final Duration wait = Duration.between(ctx.currentTime(), resumeAt);
-            ctx.logger()
-                    .info(
-                            "External API rate limit reached; Resuming {} packages at {}",
-                            resolveResult.getUnresolvedPurlsCount(),
-                            resumeAt);
+            ctx.logger().info("External API rate limit reached; Resuming {} packages at {}", remaining, resumeAt);
             ctx.createTimer("rate-limit-reset", wait.compareTo(MIN_RATE_LIMIT_WAIT) > 0 ? wait : MIN_RATE_LIMIT_WAIT)
                     .await();
 
             pendingPurls = resolveResult.getUnresolvedPurlsList();
+            pendingGitHubFetches = resolveResult.getPendingGithubFetchesList();
         }
 
         if (fetchResult.getHasMore()) {

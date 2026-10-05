@@ -24,6 +24,7 @@ import org.dependencytrack.pkghealth.client.GitHubApiClient;
 import org.dependencytrack.pkghealth.client.GitHubApiClientProvider;
 import org.dependencytrack.pkghealth.model.AnalyzedPackageHealth;
 import org.dependencytrack.util.PurlUtil;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -69,6 +70,11 @@ public final class PackageHealthAnalyzer {
     }
 
     /**
+     * Fetches the deps.dev part of the health of a package. When the source repository is hosted on
+     * github.com, the result names it, and {@link #analyzeGitHubRepository(PackageURL, String)}
+     * fetches the rest. The two are separate so that a GitHub failure or rate limit does not
+     * discard the deps.dev data.
+     *
      * @return {@link AnalysisResult.NotAvailable} for PURL types outside {@link #supportedPurlTypes()}
      */
     public AnalysisResult analyze(final PackageURL purl) throws AnalysisException, InterruptedException {
@@ -92,8 +98,8 @@ public final class PackageHealthAnalyzer {
          * version, so dependents are counted for the default version.
          *
          * The default version is then used to determine the source repository. Project metadata, including OpenSSF
-         * Scorecard data, is retrieved from deps.dev. For repositories hosted on GitHub, the remaining metadata is
-         * fetched through the GitHub API.
+         * Scorecard data, is retrieved from deps.dev. For repositories hosted on GitHub, the caller fetches the
+         * remaining metadata through analyzeGitHubRepository.
          *
          * For projects not hosted on GitHub, only the metadata available through deps.dev can currently be retrieved.
          */
@@ -127,18 +133,31 @@ public final class PackageHealthAnalyzer {
 
             metadata.setGithubUrl(GitHubApiClient.repositoryPageUrl(repository));
 
-            final Optional<GitHubApiClient> gitHubClient = gitHubClientProvider.get();
-
-            if (gitHubClient.isEmpty()) {
-                LOGGER.debug("GitHub metadata analysis is not configured");
-                return new AnalysisResult.Available(metadata);
-            }
-
-            gitHubClient.get().fetchRepositoryMetadata(packagePurl, repository).ifPresent(metadata::mergeFrom);
-
-            return new AnalysisResult.Available(metadata);
+            return new AnalysisResult.Available(metadata, repository);
         } catch (IOException e) {
             throw new AnalysisException("Package health analysis failed for " + packagePurl, e);
+        }
+    }
+
+    /**
+     * Fetches the GitHub part of the health of a package.
+     *
+     * @param packagePurl Package URL without version, qualifiers, or subpath
+     * @param repository  Repository as returned by {@link AnalysisResult.Available#gitHubRepository()}
+     * @return Empty when GitHub is not configured or does not know the repository
+     */
+    public Optional<AnalyzedPackageHealth> analyzeGitHubRepository(
+            final PackageURL packagePurl, final String repository) throws AnalysisException, InterruptedException {
+        final Optional<GitHubApiClient> gitHubClient = gitHubClientProvider.get();
+        if (gitHubClient.isEmpty()) {
+            LOGGER.debug("GitHub metadata analysis is not configured");
+            return Optional.empty();
+        }
+
+        try {
+            return gitHubClient.get().fetchRepositoryMetadata(packagePurl, repository);
+        } catch (IOException e) {
+            throw new AnalysisException("GitHub analysis failed for " + packagePurl, e);
         }
     }
 
@@ -176,7 +195,16 @@ public final class PackageHealthAnalyzer {
 
     public sealed interface AnalysisResult {
 
-        record Available(AnalyzedPackageHealth metadata) implements AnalysisResult {}
+        /**
+         * @param gitHubRepository Source repository, if it is hosted on github.com, for example github.com/owner/repo
+         */
+        record Available(
+                AnalyzedPackageHealth metadata, @Nullable String gitHubRepository) implements AnalysisResult {
+
+            public Available(final AnalyzedPackageHealth metadata) {
+                this(metadata, null);
+            }
+        }
 
         record NotAvailable() implements AnalysisResult {}
     }
