@@ -101,7 +101,16 @@ packages that have package metadata, a type that deps.dev supports, and either n
 a last fetch that is at least 24 hours old. The hourly trigger keeps the real refresh interval close
 to 24 hours. A daily trigger would refresh most packages only every 48 hours.
 
-For each batch, the external calls finish before the batch is written in one database transaction.
+A batch holds 25 packages. It is written in one database transaction once all of its external
+calls are done, so a crash, timeout, or cancellation loses the requests of at most one batch. A
+package hosted on GitHub costs at least eight GitHub requests, so 25 packages are already a few
+hundred requests and minutes of work. The workflow also checks whether the feature is still enabled
+before each batch, and changed packages start policy evaluation after each batch. Larger batches
+would lose more work and react later. Smaller batches would add a candidate query and several
+workflow steps per few packages. Package metadata resolution writes its results in groups of the
+same size. The batch size does not change how many requests are sent per hour; the rate limits
+decide that.
+
 When a service answers with a rate limit, the packages fetched so far are written, and the workflow
 waits until the limit resets before it fetches the rest of the batch. The wait happens in the
 workflow, so it does not use up the retries that are meant for real failures. GitHub's primary and
