@@ -59,6 +59,8 @@ public final class ResolvePackageHealthMetadataWorkflow
      */
     private static final Duration MIN_RATE_LIMIT_WAIT = Duration.ofSeconds(10);
 
+    private static final int MAX_RATE_LIMIT_WAITS_WITHOUT_PROGRESS = 3;
+
     @Override
     public @Nullable Void execute(
             final WorkflowContext<@Nullable ResolvePackageHealthMetadataWorkflowArg> ctx,
@@ -80,6 +82,7 @@ public final class ResolvePackageHealthMetadataWorkflow
         }
 
         List<String> pendingPurls = fetchResult.getPurlsList();
+        int rateLimitWaitsWithoutProgress = 0;
         while (!pendingPurls.isEmpty()) {
             ctx.logger().debug("Resolving health metadata for {} packages", pendingPurls.size());
 
@@ -112,6 +115,18 @@ public final class ResolvePackageHealthMetadataWorkflow
             if (resolveResult.getUnresolvedPurlsCount() == 0) {
                 break;
             }
+
+            if (resolveResult.getUnresolvedPurlsCount() < pendingPurls.size()) {
+                rateLimitWaitsWithoutProgress = 0;
+            } else if (rateLimitWaitsWithoutProgress == MAX_RATE_LIMIT_WAITS_WITHOUT_PROGRESS) {
+                ctx.logger()
+                        .warn(
+                                "External API rate limit still reached after {} waits; Skipping {} packages until the next run",
+                                rateLimitWaitsWithoutProgress,
+                                resolveResult.getUnresolvedPurlsCount());
+                break;
+            }
+            rateLimitWaitsWithoutProgress++;
 
             // Wait in the workflow, not through activity retries, so that waiting
             // for a rate limit does not use up the attempts meant for real failures.

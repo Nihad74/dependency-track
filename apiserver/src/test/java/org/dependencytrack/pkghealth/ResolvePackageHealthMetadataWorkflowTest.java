@@ -247,6 +247,27 @@ class ResolvePackageHealthMetadataWorkflowTest extends PersistenceCapableTest {
     }
 
     @Test
+    void shouldSkipPackagesThatStayRateLimited() throws Exception {
+        final var purl = new PackageURL("pkg:npm/a");
+        createPackageMetadata(purl);
+
+        when(analyzer.analyze(purl))
+                .thenThrow(new PackageHealthAnalyzer.AnalysisException(
+                        "GitHub request failed", new ApiRateLimitException(Instant.now())));
+
+        final UUID runId = workflowTest
+                .getEngine()
+                .createRun(new CreateWorkflowRunRequest<>(ResolvePackageHealthMetadataWorkflow.class));
+
+        workflowTest.awaitRunStatus(runId, WorkflowRunStatus.COMPLETED, Duration.ofSeconds(90));
+
+        // The first attempt plus one attempt after each of the three waits.
+        verify(analyzer, times(4)).analyze(purl);
+        final var persisted = withJdbiHandle(handle -> new PackageHealthMetadataDao(handle).get(purl));
+        assertThat(persisted).isNull();
+    }
+
+    @Test
     void shouldStopWhenDisabled() throws Exception {
         createPackageMetadata(new PackageURL("pkg:npm/a"));
         qm.createConfigProperty(

@@ -104,6 +104,8 @@ When a service answers with a rate limit, the packages fetched so far are writte
 waits until the limit resets before it fetches the rest of the batch. The wait happens in the
 workflow, so it does not use up the retries that are meant for real failures. GitHub's primary and
 secondary rate limits are both recognized, and a 429 response without a reset time waits one minute.
+If three waits in a row resolve none of the remaining packages, the workflow skips them. They stay
+due and are fetched again by the next scheduled run, so one package cannot hold the workflow forever.
 Cancellation surfaces as an interrupt, not as a failure that is retried.
 
 ### External services and data that leaves the server
