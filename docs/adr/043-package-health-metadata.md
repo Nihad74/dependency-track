@@ -69,9 +69,9 @@ package data is kept: the existing package metadata maintenance decides it.
 
 The new tables are only read and written through JDBI with plain SQL, as required for new
 persistence code. They do not have JDO model classes. The component list queries of the REST API v2
-join the health table to read the scorecard score. Like package metadata, they reach it through the
-package artifact metadata of the component, so a component gets its score once its artifact
-metadata has been resolved.
+and component policies read health the same way as package metadata: through the package artifact
+metadata of the component. A component gets health once its artifact metadata has been resolved, and
+the lookup that re-evaluates projects after a health change finds exactly those components.
 
 Each health record has a status. `PROCESSED` means the external services returned data.
 `NOT_AVAILABLE` means there was nothing to fetch, for example because the package is unknown to

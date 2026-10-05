@@ -50,6 +50,7 @@ import org.dependencytrack.pkgmetadata.PackageArtifactMetadata;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadataDao;
 import org.dependencytrack.pkgmetadata.PackageMetadata;
 import org.dependencytrack.pkgmetadata.PackageMetadataDao;
+import org.jdbi.v3.core.Handle;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -2402,9 +2403,7 @@ class CelPolicyEngineTest extends PersistenceCapableTest {
 
         final String packagePurl = "pkg:maven/com.acme/acme-lib";
         useJdbiTransaction(handle -> {
-            new PackageMetadataDao(handle)
-                    .upsertAll(List.of(new PackageMetadata(
-                            new PackageURL(packagePurl), "1.0.0", null, Instant.now(), null, null)));
+            upsertPackageMetadata(handle, packagePurl, "pkg:maven/com.acme/acme-lib@1.0.0");
             handle.createUpdate("""
                         INSERT INTO "PACKAGE_HEALTH_METADATA"
                             ("PURL", "SCORECARD_SCORE", "STATUS")
@@ -2414,6 +2413,42 @@ class CelPolicyEngineTest extends PersistenceCapableTest {
 
         engine.evaluateProject(project.getUuid());
         assertThat(qm.getAllPolicyViolations(component)).hasSize(1);
+    }
+
+    @Test
+    void testEvaluateProjectIgnoresHealthOfComponentWithoutArtifactMetadata() throws Exception {
+        final var policy = qm.createPolicy("poor-scorecard", Policy.Operator.ANY, Policy.ViolationState.FAIL);
+        qm.createPolicyCondition(
+                policy,
+                PolicyCondition.Subject.EXPRESSION,
+                PolicyCondition.Operator.MATCHES,
+                "has(health.scorecard_score) && health.scorecard_score <= 3.0",
+                PolicyViolation.Type.OPERATIONAL);
+
+        final var project = new Project();
+        project.setName("acme-app");
+        qm.persist(project);
+
+        // Health is only re-evaluated for projects whose components have artifact metadata,
+        // so components without it must not be matched against health either.
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("acme-lib");
+        component.setPurl(new PackageURL("pkg:maven/com.acme/acme-lib@2.0.0"));
+        qm.persist(component);
+
+        final String packagePurl = "pkg:maven/com.acme/acme-lib";
+        useJdbiTransaction(handle -> {
+            upsertPackageMetadata(handle, packagePurl, "pkg:maven/com.acme/acme-lib@1.0.0");
+            handle.createUpdate("""
+                        INSERT INTO "PACKAGE_HEALTH_METADATA"
+                            ("PURL", "SCORECARD_SCORE", "STATUS")
+                        VALUES (:purl, 3.0, 'PROCESSED')
+                        """).bind("purl", packagePurl).execute();
+        });
+
+        new CelPolicyEngine().evaluateProject(project.getUuid());
+        assertThat(qm.getAllPolicyViolations(component)).isEmpty();
     }
 
     @Test
@@ -2438,9 +2473,7 @@ class CelPolicyEngineTest extends PersistenceCapableTest {
 
         final String packagePurl = "pkg:maven/com.acme/acme-lib";
         useJdbiTransaction(handle -> {
-            new PackageMetadataDao(handle)
-                    .upsertAll(List.of(new PackageMetadata(
-                            new PackageURL(packagePurl), "1.0.0", null, Instant.now(), null, null)));
+            upsertPackageMetadata(handle, packagePurl, "pkg:maven/com.acme/acme-lib@1.0.0");
             handle.createUpdate("""
                         INSERT INTO "PACKAGE_HEALTH_METADATA"
                             ("PURL", "SCORECARD_SCORE", "STATUS")
@@ -2493,9 +2526,7 @@ class CelPolicyEngineTest extends PersistenceCapableTest {
 
         final String packagePurl = "pkg:maven/com.acme/acme-lib";
         useJdbiTransaction(handle -> {
-            new PackageMetadataDao(handle)
-                    .upsertAll(List.of(new PackageMetadata(
-                            new PackageURL(packagePurl), "1.0.0", null, Instant.now(), null, null)));
+            upsertPackageMetadata(handle, packagePurl, "pkg:maven/com.acme/acme-lib@1.0.0");
             handle.createUpdate("""
                         INSERT INTO "PACKAGE_HEALTH_METADATA"
                             ("PURL", "IS_REPO_ARCHIVED", "STATUS")
@@ -2533,9 +2564,7 @@ class CelPolicyEngineTest extends PersistenceCapableTest {
 
         final String packagePurl = "pkg:maven/com.acme/acme-lib";
         useJdbiTransaction(handle -> {
-            new PackageMetadataDao(handle)
-                    .upsertAll(List.of(new PackageMetadata(
-                            new PackageURL(packagePurl), "1.0.0", null, Instant.now(), null, null)));
+            upsertPackageMetadata(handle, packagePurl, "pkg:maven/com.acme/acme-lib@1.0.0");
             handle.createUpdate("""
                         INSERT INTO "PACKAGE_HEALTH_METADATA"
                             ("PURL", "SCORECARD_SCORE", "STATUS")
@@ -2618,9 +2647,7 @@ class CelPolicyEngineTest extends PersistenceCapableTest {
 
         final String packagePurl = "pkg:maven/com.acme/acme-lib";
         useJdbiTransaction(handle -> {
-            new PackageMetadataDao(handle)
-                    .upsertAll(List.of(new PackageMetadata(
-                            new PackageURL(packagePurl), "1.0.0", null, Instant.now(), null, null)));
+            upsertPackageMetadata(handle, packagePurl, "pkg:maven/com.acme/acme-lib@1.0.0");
             handle.createUpdate("""
                         INSERT INTO "PACKAGE_HEALTH_METADATA"
                             ("PURL", "SCORECARD_SCORE", "STATUS")
@@ -3338,5 +3365,24 @@ class CelPolicyEngineTest extends PersistenceCapableTest {
 
         assertThat(qm.getAllPolicyViolations(projectUntagged)).hasSize(1);
         assertThat(qm.getAllPolicyViolations(projectTagged)).isEmpty();
+    }
+
+    private static void upsertPackageMetadata(final Handle handle, final String packagePurl, final String componentPurl)
+            throws Exception {
+        new PackageMetadataDao(handle)
+                .upsertAll(List.of(
+                        new PackageMetadata(new PackageURL(packagePurl), "1.0.0", null, Instant.now(), null, null)));
+        new PackageArtifactMetadataDao(handle)
+                .upsertAll(List.of(new PackageArtifactMetadata(
+                        new PackageURL(componentPurl),
+                        new PackageURL(packagePurl),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        Instant.now())));
     }
 }

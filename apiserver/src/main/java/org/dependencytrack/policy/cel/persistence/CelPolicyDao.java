@@ -203,6 +203,27 @@ public final class CelPolicyDao {
                 });
     }
 
+    /**
+     * Package PURLs of the project's components, resolved through their package artifact metadata.
+     * {@link #findProjectUuidsForPackageHealthPolicies(Collection)} matches components the same way.
+     */
+    public Map<Long, String> fetchAllComponentPackagePurls(long projectId) {
+        return jdbiHandle
+                .createQuery("""
+                    SELECT c."ID" AS component_id
+                         , pam."PACKAGE_PURL" AS package_purl
+                      FROM "COMPONENT" AS c
+                     INNER JOIN "PACKAGE_ARTIFACT_METADATA" AS pam
+                        ON pam."PURL" = c."PURL"
+                     WHERE c."PROJECT_ID" = :projectId
+                    """)
+                .bind("projectId", projectId)
+                .reduceResultSet(new HashMap<>(), (result, rs, ctx) -> {
+                    result.put(rs.getLong("component_id"), rs.getString("package_purl"));
+                    return result;
+                });
+    }
+
     public Map<String, HealthMeta> fetchAllPackageHealthMetadata(
             Collection<String> packagePurls, Collection<String> protoFieldNames) {
         if (packagePurls.isEmpty() || protoFieldNames.isEmpty()) {

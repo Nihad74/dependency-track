@@ -56,7 +56,6 @@ import org.dependencytrack.proto.policy.v1.HealthMeta;
 import org.dependencytrack.proto.policy.v1.License;
 import org.dependencytrack.proto.policy.v1.Project;
 import org.dependencytrack.proto.policy.v1.Vulnerability;
-import org.dependencytrack.util.PurlUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -146,9 +145,6 @@ public final class CelPolicyEngine {
         }
 
         final Map<CelType, Set<String>> requirements = determineScriptRequirements(policiesWithScripts);
-        if (requirements.containsKey(TYPE_HEALTH)) {
-            requirements.computeIfAbsent(TYPE_COMPONENT, _ -> new HashSet<>()).add("purl");
-        }
         final long conditionCount = policiesWithScripts.stream()
                 .mapToLong(pws -> pws.conditionScripts().size())
                 .sum();
@@ -167,24 +163,19 @@ public final class CelPolicyEngine {
                 withJdbiHandle(handle -> new CelPolicyDao(handle)
                         .fetchAllComponents(projectId, requirements.getOrDefault(TYPE_COMPONENT, Set.of())));
 
-        final var packagePurlByComponentId = new HashMap<Long, String>();
+        final Map<Long, String> packagePurlByComponentId;
         final Map<String, HealthMeta> healthByPackagePurl;
         final boolean healthEnabled =
                 requirements.containsKey(TYPE_HEALTH) && withJdbiHandle(PackageHealthSettings::isEnabled);
 
         if (healthEnabled) {
-            for (final var entry : componentsWithLicense.entrySet()) {
-                final var componentPurl =
-                        PurlUtil.silentPurl(entry.getValue().component().getPurl());
-                if (componentPurl != null) {
-                    packagePurlByComponentId.put(entry.getKey(), PurlUtil.purlPackageOnly(componentPurl));
-                }
-            }
-
+            packagePurlByComponentId =
+                    withJdbiHandle(handle -> new CelPolicyDao(handle).fetchAllComponentPackagePurls(projectId));
             healthByPackagePurl = withJdbiHandle(handle -> new CelPolicyDao(handle)
                     .fetchAllPackageHealthMetadata(
                             new HashSet<>(packagePurlByComponentId.values()), requirements.get(TYPE_HEALTH)));
         } else {
+            packagePurlByComponentId = Map.of();
             healthByPackagePurl = Map.of();
         }
 
