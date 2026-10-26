@@ -22,12 +22,20 @@ import org.cyclonedx.proto.v1_7.Bom;
 import org.cyclonedx.proto.v1_7.Property;
 import org.cyclonedx.proto.v1_7.VulnerabilityAffects;
 import org.cyclonedx.proto.v1_7.VulnerabilityReference;
+import org.dependencytrack.assessmentsync.AssessmentChange;
+import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
+import org.dependencytrack.assessmentsync.AssessmentEmbeddingIndexer;
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
+import org.dependencytrack.assessmentsync.AssessmentSyncMode;
+import org.dependencytrack.assessmentsync.AssessmentSynchronizer;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
 import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.filestorage.api.FileStorage;
 import org.dependencytrack.filestorage.proto.v1.FileMetadata;
+import org.dependencytrack.model.AnalysisState;
 import org.dependencytrack.model.FindingKey;
 import org.dependencytrack.model.Vulnerability;
 import org.dependencytrack.model.VulnerabilityKey;
@@ -490,6 +498,7 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
         // Note that this is done for both performance and idempotency reasons.
         // Since this activity may be retried, we cannot commit partial changes.
         useJdbiTransaction(handle -> {
+            AssessmentMutationGuard.lockProject(handle, projectUuid);
             final var notificationSubjectDao = handle.attach(NotificationSubjectDao.class);
             final var findingDao = new FindingDao(handle);
 
@@ -513,8 +522,18 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
             final int attributionsDeleted = findingDao.deleteAttributions(attributionIdsToDelete);
             LOGGER.debug("Removed {} stale attribution(s)", attributionsDeleted);
 
+            if (AssessmentSyncMode.current().recordsOutbox()) {
+                recordAttributionChanges(
+                        handle, projectUuid, existingAttributions, createAttributionCommands, attributionIdsToDelete);
+            }
+
+            final PolicyApplication policyApplication =
+                    applyVulnPolicyResults(handle, projectId, policyResults, vulnDbIdsByComponentId);
+            materializeInitialAssessments(
+                    handle, projectUuid, createdFindingKeys, reactivatedFindingKeys, policyApplication.changedKeys());
+
             final List<Notification> auditChangeNotifications =
-                    applyVulnPolicyResults(handle, projectId, policyResults, vulnDbIdsByComponentId, subscribedGroups);
+                    policyAuditNotifications(handle, policyApplication.auditResults(), subscribedGroups);
 
             final var notifications = new ArrayList<>(auditChangeNotifications);
             notifications.addAll(createAnalyzerErrorNotifications(projectUuid, failedAnalyzers));
@@ -544,6 +563,115 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
             new JdbiNotificationEmitter(handle).emitAll(notifications);
         });
     }
+
+    private static void recordAttributionChanges(
+            final Handle handle,
+            final UUID projectUuid,
+            final List<FindingDao.FindingAttribution> existingAttributions,
+            final Set<FindingDao.CreateAttributionCommand> createAttributionCommands,
+            final Set<Long> attributionIdsToDelete) {
+        if (createAttributionCommands.isEmpty() && attributionIdsToDelete.isEmpty()) {
+            return;
+        }
+
+        final var componentIds = new HashSet<Long>();
+        final var vulnerabilityIds = new HashSet<Long>();
+        for (final FindingDao.CreateAttributionCommand command : createAttributionCommands) {
+            componentIds.add(command.componentId());
+            vulnerabilityIds.add(command.vulnDbId());
+        }
+        for (final FindingDao.FindingAttribution attribution : existingAttributions) {
+            if (attributionIdsToDelete.contains(attribution.id())) {
+                componentIds.add(attribution.componentId());
+                vulnerabilityIds.add(attribution.vulnDbId());
+            }
+        }
+        if (componentIds.isEmpty() || vulnerabilityIds.isEmpty()) {
+            return;
+        }
+
+        final ProjectName project = handle.createQuery(/* language=SQL */ """
+                        SELECT "NAME"
+                             , "VERSION"
+                          FROM "PROJECT"
+                         WHERE "UUID" = :projectUuid
+                        """)
+                .bind("projectUuid", projectUuid)
+                .map((rs, ctx) -> new ProjectName(rs.getString("NAME"), rs.getString("VERSION")))
+                .findOne()
+                .orElse(null);
+        if (project == null) {
+            return;
+        }
+
+        final Map<Long, UUID> componentUuidById = loadUuids(handle, "COMPONENT", componentIds);
+        final Map<Long, UUID> vulnerabilityUuidById = loadUuids(handle, "VULNERABILITY", vulnerabilityIds);
+        final List<AssessmentChange.LookupKey> lookupKeys =
+                AssessmentStructureCapture.keys(project.name(), project.version());
+        final var changes = new ArrayList<AssessmentChange>();
+        for (final FindingDao.CreateAttributionCommand command : createAttributionCommands) {
+            addFindingChange(
+                    changes,
+                    projectUuid,
+                    componentUuidById.get(command.componentId()),
+                    vulnerabilityUuidById.get(command.vulnDbId()),
+                    lookupKeys);
+        }
+        for (final FindingDao.FindingAttribution attribution : existingAttributions) {
+            if (!attributionIdsToDelete.contains(attribution.id())) {
+                continue;
+            }
+            addFindingChange(
+                    changes,
+                    projectUuid,
+                    componentUuidById.get(attribution.componentId()),
+                    vulnerabilityUuidById.get(attribution.vulnDbId()),
+                    lookupKeys);
+        }
+        AssessmentStructureCapture.recordFindings(handle, changes);
+    }
+
+    private static Map<Long, UUID> loadUuids(final Handle handle, final String tableName, final Set<Long> ids) {
+        final var uuids = new HashMap<Long, UUID>();
+        handle.createQuery(/* language=SQL */ """
+                        SELECT "ID"
+                             , "UUID"
+                          FROM "%s"
+                         WHERE "ID" = ANY(:ids)
+                        """.formatted(tableName))
+                .bind("ids", ids.toArray(Long[]::new))
+                .map((rs, ctx) -> new IdUuid(rs.getLong("ID"), rs.getObject("UUID", UUID.class)))
+                .forEach(row -> {
+                    final UUID uuid = row.uuid();
+                    if (uuid != null) {
+                        uuids.put(row.id(), uuid);
+                    }
+                });
+        return uuids;
+    }
+
+    private static void addFindingChange(
+            final List<AssessmentChange> changes,
+            final UUID projectUuid,
+            final @Nullable UUID componentUuid,
+            final @Nullable UUID vulnerabilityUuid,
+            final List<AssessmentChange.LookupKey> lookupKeys) {
+        if (componentUuid == null || vulnerabilityUuid == null) {
+            return;
+        }
+        changes.add(new AssessmentChange(
+                Scope.FINDING,
+                projectUuid,
+                componentUuid,
+                vulnerabilityUuid,
+                AssessmentStructureCapture.ATTRIBUTION,
+                lookupKeys));
+    }
+
+    private record ProjectName(
+            @Nullable String name, @Nullable String version) {}
+
+    private record IdUuid(long id, @Nullable UUID uuid) {}
 
     private List<Long> readNewComponentIds(FileMetadata contextFileMetadata) {
         try (final InputStream inputStream = fileStorage.get(contextFileMetadata)) {
@@ -645,12 +773,11 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
         return applicableResult;
     }
 
-    private List<Notification> applyVulnPolicyResults(
+    private PolicyApplication applyVulnPolicyResults(
             Handle handle,
             long projectId,
             Map<Long, Map<Long, VulnerabilityPolicy>> policyResults,
-            Map<Long, Set<Long>> activeFindings,
-            Set<String> subscribedGroups) {
+            Map<Long, Set<Long>> activeFindings) {
         final var analysisDao = new AnalysisDao(handle);
         final var reconcileResults = new ArrayList<AnalysisReconciler.Result>();
 
@@ -718,7 +845,7 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
 
         if (reconcileResults.isEmpty()) {
             LOGGER.debug("All analyses are already in desired state");
-            return List.of();
+            return new PolicyApplication(List.of(), List.of());
         }
 
         // Create or update analyses according to the reconciliation results.
@@ -739,26 +866,46 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
         final int commentsCreated = analysisDao.createComments(createCommentCommands);
         LOGGER.debug("Created {} analysis comment(s)", commentsCreated);
 
-        if (!subscribedGroups.contains(NotificationGroup.PROJECT_AUDIT_CHANGE.name())) {
-            return List.of();
-        }
-
-        // Build notifications for analyses where state or suppression changed.
+        final List<FindingKey> changedKeys = reconcileResults.stream()
+                .map(AnalysisReconciler.Result::findingKey)
+                .toList();
         final List<AnalysisReconciler.Result> auditChangeResults = reconcileResults.stream()
                 .filter(result -> result.analysisStateChanged() || result.suppressionChanged())
                 .toList();
-        if (auditChangeResults.isEmpty()) {
+        return new PolicyApplication(changedKeys, auditChangeResults);
+    }
+
+    /// Audit subjects are read after inheritance so a replaced policy outcome is not announced twice.
+    private static List<Notification> policyAuditNotifications(
+            final Handle handle,
+            final List<AnalysisReconciler.Result> auditResults,
+            final Set<String> subscribedGroups) {
+        if (auditResults.isEmpty() || !subscribedGroups.contains(NotificationGroup.PROJECT_AUDIT_CHANGE.name())) {
+            return List.of();
+        }
+        final Map<FindingKey, FinalAnalysis> finalByKey = loadFinalAnalyses(handle, auditResults);
+        final var kept = new ArrayList<AnalysisReconciler.Result>();
+        for (final AnalysisReconciler.Result result : auditResults) {
+            final FinalAnalysis current = finalByKey.get(result.findingKey());
+            if (current != null
+                    && (current.state() != result.makeAnalysisCommand().state()
+                            || current.suppressed()
+                                    != result.makeAnalysisCommand().suppressed())) {
+                continue;
+            }
+            kept.add(result);
+        }
+        if (kept.isEmpty()) {
             return List.of();
         }
 
-        final List<GetProjectAuditChangeNotificationSubjectQuery> notificationSubjectQueries =
-                auditChangeResults.stream()
-                        .map(result -> new GetProjectAuditChangeNotificationSubjectQuery(
-                                result.findingKey().componentId(),
-                                result.findingKey().vulnDbId(),
-                                result.makeAnalysisCommand().state(),
-                                result.makeAnalysisCommand().suppressed()))
-                        .toList();
+        final List<GetProjectAuditChangeNotificationSubjectQuery> notificationSubjectQueries = kept.stream()
+                .map(result -> new GetProjectAuditChangeNotificationSubjectQuery(
+                        result.findingKey().componentId(),
+                        result.findingKey().vulnDbId(),
+                        result.makeAnalysisCommand().state(),
+                        result.makeAnalysisCommand().suppressed()))
+                .toList();
 
         final var notificationSubjectDao = handle.attach(NotificationSubjectDao.class);
         final List<VulnerabilityAnalysisDecisionChangeSubject> subjects =
@@ -766,7 +913,7 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
 
         final var notifications = new ArrayList<Notification>(subjects.size());
         for (int i = 0; i < subjects.size(); i++) {
-            final AnalysisReconciler.Result result = auditChangeResults.get(i);
+            final AnalysisReconciler.Result result = kept.get(i);
             final VulnerabilityAnalysisDecisionChangeSubject subject = subjects.get(i);
             notifications.add(createVulnerabilityAnalysisDecisionChangeNotification(
                     subject.getProject(),
@@ -776,9 +923,70 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
                     result.analysisStateChanged(),
                     result.suppressionChanged()));
         }
-
         return notifications;
     }
+
+    /// Active mode only. Does not touch the work row or Dex.
+    private static void materializeInitialAssessments(
+            final Handle handle,
+            final UUID projectUuid,
+            final List<FindingKey> createdFindingKeys,
+            final Set<FindingKey> reactivatedFindingKeys,
+            final List<FindingKey> policyChangedKeys) {
+        if (AssessmentSyncMode.current() != AssessmentSyncMode.ACTIVE) {
+            return;
+        }
+        final var keys = new HashSet<FindingKey>();
+        keys.addAll(createdFindingKeys);
+        keys.addAll(reactivatedFindingKeys);
+        keys.addAll(policyChangedKeys);
+        if (keys.isEmpty()) {
+            return;
+        }
+        new AssessmentEmbeddingIndexer(handle).ensureMarkersPresent(projectUuid);
+        new AssessmentSynchronizer().reconcileBatch(handle, projectUuid, List.copyOf(keys));
+    }
+
+    private static Map<FindingKey, FinalAnalysis> loadFinalAnalyses(
+            final Handle handle, final List<AnalysisReconciler.Result> auditResults) {
+        final var componentIds = new long[auditResults.size()];
+        final var vulnerabilityIds = new long[auditResults.size()];
+        for (int i = 0; i < auditResults.size(); i++) {
+            componentIds[i] = auditResults.get(i).findingKey().componentId();
+            vulnerabilityIds[i] = auditResults.get(i).findingKey().vulnDbId();
+        }
+        final var finals = new HashMap<FindingKey, FinalAnalysis>();
+        handle.createQuery(/* language=SQL */ """
+                        SELECT "COMPONENT_ID"
+                             , "VULNERABILITY_ID"
+                             , "STATE"
+                             , "SUPPRESSED"
+                          FROM "ANALYSIS"
+                         WHERE ("COMPONENT_ID", "VULNERABILITY_ID") IN (
+                               SELECT component_id, vulnerability_id
+                                 FROM UNNEST(:componentIds, :vulnerabilityIds)
+                                   AS finding(component_id, vulnerability_id)
+                           )
+                        """)
+                .bind("componentIds", componentIds)
+                .bind("vulnerabilityIds", vulnerabilityIds)
+                .map((rs, ctx) -> {
+                    final String state = rs.getString("STATE");
+                    if (state == null) {
+                        return null;
+                    }
+                    finals.put(
+                            new FindingKey(rs.getLong("COMPONENT_ID"), rs.getLong("VULNERABILITY_ID")),
+                            new FinalAnalysis(AnalysisState.valueOf(state), rs.getBoolean("SUPPRESSED")));
+                    return state;
+                })
+                .list();
+        return finals;
+    }
+
+    private record PolicyApplication(List<FindingKey> changedKeys, List<AnalysisReconciler.Result> auditResults) {}
+
+    private record FinalAnalysis(AnalysisState state, boolean suppressed) {}
 
     private List<Notification> createAnalyzerErrorNotifications(UUID projectUuid, Collection<String> analyzerNames) {
         if (analyzerNames.isEmpty()) {
