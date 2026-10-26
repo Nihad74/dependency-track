@@ -270,7 +270,7 @@ public class CycloneDXVexImporter {
             command = command.withOwasp(owaspRating.getVector(), score);
         }
 
-        qm.makeAnalysis(command);
+        qm.makeAnalysis(command.withDecisionAction(MakeAnalysisCommand.DecisionAction.VEX));
     }
 
     private static org.cyclonedx.model.vulnerability.Vulnerability.Rating findOwaspRating(
