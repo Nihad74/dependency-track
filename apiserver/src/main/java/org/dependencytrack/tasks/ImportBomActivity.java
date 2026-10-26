@@ -25,6 +25,8 @@ import org.cyclonedx.parsers.BomParserFactory;
 import org.cyclonedx.parsers.Parser;
 import org.dependencytrack.analysis.AnalyzeProjectWorkflow;
 import org.dependencytrack.analysis.ProjectLastAnalysisDao;
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.common.Mappers;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
@@ -327,6 +329,8 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
         useJdbiTransaction(handle -> {
             final var dao = new BomImportDao(handle);
 
+            // Lock before the import changes anything, so assessment synchronization sees a consistent project.
+            AssessmentMutationGuard.lockProject(handle, ctx.project.getUuid());
             final Long projectId = handle.attach(ProjectDao.class).getProjectId(ctx.project.getUuid());
             if (projectId == null) {
                 throw new IllegalStateException("Project does not exist");
@@ -385,6 +389,25 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
                     ctx.bomVersion,
                     ctx.bomTimestamp);
             new PackageMetadataResolutionDao(handle).seedPending(projectId);
+
+            final Map<String, Object> nameAndVersion = handle.createQuery(/* language=SQL */ """
+                            SELECT "NAME", "VERSION"
+                              FROM "PROJECT"
+                             WHERE "ID" = :projectId
+                            """)
+                    .bind("projectId", projectId)
+                    .mapToMap()
+                    .one();
+            final String name = (String) nameAndVersion.get("name");
+            final String version = (String) nameAndVersion.get("version");
+            AssessmentStructureCapture.rebuildAndRecord(
+                    handle,
+                    ctx.project.getUuid(),
+                    AssessmentStructureCapture.BOM_IMPORT,
+                    name,
+                    version,
+                    name,
+                    version);
         });
     }
 
