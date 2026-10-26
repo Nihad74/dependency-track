@@ -39,6 +39,7 @@ import io.micrometer.core.instrument.config.MeterFilter;
 import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import org.dependencytrack.assessmentsync.AssessmentSyncInitializer;
 import org.dependencytrack.cache.CacheManagerBinder;
 import org.dependencytrack.cache.CacheManagerInitializer;
 import org.dependencytrack.common.ConfigKeys;
@@ -215,6 +216,7 @@ public final class Application {
         context.addEventListener(new DefaultNotificationPublisherInitializer());
         context.addEventListener(
                 new DexEngineInitializer(config, dataSourceRegistry, Metrics.globalRegistry, healthCheckRegistry));
+        context.addEventListener(new AssessmentSyncInitializer());
         context.addEventListener(new TaskSchedulerInitializer(healthCheckRegistry));
         context.addEventListener(new NotificationSubsystemInitializer());
 
