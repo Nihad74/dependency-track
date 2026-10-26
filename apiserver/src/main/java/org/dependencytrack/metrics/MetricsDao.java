@@ -19,6 +19,7 @@
 package org.dependencytrack.metrics;
 
 import com.google.errorprone.annotations.CompileTimeConstant;
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.model.Project;
 import org.jdbi.v3.core.statement.SqlStatements;
 import org.jdbi.v3.sqlobject.SqlObject;
@@ -540,10 +541,19 @@ public interface MetricsDao extends SqlObject {
             """)
     List<ProjectMetrics> getMostRecentCollectionProjectMetrics(@Bind Collection<Long> projectIds);
 
+    /// Requires the caller's transaction, then locks the project before the metrics procedure.
+    default void updateProjectMetrics(UUID uuid) {
+        if (!getHandle().isInTransaction()) {
+            throw new IllegalStateException("updateProjectMetrics requires an active transaction");
+        }
+        AssessmentMutationGuard.lockProject(getHandle(), uuid);
+        updateProjectMetricsProcedure(uuid);
+    }
+
     @SqlCall("""
             CALL "UPDATE_PROJECT_METRICS"(:uuid)
             """)
-    void updateProjectMetrics(@Bind UUID uuid);
+    void updateProjectMetricsProcedure(@Bind UUID uuid);
 
     @SqlCall("""
             CALL "UPDATE_COMPONENT_METRICS"(:uuid)
