@@ -51,7 +51,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up JDK
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # tag=v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # tag=v6.1.0
         with:
           distribution: 'temurin'
           java-version: '25'
@@ -154,7 +154,7 @@ jobs:
           path: base
           persist-credentials: false
       - name: Detect Breaking Changes
-        uses: oasdiff/oasdiff-action/breaking@b9325c9e0a27ab65b0da3b766522cedec6be81dc # tag=v0.1.18
+        uses: oasdiff/oasdiff-action/breaking@514e22ec2f1d1654fb78ac3bb7dc00d8f3c6c4d9 # tag=v0.1.19
         with:
           base: base/api/src/main/openapi/openapi.yaml
           revision: api/src/main/openapi/openapi.yaml
@@ -179,4 +179,4 @@ jobs:
         with:
           persist-credentials: false
       - name: Run zizmor
-        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
