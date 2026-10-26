@@ -21,6 +21,7 @@ package org.dependencytrack.tasks;
 import alpine.model.IConfigProperty.PropertyType;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.dex.engine.api.DexEngine;
 import org.dependencytrack.filestorage.api.FileStorage;
@@ -43,6 +44,7 @@ import org.dependencytrack.pkgmetadata.PackageArtifactMetadataDao;
 import org.dependencytrack.pkgmetadata.PackageMetadata;
 import org.dependencytrack.pkgmetadata.PackageMetadataDao;
 import org.dependencytrack.proto.internal.workflow.v1.ImportBomArg;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.jdbi.v3.core.mapper.reflect.ConstructorMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,6 +75,7 @@ import java.util.UUID;
 import static org.apache.commons.io.IOUtils.resourceToURL;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThatExceptionOfType;
 import static org.dependencytrack.model.ConfigPropertyConstants.ACCEPT_ARTIFACT_CYCLONEDX;
@@ -2038,6 +2041,196 @@ class ImportBomActivityTest extends PersistenceCapableTest {
             fail("Expected BOM processing to succeed, but it failed due to: %s", subject.getCause());
         }
     }
+
+    @Test
+    void importRecordsOneProjectRowAndOsEmbedding() throws Exception {
+        final Project parent = new Project();
+        parent.setName("mrt.base.linux");
+        parent.setVersion("scarthgap");
+        qm.persist(parent);
+
+        final Project source = new Project();
+        source.setName("mrt.base.linux");
+        source.setVersion("5.14.121");
+        qm.persist(source);
+
+        final Project differentCase = new Project();
+        differentCase.setName("MRT.BASE.LINUX");
+        differentCase.setVersion("5.14.121");
+        qm.persist(differentCase);
+
+        final Project target = new Project();
+        target.setName("cmx500");
+        target.setVersion("1.0.0");
+        target.setParent(parent);
+        qm.persist(target);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            activity.execute(null, buildArg(target, storeBomFile(operatingSystemBom()), UUID.randomUUID()));
+            assertBomProcessedNotification();
+
+            assertThat(outboxRows(target.getUuid())).satisfiesExactly(row -> {
+                assertThat(row.scope()).isEqualTo("PROJECT");
+                assertThat(row.reason()).isEqualTo("BOM_IMPORT");
+                assertThat(row.lookupKeys()).contains("cmx500").contains("1.0.0");
+            });
+            assertThat(outboxRows(source.getUuid())).isEmpty();
+
+            final long packageId = componentId(target.getUuid(), "busybox");
+            assertThat(embeddingMembers(target.getUuid())).satisfiesExactly(member -> {
+                assertThat(member.markerName()).isEqualTo("mrt.base.linux");
+                assertThat(member.markerVersion()).isEqualTo("5.14.121");
+                assertThat(member.sourceProjectUuid()).isEqualTo(source.getUuid());
+                assertThat(member.componentId()).isEqualTo(packageId);
+            });
+
+            activity.execute(null, buildArg(target, storeBomFile(libraryOnlyBom()), UUID.randomUUID()));
+            assertBomProcessedNotification();
+            assertThat(embeddingMembers(target.getUuid())).isEmpty();
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    @Test
+    void importRollbackLeavesNoOutboxRow() throws Exception {
+        final Project target = new Project();
+        target.setName("cmx500");
+        target.setVersion("1.0.0");
+        qm.persist(target);
+
+        useJdbiTransaction(handle -> {
+            handle.execute("""
+                    CREATE OR REPLACE FUNCTION assessment_sync_outbox_fail() RETURNS trigger
+                    LANGUAGE plpgsql AS $$
+                    BEGIN
+                      RAISE EXCEPTION 'assessment sync outbox rejected';
+                    END;
+                    $$
+                    """);
+            handle.execute("""
+                    CREATE TRIGGER assessment_sync_outbox_fail
+                    BEFORE INSERT ON "ASSESSMENT_SYNC_OUTBOX"
+                    FOR EACH ROW EXECUTE FUNCTION assessment_sync_outbox_fail()
+                    """);
+        });
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            assertThatThrownBy(() -> activity.execute(
+                            null, buildArg(target, storeBomFile(operatingSystemBom()), UUID.randomUUID())))
+                    .isInstanceOf(TerminalApplicationFailureException.class);
+            assertThat(qm.getAllComponents(target)).isEmpty();
+            assertThat(outboxRows(target.getUuid())).isEmpty();
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+            useJdbiTransaction(handle -> {
+                handle.execute("DROP TRIGGER IF EXISTS assessment_sync_outbox_fail ON \"ASSESSMENT_SYNC_OUTBOX\"");
+                handle.execute("DROP FUNCTION IF EXISTS assessment_sync_outbox_fail()");
+            });
+        }
+    }
+
+    private static byte[] operatingSystemBom() {
+        return /* language=JSON */ """
+                {
+                  "bomFormat": "CycloneDX",
+                  "specVersion": "1.5",
+                  "version": 1,
+                  "metadata": {
+                    "component": { "bom-ref": "root", "type": "application", "name": "cmx500", "version": "1.0.0" }
+                  },
+                  "components": [
+                    { "bom-ref": "os", "type": "operating-system", "name": "mrt.base.linux", "version": "5.14.121" },
+                    { "bom-ref": "pkg", "type": "library", "name": "busybox", "version": "1.36.1" }
+                  ],
+                  "services": [
+                    { "bom-ref": "svc", "name": "sshd", "version": "1.0.0" }
+                  ],
+                  "dependencies": [
+                    { "ref": "root", "dependsOn": ["os"] },
+                    { "ref": "os", "dependsOn": ["pkg", "svc"] }
+                  ]
+                }
+                """.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] libraryOnlyBom() {
+        return /* language=JSON */ """
+                {
+                  "bomFormat": "CycloneDX",
+                  "specVersion": "1.5",
+                  "version": 1,
+                  "metadata": {
+                    "component": { "bom-ref": "root", "type": "application", "name": "cmx500", "version": "1.0.0" }
+                  },
+                  "components": [
+                    { "bom-ref": "pkg", "type": "library", "name": "busybox", "version": "1.36.1" }
+                  ],
+                  "dependencies": [
+                    { "ref": "root", "dependsOn": ["pkg"] }
+                  ]
+                }
+                """.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private List<OutboxRow> outboxRows(final UUID projectUuid) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT "SCOPE"
+                             , "REASON"
+                             , "LOOKUP_KEYS"::text AS lookup_keys
+                          FROM "ASSESSMENT_SYNC_OUTBOX"
+                         WHERE "PROJECT_UUID" = :projectUuid
+                         ORDER BY "ID"
+                        """)
+                .bind("projectUuid", projectUuid)
+                .map((rs, ctx) ->
+                        new OutboxRow(rs.getString("SCOPE"), rs.getString("REASON"), rs.getString("lookup_keys")))
+                .list());
+    }
+
+    private static long componentId(final UUID projectUuid, final String name) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT component."ID"
+                          FROM "COMPONENT" AS component
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = component."PROJECT_ID"
+                         WHERE project."UUID" = :projectUuid
+                           AND component."NAME" = :name
+                        """)
+                .bind("projectUuid", projectUuid)
+                .bind("name", name)
+                .mapTo(Long.class)
+                .one());
+    }
+
+    private static List<EmbeddingMember> embeddingMembers(final UUID projectUuid) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT embedding."MARKER_NAME"
+                             , embedding."MARKER_VERSION"
+                             , embedding."SOURCE_PROJECT_UUID"
+                             , member."COMPONENT_ID"
+                          FROM "ASSESSMENT_EMBEDDING" AS embedding
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = embedding."TARGET_PROJECT_ID"
+                          LEFT JOIN "ASSESSMENT_EMBEDDING_MEMBER" AS member
+                            ON member."TARGET_PROJECT_ID" = embedding."TARGET_PROJECT_ID"
+                           AND member."MARKER_COMPONENT_ID" = embedding."MARKER_COMPONENT_ID"
+                         WHERE project."UUID" = :projectUuid
+                         ORDER BY member."COMPONENT_ID"
+                        """)
+                .bind("projectUuid", projectUuid)
+                .map((rs, ctx) -> new EmbeddingMember(
+                        rs.getString("MARKER_NAME"),
+                        rs.getString("MARKER_VERSION"),
+                        rs.getObject("SOURCE_PROJECT_UUID", UUID.class),
+                        rs.getObject("COMPONENT_ID", Long.class)))
+                .list());
+    }
+
+    private record OutboxRow(String scope, String reason, String lookupKeys) {}
+
+    private record EmbeddingMember(String markerName, String markerVersion, UUID sourceProjectUuid, Long componentId) {}
 
     private FileMetadata storeBomFile(final String testFileName) throws Exception {
         final Path bomFilePath =

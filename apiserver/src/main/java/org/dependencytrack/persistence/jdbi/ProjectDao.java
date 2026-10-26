@@ -20,6 +20,10 @@ package org.dependencytrack.persistence.jdbi;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.google.errorprone.annotations.CompileTimeConstant;
+import org.dependencytrack.assessmentsync.AssessmentChange;
+import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.common.pagination.Page;
 import org.dependencytrack.common.pagination.Page.TotalCount;
 import org.dependencytrack.exception.AlreadyExistsException;
@@ -53,6 +57,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -716,7 +721,21 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
               FROM "PROJECT"
              WHERE "UUID" = :projectUuid
             """)
-    int deleteProject(@Bind final UUID projectUuid);
+    int deleteProjectRow(@Bind final UUID projectUuid);
+
+    /// Deletes one project and records every cascade-removed descendant.
+    default int deleteProject(final UUID projectUuid) {
+        if (!getHandle().isInTransaction()) {
+            return getHandle()
+                    .inTransaction(handle -> handle.attach(ProjectDao.class).deleteProject(projectUuid));
+        }
+        final List<ProjectTreeRow> removed = lockProjectTree(List.of(projectUuid));
+        final int deleted = deleteProjectRow(projectUuid);
+        if (deleted > 0) {
+            recordRemovedProjects(removed);
+        }
+        return deleted;
+    }
 
     /**
      * Deletes accessible projects and returns a row for each removed project,
@@ -756,7 +775,22 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
                     , ph."DEPTH"
             """)
     @RegisterConstructorMapper(DeletedProjectRow.class)
-    List<DeletedProjectRow> deleteProjects(@Bind Collection<UUID> projectUuids);
+    List<DeletedProjectRow> deleteProjectsReturning(@Bind Collection<UUID> projectUuids);
+
+    /// Deletes accessible projects and records each removed project, including cascade descendants.
+    default List<DeletedProjectRow> deleteProjects(final Collection<UUID> projectUuids) {
+        if (!getHandle().isInTransaction()) {
+            return getHandle()
+                    .inTransaction(handle -> handle.attach(ProjectDao.class).deleteProjects(projectUuids));
+        }
+        final Set<UUID> accessible = getAccessibleProjectUuids(projectUuids);
+        if (!accessible.isEmpty()) {
+            lockProjectTree(accessible);
+        }
+        final List<DeletedProjectRow> deleted = deleteProjectsReturning(projectUuids);
+        recordRemovedProjectRows(deleted);
+        return deleted;
+    }
 
     record DeletedProjectRow(
             UUID uuid,
@@ -765,21 +799,25 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
             @Nullable UUID ancestorUuid) {}
 
     @SqlQuery("""
-             WITH "CTE" AS (
-               SELECT "ID"
-                 FROM "PROJECT"
-                WHERE "INACTIVE_SINCE" < :retentionCutOff
-                ORDER BY "INACTIVE_SINCE"
-                LIMIT :batchSize
-             )
-             DELETE
-               FROM "PROJECT"
-              WHERE "ID" IN (SELECT "ID" FROM "CTE")
-              RETURNING "NAME", "VERSION", "INACTIVE_SINCE", "UUID"
+            SELECT "UUID"
+              FROM "PROJECT"
+             WHERE "INACTIVE_SINCE" < :retentionCutOff
+             ORDER BY "INACTIVE_SINCE"
+             LIMIT :batchSize
             """)
-    @RegisterConstructorMapper(DeletedProject.class)
-    List<DeletedProject> deleteInactiveProjectsForRetentionDuration(
-            @Bind final Instant retentionCutOff, @Bind final int batchSize);
+    List<UUID> selectInactiveProjectUuids(@Bind Instant retentionCutOff, @Bind int batchSize);
+
+    /// Deletes inactive projects past the retention cutoff and records cascade descendants.
+    default List<DeletedProject> deleteInactiveProjectsForRetentionDuration(
+            final Instant retentionCutOff, final int batchSize) {
+        if (!getHandle().isInTransaction()) {
+            return getHandle()
+                    .inTransaction(handle -> handle.attach(ProjectDao.class)
+                            .deleteInactiveProjectsForRetentionDuration(retentionCutOff, batchSize));
+        }
+        final List<UUID> rootUuids = selectInactiveProjectUuids(retentionCutOff, batchSize);
+        return deleteAndRecordProjectRoots(rootUuids);
+    }
 
     record DeletedProject(
             @ColumnName("NAME") String name,
@@ -788,27 +826,176 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
             @ColumnName("UUID") UUID uuid) {}
 
     @SqlQuery("""
-            WITH cte_candidates AS (
+            SELECT "UUID"
+              FROM (
+                SELECT "UUID"
+                     , ROW_NUMBER() OVER (PARTITION BY "NAME" ORDER BY "INACTIVE_SINCE" DESC) AS rn
+                  FROM "PROJECT"
+                 WHERE "INACTIVE_SINCE" IS NOT NULL
+              ) AS ranked
+             WHERE rn > :versionCountThreshold
+             LIMIT :batchSize
+            """)
+    List<UUID> selectExcessProjectVersionUuids(@Bind int versionCountThreshold, @Bind int batchSize);
+
+    /// Deletes excess inactive versions and records cascade descendants.
+    default List<DeletedProject> deleteExcessProjectVersions(final int versionCountThreshold, final int batchSize) {
+        if (!getHandle().isInTransaction()) {
+            return getHandle()
+                    .inTransaction(handle -> handle.attach(ProjectDao.class)
+                            .deleteExcessProjectVersions(versionCountThreshold, batchSize));
+        }
+        return deleteAndRecordProjectRoots(selectExcessProjectVersionUuids(versionCountThreshold, batchSize));
+    }
+
+    @SqlQuery("""
+            WITH
+            cte_roots AS (
               SELECT "ID"
-                FROM (
-                  SELECT "ID"
-                       , ROW_NUMBER() OVER (PARTITION BY "NAME" ORDER BY "INACTIVE_SINCE" DESC) AS rn
-                    FROM "PROJECT"
-                   WHERE "INACTIVE_SINCE" IS NOT NULL
-                ) AS ranked
-               WHERE rn > :versionCountThreshold
-               LIMIT :batchSize
+                FROM "PROJECT"
+               WHERE "UUID" = ANY(:rootUuids)
+               ORDER BY "ID"
+                 FOR UPDATE
+            ),
+            cte_deleted AS (
+              DELETE
+                FROM "PROJECT"
+               WHERE "ID" IN (SELECT "ID" FROM cte_roots)
+              RETURNING "ID"
             )
-            DELETE
-              FROM "PROJECT"
-             WHERE "ID" IN (SELECT "ID" FROM cte_candidates)
-            RETURNING "NAME"
-                    , "VERSION"
-                    , "INACTIVE_SINCE"
-                    , "UUID"
+            SELECT DISTINCT ON (project."ID")
+                   project."NAME" AS "NAME"
+                 , project."VERSION" AS "VERSION"
+                 , project."INACTIVE_SINCE" AS "INACTIVE_SINCE"
+                 , project."UUID" AS "UUID"
+              FROM "PROJECT_HIERARCHY" AS ph
+             INNER JOIN "PROJECT" AS project
+                ON project."ID" = ph."CHILD_PROJECT_ID"
+             WHERE ph."PARENT_PROJECT_ID" IN (SELECT "ID" FROM cte_deleted)
+             ORDER BY project."ID"
+                    , ph."DEPTH"
             """)
     @RegisterConstructorMapper(DeletedProject.class)
-    List<DeletedProject> deleteExcessProjectVersions(@Bind int versionCountThreshold, @Bind int batchSize);
+    List<DeletedProject> deleteProjectRootsReturningTree(@Bind Collection<UUID> rootUuids);
+
+    @SqlQuery("""
+            SELECT project."UUID" AS "UUID"
+                 , project."NAME" AS "NAME"
+                 , project."VERSION" AS "VERSION"
+              FROM "PROJECT" AS project
+             WHERE project."ID" IN (
+                   SELECT ph."CHILD_PROJECT_ID"
+                     FROM "PROJECT" AS root
+                    INNER JOIN "PROJECT_HIERARCHY" AS ph
+                       ON ph."PARENT_PROJECT_ID" = root."ID"
+                    WHERE root."UUID" = ANY(:rootUuids)
+             )
+            """)
+    @RegisterConstructorMapper(ProjectTreeRow.class)
+    List<ProjectTreeRow> selectProjectTree(@Bind Collection<UUID> rootUuids);
+
+    @SqlQuery("""
+            SELECT project."UUID" AS "UUID"
+                 , project."NAME" AS "NAME"
+                 , project."VERSION" AS "VERSION"
+              FROM "PROJECT" AS project
+             WHERE project."ID" IN (
+                   SELECT ph."CHILD_PROJECT_ID"
+                     FROM "PROJECT" AS root
+                    INNER JOIN "PROJECT_HIERARCHY" AS ph
+                       ON ph."PARENT_PROJECT_ID" = root."ID"
+                    WHERE root."UUID" = ANY(:rootUuids)
+             )
+             FOR UPDATE
+            """)
+    @RegisterConstructorMapper(ProjectTreeRow.class)
+    List<ProjectTreeRow> selectProjectTreeForUpdate(@Bind Collection<UUID> rootUuids);
+
+    record ProjectTreeRow(UUID uuid, String name, @Nullable String version) {}
+
+    private List<ProjectTreeRow> lockProjectTree(final Collection<UUID> rootUuids) {
+        final List<ProjectTreeRow> preview = selectProjectTree(rootUuids);
+        if (preview.isEmpty()) {
+            return List.of();
+        }
+        AssessmentMutationGuard.lockProjects(getHandle(), projectUuids(preview));
+        final List<ProjectTreeRow> locked = selectProjectTreeForUpdate(rootUuids);
+        final var seen = new HashSet<UUID>();
+        for (final ProjectTreeRow row : preview) {
+            seen.add(row.uuid());
+        }
+        final var extra = new ArrayList<UUID>();
+        for (final ProjectTreeRow row : locked) {
+            if (row.uuid() != null && seen.add(row.uuid())) {
+                extra.add(row.uuid());
+            }
+        }
+        if (!extra.isEmpty()) {
+            AssessmentMutationGuard.lockProjects(getHandle(), extra);
+        }
+        return locked;
+    }
+
+    private List<DeletedProject> deleteAndRecordProjectRoots(final List<UUID> rootUuids) {
+        if (rootUuids.isEmpty()) {
+            return List.of();
+        }
+        lockProjectTree(rootUuids);
+        final List<DeletedProject> deleted = deleteProjectRootsReturningTree(rootUuids);
+        final var changes = new ArrayList<AssessmentChange>(deleted.size());
+        for (final DeletedProject project : deleted) {
+            changes.add(new AssessmentChange(
+                    Scope.PROJECT,
+                    project.uuid(),
+                    null,
+                    null,
+                    AssessmentStructureCapture.PROJECT_DELETED,
+                    AssessmentStructureCapture.keys(project.name(), project.version())));
+        }
+        AssessmentStructureCapture.recordProjects(getHandle(), changes);
+        return deleted;
+    }
+
+    private void recordRemovedProjects(final List<ProjectTreeRow> removed) {
+        final var changes = new ArrayList<AssessmentChange>(removed.size());
+        for (final ProjectTreeRow project : removed) {
+            if (project.uuid() == null) {
+                continue;
+            }
+            changes.add(new AssessmentChange(
+                    Scope.PROJECT,
+                    project.uuid(),
+                    null,
+                    null,
+                    AssessmentStructureCapture.PROJECT_DELETED,
+                    AssessmentStructureCapture.keys(project.name(), project.version())));
+        }
+        AssessmentStructureCapture.recordProjects(getHandle(), changes);
+    }
+
+    private void recordRemovedProjectRows(final List<DeletedProjectRow> removed) {
+        final var changes = new ArrayList<AssessmentChange>(removed.size());
+        for (final DeletedProjectRow project : removed) {
+            changes.add(new AssessmentChange(
+                    Scope.PROJECT,
+                    project.uuid(),
+                    null,
+                    null,
+                    AssessmentStructureCapture.PROJECT_DELETED,
+                    AssessmentStructureCapture.keys(project.name(), project.version())));
+        }
+        AssessmentStructureCapture.recordProjects(getHandle(), changes);
+    }
+
+    private static List<UUID> projectUuids(final List<ProjectTreeRow> rows) {
+        final var uuids = new ArrayList<UUID>(rows.size());
+        for (final ProjectTreeRow row : rows) {
+            if (row.uuid() != null) {
+                uuids.add(row.uuid());
+            }
+        }
+        return uuids;
+    }
 
     record ProjectInfoRow(long id, boolean isCollection) {}
 
@@ -852,6 +1039,10 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
      * @since 5.0.0
      */
     default UUID cloneProject(final CloneProjectCommand command) {
+        if (!getHandle().isInTransaction()) {
+            return getHandle()
+                    .inTransaction(handle -> handle.attach(ProjectDao.class).cloneProject(command));
+        }
         final Query query = getHandle().createQuery(/* language=SQL */ """
                 SELECT clone_project(
                   :sourceProjectUuid
@@ -869,8 +1060,9 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
                 );
                 """);
 
+        final UUID clonedProjectUuid;
         try {
-            return query.bindMethods(command).mapTo(UUID.class).one();
+            clonedProjectUuid = query.bindMethods(command).mapTo(UUID.class).one();
         } catch (UnableToExecuteStatementException e) {
             if (e.getCause() instanceof final PSQLException pe
                     && pe.getServerErrorMessage() != null
@@ -886,6 +1078,29 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
 
             throw e;
         }
+
+        final ProjectTreeRow cloned = getHandle()
+                .createQuery(/* language=SQL */ """
+                        SELECT "UUID" AS "UUID"
+                             , "NAME" AS "NAME"
+                             , "VERSION" AS "VERSION"
+                          FROM "PROJECT"
+                         WHERE "UUID" = :projectUuid
+                        """)
+                .bind("projectUuid", clonedProjectUuid)
+                .map((rs, ctx) -> new ProjectTreeRow(
+                        rs.getObject("UUID", UUID.class), rs.getString("NAME"), rs.getString("VERSION")))
+                .one();
+        AssessmentMutationGuard.lockProject(getHandle(), clonedProjectUuid);
+        AssessmentStructureCapture.rebuildAndRecord(
+                getHandle(),
+                clonedProjectUuid,
+                AssessmentStructureCapture.PROJECT_CLONED,
+                cloned.name(),
+                cloned.version(),
+                cloned.name(),
+                cloned.version());
+        return clonedProjectUuid;
     }
 
     /**

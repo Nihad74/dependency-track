@@ -27,6 +27,8 @@ import alpine.model.auth.UserType;
 import alpine.resources.AlpineRequest;
 import com.github.packageurl.PackageURL;
 import org.datanucleus.api.jdo.JDOQuery;
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.metrics.MetricsDao;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.ProjectCollectionLogic;
@@ -47,10 +49,12 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNullElse;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.dependencytrack.util.PersistenceUtil.assertPersistent;
 import static org.dependencytrack.util.PersistenceUtil.assertPersistentAll;
@@ -235,6 +239,18 @@ final class ProjectQueryManager extends QueryManager {
             project.setTags(null);
 
             final Project newProject = persist(project);
+            if (newProject.getUuid() != null) {
+                final String projectName = newProject.getName();
+                final String projectVersion = newProject.getVersion();
+                useJdbiHandle(this, handle -> {
+                    AssessmentMutationGuard.lockProject(handle, newProject.getUuid());
+                    AssessmentStructureCapture.recordProject(
+                            handle,
+                            newProject.getUuid(),
+                            AssessmentStructureCapture.PROJECT_CREATED,
+                            AssessmentStructureCapture.keys(projectName, projectVersion));
+                });
+            }
             final Set<Tag> resolvedTags = resolveTags(tags);
             bind(project, resolvedTags);
             return newProject;
@@ -252,6 +268,11 @@ final class ProjectQueryManager extends QueryManager {
     public Project updateProject(Project transientProject, boolean commitIndex) {
         return callInTransaction(() -> {
             final Project project = getObjectByUuid(Project.class, transientProject.getUuid());
+            final String nameBefore = project.getName();
+            final String versionBefore = project.getVersion();
+            final boolean activeBefore = project.isActive();
+            final ProjectCollectionLogic collectionBefore = project.getCollectionLogic();
+            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
 
             // NB: Resolve the parent BEFORE setting any field below, for the same reason the
             // collection tag is resolved before collectionLogic further down: getObjectByUuid
@@ -342,7 +363,21 @@ final class ProjectQueryManager extends QueryManager {
 
             final Set<Tag> resolvedTags = resolveTags(transientProject.getTags());
             bind(project, resolvedTags);
-            return persist(project);
+            final Project updated = persist(project);
+            if (!Objects.equals(nameBefore, updated.getName())
+                    || !Objects.equals(versionBefore, updated.getVersion())
+                    || activeBefore != updated.isActive()
+                    || !Objects.equals(collectionBefore, updated.getCollectionLogic())) {
+                useJdbiHandle(
+                        this,
+                        handle -> AssessmentStructureCapture.recordProject(
+                                handle,
+                                updated.getUuid(),
+                                AssessmentStructureCapture.PROJECT_UPDATED,
+                                AssessmentStructureCapture.keys(
+                                        nameBefore, versionBefore, updated.getName(), updated.getVersion())));
+            }
+            return updated;
         });
     }
 

@@ -230,7 +230,35 @@ final class AnalysisReconciler {
             hasChanged |= diffField(comments, AnalysisCommentField.OWASP_SCORE, owaspScore, desiredOwaspScore);
 
             if (!hasChanged) {
-                return null;
+                if (this.vulnPolicyId == null) {
+                    return null;
+                }
+                final var unchanged = new MakeAnalysisCommand(
+                        this.projectId,
+                        this.componentId,
+                        this.vulnDbId,
+                        policy.getName(),
+                        desiredState,
+                        desiredJustification,
+                        desiredResponse,
+                        desiredDetails,
+                        desiredSuppressed,
+                        desiredSeverity,
+                        desiredCvssV2Vector,
+                        desiredCvssV2Score,
+                        desiredCvssV3Vector,
+                        desiredCvssV3Score,
+                        desiredCvssV4Vector,
+                        desiredCvssV4Score,
+                        desiredOwaspVector,
+                        desiredOwaspScore);
+                return new Result(
+                        new FindingKey(componentId, vulnDbId),
+                        unchanged.asOwnershipOnly(),
+                        commenter,
+                        List.of(),
+                        false,
+                        false);
             }
 
             final var command = new MakeAnalysisCommand(

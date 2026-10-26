@@ -18,6 +18,8 @@
  */
 package org.dependencytrack.persistence.jdbi;
 
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.common.pagination.Page;
 import org.dependencytrack.common.pagination.Page.TotalCount;
 import org.dependencytrack.common.pagination.PageTokenEncoder;
@@ -41,6 +43,7 @@ import org.jdbi.v3.sqlobject.customizer.Define;
 import org.jdbi.v3.sqlobject.customizer.DefineNamedBindings;
 import org.jdbi.v3.sqlobject.statement.SqlQuery;
 import org.jdbi.v3.sqlobject.statement.SqlUpdate;
+import org.jspecify.annotations.Nullable;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -63,7 +66,61 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
               FROM "COMPONENT"
              WHERE "UUID" = :componentUuid
             """)
-    int deleteComponent(@Bind final UUID componentUuid);
+    int deleteComponentRow(@Bind final UUID componentUuid);
+
+    /// Deletes a component and records one project invalidation for its owner.
+    default int deleteComponent(final UUID componentUuid) {
+        if (!getHandle().isInTransaction()) {
+            return getHandle()
+                    .inTransaction(handle -> handle.attach(ComponentDao.class).deleteComponent(componentUuid));
+        }
+        final UUID projectUuid = getHandle()
+                .createQuery(/* language=SQL */ """
+                        SELECT project."UUID"
+                          FROM "COMPONENT" AS component
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = component."PROJECT_ID"
+                         WHERE component."UUID" = :componentUuid
+                        """)
+                .bind("componentUuid", componentUuid)
+                .mapTo(UUID.class)
+                .findOne()
+                .orElse(null);
+        if (projectUuid == null) {
+            return deleteComponentRow(componentUuid);
+        }
+        AssessmentMutationGuard.lockProject(getHandle(), projectUuid);
+        final ComponentProjectSnapshot snapshot = getHandle()
+                .createQuery(/* language=SQL */ """
+                        SELECT project."NAME" AS project_name
+                             , project."VERSION" AS project_version
+                          FROM "COMPONENT" AS component
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = component."PROJECT_ID"
+                         WHERE component."UUID" = :componentUuid
+                         FOR UPDATE OF component
+                        """)
+                .bind("componentUuid", componentUuid)
+                .map((rs, ctx) ->
+                        new ComponentProjectSnapshot(rs.getString("project_name"), rs.getString("project_version")))
+                .findOne()
+                .orElse(null);
+        final int deleted = deleteComponentRow(componentUuid);
+        if (snapshot != null) {
+            AssessmentStructureCapture.rebuildAndRecord(
+                    getHandle(),
+                    projectUuid,
+                    AssessmentStructureCapture.COMPONENT_CHANGED,
+                    snapshot.projectName(),
+                    snapshot.projectVersion(),
+                    snapshot.projectName(),
+                    snapshot.projectVersion());
+        }
+        return deleted;
+    }
+
+    record ComponentProjectSnapshot(
+            String projectName, @Nullable String projectVersion) {}
 
     @SqlQuery(/* language=InjectedFreeMarker */ """
             <#-- @ftlvariable name="apiProjectAclCondition" type="String" -->

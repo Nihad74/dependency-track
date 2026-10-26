@@ -19,6 +19,7 @@
 package org.dependencytrack.persistence.jdbi;
 
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.metrics.DependencyMetrics;
 import org.dependencytrack.metrics.MetricsDao;
 import org.dependencytrack.metrics.ProjectMetrics;
@@ -44,6 +45,7 @@ import org.dependencytrack.notification.NotificationScope;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.persistence.command.MakeViolationAnalysisCommand;
 import org.dependencytrack.persistence.jdbi.command.CloneProjectCommand;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.dependencytrack.util.DateUtil;
 import org.jdbi.v3.core.Handle;
 import org.junit.jupiter.api.AfterEach;
@@ -60,8 +62,10 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.openJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 public class ProjectDaoTest extends PersistenceCapableTest {
@@ -520,5 +524,221 @@ public class ProjectDaoTest extends PersistenceCapableTest {
                             assertThat(row.uuid()).isEqualTo(grandChild.getUuid());
                             assertThat(row.ancestorUuid()).isEqualTo(child.getUuid());
                         });
+    }
+
+    @Test
+    public void renameKeepsBothLookupKeysInOneOutboxRow() {
+        final var project = new Project();
+        project.setName("old-name");
+        project.setVersion("1.0.0");
+        qm.persist(project);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            final var update = new Project();
+            update.setUuid(project.getUuid());
+            update.setName("new-name");
+            update.setVersion("1.0.0");
+            update.setActive(true);
+            qm.updateProject(update, false);
+
+            final List<String> lookupKeys = withJdbiHandle(handle -> handle.createQuery("""
+                            SELECT "LOOKUP_KEYS"::text
+                              FROM "ASSESSMENT_SYNC_OUTBOX"
+                             WHERE "PROJECT_UUID" = :projectUuid
+                            """)
+                    .bind("projectUuid", project.getUuid())
+                    .mapTo(String.class)
+                    .list());
+            assertThat(lookupKeys)
+                    .satisfiesExactly(keys -> assertThat(keys)
+                            .contains("old-name")
+                            .contains("new-name")
+                            .contains("1.0.0"));
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    @Test
+    public void deleteParentRecordsChildAndKeepsTheOutboxRow() {
+        final var parent = new Project();
+        parent.setName("acme-app-parent");
+        parent.setVersion("1.0.0");
+        qm.persist(parent);
+
+        final var child = new Project();
+        child.setParent(parent);
+        child.setName("acme-app-child");
+        child.setVersion("2.0.0");
+        qm.persist(child);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            withJdbiHandle(handle -> handle.attach(ProjectDao.class).deleteProjects(List.of(parent.getUuid())));
+
+            assertThat(projectDao.getProjectId(parent.getUuid())).isNull();
+            assertThat(projectDao.getProjectId(child.getUuid())).isNull();
+            final List<String> lookupKeys = withJdbiHandle(handle -> handle.createQuery("""
+                            SELECT "LOOKUP_KEYS"::text
+                              FROM "ASSESSMENT_SYNC_OUTBOX"
+                             WHERE "PROJECT_UUID" IN (:parentUuid, :childUuid)
+                             ORDER BY "PROJECT_UUID"
+                            """)
+                    .bind("parentUuid", parent.getUuid())
+                    .bind("childUuid", child.getUuid())
+                    .mapTo(String.class)
+                    .list());
+            assertThat(lookupKeys).hasSize(2);
+            assertThat(String.join("\n", lookupKeys)).contains("acme-app-parent", "1.0.0", "acme-app-child", "2.0.0");
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    @Test
+    public void deleteProjectsRollbackLeavesNoOutboxRow() {
+        final var parent = new Project();
+        parent.setName("acme-app-parent");
+        parent.setVersion("1.0.0");
+        qm.persist(parent);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            assertThatThrownBy(() -> useJdbiTransaction(handle -> {
+                        handle.attach(ProjectDao.class).deleteProjects(List.of(parent.getUuid()));
+                        throw new IllegalStateException("force rollback");
+                    }))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThat(projectDao.getProjectId(parent.getUuid())).isEqualTo(parent.getId());
+            assertThat(outboxCount(parent.getUuid())).isZero();
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    @Test
+    public void cloneSkipsInheritedAnalysisAndRecordsOneProjectRow() {
+        final var project = new Project();
+        project.setName("acme-app");
+        project.setVersion("1.0.0");
+        qm.persist(project);
+
+        final var localComponent = new Component();
+        localComponent.setProject(project);
+        localComponent.setName("local-lib");
+        localComponent.setVersion("1.0.0");
+        qm.persist(localComponent);
+
+        final var inheritedComponent = new Component();
+        inheritedComponent.setProject(project);
+        inheritedComponent.setName("inherited-lib");
+        inheritedComponent.setVersion("1.0.0");
+        qm.persist(inheritedComponent);
+
+        final var localVuln = new Vulnerability();
+        localVuln.setVulnId("INT-LOCAL");
+        localVuln.setSource(Vulnerability.Source.INTERNAL);
+        qm.persist(localVuln);
+
+        final var inheritedVuln = new Vulnerability();
+        inheritedVuln.setVulnId("INT-INHERITED");
+        inheritedVuln.setSource(Vulnerability.Source.INTERNAL);
+        qm.persist(inheritedVuln);
+
+        qm.addVulnerability(localVuln, localComponent, "internal");
+        qm.addVulnerability(inheritedVuln, inheritedComponent, "internal");
+        qm.makeAnalysis(new MakeAnalysisCommand(localComponent, localVuln)
+                .withState(AnalysisState.NOT_AFFECTED)
+                .withComment("local comment")
+                .withCommenter("local"));
+        final long inheritedAnalysisId = qm.makeAnalysis(new MakeAnalysisCommand(inheritedComponent, inheritedVuln)
+                .withState(AnalysisState.IN_TRIAGE)
+                .withComment("inherited comment")
+                .withCommenter("inherited"));
+        jdbiHandle.createUpdate("""
+                        UPDATE "ASSESSMENT_ORIGIN"
+                           SET "OWNER" = 'INHERITED'
+                         WHERE "ANALYSIS_ID" = :analysisId
+                        """).bind("analysisId", inheritedAnalysisId).execute();
+        jdbiHandle
+                .createUpdate("""
+                        INSERT INTO "ASSESSMENT_SOURCE_CONTRIBUTION" (
+                          "TARGET_ANALYSIS_ID", "SOURCE_PROJECT_UUID", "SOURCE_COMPONENT_UUID"
+                        , "SOURCE_VULNERABILITY_UUID", "SOURCE_ANALYSIS_ID"
+                        )
+                        VALUES (:analysisId, :sourceProject, :sourceComponent, :sourceVulnerability, 1)
+                        """)
+                .bind("analysisId", inheritedAnalysisId)
+                .bind("sourceProject", UUID.randomUUID())
+                .bind("sourceComponent", UUID.randomUUID())
+                .bind("sourceVulnerability", UUID.randomUUID())
+                .execute();
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        final UUID clonedUuid;
+        try {
+            clonedUuid = projectDao.cloneProject(new CloneProjectCommand(
+                    project.getUuid(), "1.1.0", false, false, true, true, true, false, false, false, false, false));
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+
+        final List<String> comments = jdbiHandle
+                .createQuery("""
+                        SELECT comment."COMMENT"
+                          FROM "ANALYSISCOMMENT" AS comment
+                         INNER JOIN "ANALYSIS" AS analysis
+                            ON analysis."ID" = comment."ANALYSIS_ID"
+                         INNER JOIN "COMPONENT" AS component
+                            ON component."ID" = analysis."COMPONENT_ID"
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = component."PROJECT_ID"
+                         WHERE project."UUID" = :projectUuid
+                        """)
+                .bind("projectUuid", clonedUuid)
+                .mapTo(String.class)
+                .list();
+        assertThat(comments).contains("local comment").doesNotContain("inherited comment");
+
+        final long contributionCount = jdbiHandle
+                .createQuery("""
+                        SELECT COUNT(*)
+                          FROM "ASSESSMENT_SOURCE_CONTRIBUTION" AS contribution
+                         INNER JOIN "ANALYSIS" AS analysis
+                            ON analysis."ID" = contribution."TARGET_ANALYSIS_ID"
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = analysis."PROJECT_ID"
+                         WHERE project."UUID" = :projectUuid
+                        """)
+                .bind("projectUuid", clonedUuid)
+                .mapTo(Long.class)
+                .one();
+        assertThat(contributionCount).isZero();
+        assertThat(outboxCount(project.getUuid())).isZero();
+        assertThat(outboxReasons(clonedUuid)).containsExactly("PROJECT_CLONED");
+    }
+
+    private static int outboxCount(final UUID projectUuid) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT COUNT(*)::int
+                          FROM "ASSESSMENT_SYNC_OUTBOX"
+                         WHERE "PROJECT_UUID" = :projectUuid
+                        """)
+                .bind("projectUuid", projectUuid)
+                .mapTo(int.class)
+                .one());
+    }
+
+    private static List<String> outboxReasons(final UUID projectUuid) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT "REASON"
+                          FROM "ASSESSMENT_SYNC_OUTBOX"
+                         WHERE "PROJECT_UUID" = :projectUuid
+                         ORDER BY "ID"
+                        """)
+                .bind("projectUuid", projectUuid)
+                .mapTo(String.class)
+                .list());
     }
 }

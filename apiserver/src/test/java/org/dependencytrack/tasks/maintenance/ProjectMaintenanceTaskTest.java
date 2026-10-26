@@ -19,17 +19,21 @@
 package org.dependencytrack.tasks.maintenance;
 
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.pagination.Page;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.dependencytrack.persistence.jdbi.ProjectDao.ListProjectsRow;
 import org.dependencytrack.persistence.jdbi.query.ListProjectsQuery;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.dependencytrack.util.DateUtil;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
+import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
@@ -242,5 +246,61 @@ class ProjectMaintenanceTaskTest extends PersistenceCapableTest {
         final Page<ListProjectsRow> projectsPage =
                 withJdbiHandle(handle -> handle.attach(ProjectDao.class).getProjects(new ListProjectsQuery()));
         assertThat(projectsPage.items()).isNotEmpty();
+    }
+
+    @Test
+    void retentionDeleteRecordsDescendant() {
+        qm.createConfigProperty(
+                MAINTENANCE_PROJECTS_RETENTION_TYPE.getGroupName(),
+                MAINTENANCE_PROJECTS_RETENTION_TYPE.getPropertyName(),
+                "AGE",
+                MAINTENANCE_PROJECTS_RETENTION_TYPE.getPropertyType(),
+                MAINTENANCE_PROJECTS_RETENTION_TYPE.getDescription());
+        qm.createConfigProperty(
+                MAINTENANCE_PROJECTS_RETENTION_DAYS.getGroupName(),
+                MAINTENANCE_PROJECTS_RETENTION_DAYS.getPropertyName(),
+                MAINTENANCE_PROJECTS_RETENTION_DAYS.getDefaultPropertyValue(),
+                MAINTENANCE_PROJECTS_RETENTION_DAYS.getPropertyType(),
+                MAINTENANCE_PROJECTS_RETENTION_DAYS.getDescription());
+
+        final var parent = new Project();
+        parent.setName("retained-parent");
+        parent.setVersion("1.0.0");
+        parent.setInactiveSince(Date.from(Instant.now().minus(Duration.ofDays(40))));
+        qm.persist(parent);
+
+        final var child = new Project();
+        child.setParent(parent);
+        child.setName("retained-child");
+        child.setVersion("2.0.0");
+        qm.persist(child);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            assertThatNoException().isThrownBy(new ProjectMaintenanceTask()::run);
+            final Long parentId =
+                    withJdbiHandle(handle -> handle.attach(ProjectDao.class).getProjectId(parent.getUuid()));
+            final Long childId =
+                    withJdbiHandle(handle -> handle.attach(ProjectDao.class).getProjectId(child.getUuid()));
+            assertThat(parentId).isNull();
+            assertThat(childId).isNull();
+            final List<String> lookupKeys = lookupKeys(parent.getUuid(), child.getUuid());
+            assertThat(lookupKeys).hasSize(2);
+            assertThat(String.join("\n", lookupKeys)).contains("retained-parent", "1.0.0", "retained-child", "2.0.0");
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    private static List<String> lookupKeys(final UUID parentUuid, final UUID childUuid) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT "LOOKUP_KEYS"::text
+                          FROM "ASSESSMENT_SYNC_OUTBOX"
+                         WHERE "PROJECT_UUID" IN (:parentUuid, :childUuid)
+                        """)
+                .bind("parentUuid", parentUuid)
+                .bind("childUuid", childUuid)
+                .mapTo(String.class)
+                .list());
     }
 }
