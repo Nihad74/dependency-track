@@ -21,6 +21,16 @@ package org.dependencytrack.dex;
 import io.github.resilience4j.core.IntervalFunction;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.dependencytrack.analysis.AnalyzeProjectWorkflow;
+import org.dependencytrack.assessmentsync.AssessmentSyncSettings;
+import org.dependencytrack.assessmentsync.workflow.CompleteAssessmentRefreshActivity;
+import org.dependencytrack.assessmentsync.workflow.ExpandAssessmentChangesActivity;
+import org.dependencytrack.assessmentsync.workflow.ExpandAssessmentChangesWorkflow;
+import org.dependencytrack.assessmentsync.workflow.MaintainAssessmentProjectionsActivity;
+import org.dependencytrack.assessmentsync.workflow.MaintainAssessmentProjectionsWorkflow;
+import org.dependencytrack.assessmentsync.workflow.ReadAssessmentSyncPendingActivity;
+import org.dependencytrack.assessmentsync.workflow.ReconcileProjectAssessmentsActivity;
+import org.dependencytrack.assessmentsync.workflow.RefreshSynchronizedAssessmentsWorkflow;
+import org.dependencytrack.assessmentsync.workflow.SynchronizeProjectAssessmentsWorkflow;
 import org.dependencytrack.cache.api.CacheManager;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.HttpClient;
@@ -64,8 +74,11 @@ import org.dependencytrack.policy.cel.CelVulnerabilityPolicyEvaluator;
 import org.dependencytrack.policy.vulnerability.SyncVulnPolicyBundleActivity;
 import org.dependencytrack.policy.vulnerability.SyncVulnPolicyBundleWorkflow;
 import org.dependencytrack.proto.internal.workflow.v1.AnalyzeProjectWorkflowArg;
+import org.dependencytrack.proto.internal.workflow.v1.AssessmentSyncPendingRes;
 import org.dependencytrack.proto.internal.workflow.v1.DeleteFilesArgument;
 import org.dependencytrack.proto.internal.workflow.v1.EvalProjectPoliciesArg;
+import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesArg;
+import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesRes;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageMetadataResolutionCandidatesArg;
 import org.dependencytrack.proto.internal.workflow.v1.FetchPackageMetadataResolutionCandidatesRes;
 import org.dependencytrack.proto.internal.workflow.v1.FetchProjectMetricsUpdateCandidatesRes;
@@ -73,6 +86,8 @@ import org.dependencytrack.proto.internal.workflow.v1.ImportBomArg;
 import org.dependencytrack.proto.internal.workflow.v1.ImportVexArg;
 import org.dependencytrack.proto.internal.workflow.v1.InvokeVulnAnalyzerArg;
 import org.dependencytrack.proto.internal.workflow.v1.InvokeVulnAnalyzerRes;
+import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjectionsArg;
+import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjectionsRes;
 import org.dependencytrack.proto.internal.workflow.v1.MirrorKevDataSourceArg;
 import org.dependencytrack.proto.internal.workflow.v1.MirrorVulnDataSourceArg;
 import org.dependencytrack.proto.internal.workflow.v1.PrepareVulnAnalysisArg;
@@ -81,10 +96,13 @@ import org.dependencytrack.proto.internal.workflow.v1.ProcessScheduledNotificati
 import org.dependencytrack.proto.internal.workflow.v1.ProcessScheduledNotificationsWorkflowArg;
 import org.dependencytrack.proto.internal.workflow.v1.PublishNotificationActivityArg;
 import org.dependencytrack.proto.internal.workflow.v1.PublishNotificationWorkflowArg;
+import org.dependencytrack.proto.internal.workflow.v1.ReconcileProjectAssessmentsRes;
 import org.dependencytrack.proto.internal.workflow.v1.ReconcileVulnAnalysisResultsArg;
+import org.dependencytrack.proto.internal.workflow.v1.RefreshSynchronizedAssessmentsArg;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageMetadataActivityArg;
 import org.dependencytrack.proto.internal.workflow.v1.ResolvePackageMetadataWorkflowArg;
 import org.dependencytrack.proto.internal.workflow.v1.SyncVulnPolicyBundleArg;
+import org.dependencytrack.proto.internal.workflow.v1.SynchronizeProjectAssessmentsArg;
 import org.dependencytrack.proto.internal.workflow.v1.UpdateProjectMetricsArg;
 import org.dependencytrack.proto.internal.workflow.v1.VulnAnalysisWorkflowArg;
 import org.dependencytrack.secret.management.SecretManager;
@@ -228,6 +246,27 @@ public final class DexEngineInitializer implements ServletContextListener {
                 protoConverter(VulnAnalysisWorkflowArg.class),
                 voidConverter(),
                 Duration.ofMinutes(1));
+        final AssessmentSyncSettings assessmentSyncSettings = AssessmentSyncSettings.read(config);
+        engine.registerWorkflow(
+                new ExpandAssessmentChangesWorkflow(),
+                protoConverter(ExpandAssessmentChangesArg.class),
+                voidConverter(),
+                Duration.ofMinutes(1));
+        engine.registerWorkflow(
+                new SynchronizeProjectAssessmentsWorkflow(),
+                protoConverter(SynchronizeProjectAssessmentsArg.class),
+                voidConverter(),
+                Duration.ofMinutes(1));
+        engine.registerWorkflow(
+                new RefreshSynchronizedAssessmentsWorkflow(),
+                protoConverter(RefreshSynchronizedAssessmentsArg.class),
+                voidConverter(),
+                Duration.ofMinutes(1));
+        engine.registerWorkflow(
+                new MaintainAssessmentProjectionsWorkflow(),
+                protoConverter(MaintainAssessmentProjectionsArg.class),
+                voidConverter(),
+                Duration.ofMinutes(1));
 
         registerActivity(engine, new IdentifyInternalComponentsActivity(), voidConverter(), voidConverter());
         registerActivity(
@@ -319,6 +358,37 @@ public final class DexEngineInitializer implements ServletContextListener {
                 new UpdateProjectMetricsActivity(),
                 protoConverter(UpdateProjectMetricsArg.class),
                 voidConverter());
+        registerActivity(
+                engine,
+                new ExpandAssessmentChangesActivity(
+                        assessmentSyncSettings.fanoutBatchSize(), assessmentSyncSettings.reconcileBatchSize()),
+                protoConverter(ExpandAssessmentChangesArg.class),
+                protoConverter(ExpandAssessmentChangesRes.class));
+        registerActivity(
+                engine,
+                new ReconcileProjectAssessmentsActivity(
+                        assessmentSyncSettings.reconcileBatchSize(),
+                        Duration.ofMillis(assessmentSyncSettings.maxBackoffMillis())),
+                protoConverter(SynchronizeProjectAssessmentsArg.class),
+                protoConverter(ReconcileProjectAssessmentsRes.class));
+        registerActivity(
+                engine,
+                new CompleteAssessmentRefreshActivity(),
+                protoConverter(RefreshSynchronizedAssessmentsArg.class),
+                voidConverter());
+        registerActivity(
+                engine,
+                new ReadAssessmentSyncPendingActivity(),
+                protoConverter(SynchronizeProjectAssessmentsArg.class),
+                protoConverter(AssessmentSyncPendingRes.class));
+        registerActivity(
+                engine,
+                new MaintainAssessmentProjectionsActivity(
+                        assessmentSyncSettings.fanoutBatchSize(),
+                        assessmentSyncSettings.reconcileBatchSize(),
+                        meterRegistry),
+                protoConverter(MaintainAssessmentProjectionsArg.class),
+                protoConverter(MaintainAssessmentProjectionsRes.class));
 
         ensureTaskQueues(
                 engine,
@@ -326,6 +396,7 @@ public final class DexEngineInitializer implements ServletContextListener {
                         new CreateTaskQueueRequest(TaskType.WORKFLOW, "default", 1000),
                         new CreateTaskQueueRequest(TaskType.ACTIVITY, "default", 1000),
                         new CreateTaskQueueRequest(TaskType.ACTIVITY, "artifact-imports", 25),
+                        new CreateTaskQueueRequest(TaskType.ACTIVITY, ExpandAssessmentChangesActivity.QUEUE_NAME, 25),
                         new CreateTaskQueueRequest(TaskType.ACTIVITY, "metrics-updates", 25),
                         new CreateTaskQueueRequest(TaskType.ACTIVITY, "notifications", 25),
                         new CreateTaskQueueRequest(TaskType.ACTIVITY, "package-metadata-resolutions", 25),
