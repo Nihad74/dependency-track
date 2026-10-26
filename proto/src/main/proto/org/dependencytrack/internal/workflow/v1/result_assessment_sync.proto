@@ -1,0 +1,92 @@
+/*
+ * This file is part of Dependency-Track.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) OWASP Foundation. All Rights Reserved.
+ */
+syntax = "proto3";
+
+package org.dependencytrack.internal.workflow.v1;
+
+option java_multiple_files = true;
+option java_package = "org.dependencytrack.proto.internal.workflow.v1";
+
+// Result of one expand-assessment-changes activity batch.
+message ExpandAssessmentChangesRes {
+  // True when another target page remains after this batch.
+  bool has_more = 1;
+
+  // Targets for which work was requested in this batch.
+  int32 targets_requested = 2;
+
+  // True when the outbox row was already deleted.
+  bool already_completed = 3;
+}
+
+// Result of one reconcile-project-assessments activity batch.
+// Counts and continuation only. Graphs and comment text stay in the database.
+message ReconcileProjectAssessmentsRes {
+  // True when this target still has reconciliation work after the batch.
+  bool has_more = 1;
+
+  // Refresh revision captured for this batch, or 0 when no machine field changed.
+  int64 refresh_revision = 2;
+
+  // True when the target project no longer exists and its work was cancelled.
+  bool target_deleted = 3;
+
+  // Findings whose inherited machine tuple was written.
+  int32 applied = 4;
+
+  // Inherited findings withdrawn to neutral.
+  int32 withdrawn = 5;
+
+  // Findings left unchanged, including protected and missing keys.
+  int32 skipped = 6;
+}
+
+// Whether a target still has reconciliation or refresh work after a workflow step.
+message AssessmentSyncPendingRes {
+  // True when REQUESTED_REVISION is still ahead of COMPLETED_REVISION.
+  bool reconciliation_pending = 1;
+
+  // True when REFRESH_REQUESTED is still ahead of REFRESH_COMPLETED.
+  bool refresh_pending = 2;
+
+  // Current REFRESH_REQUESTED value, or 0 when the work row is absent.
+  int64 refresh_requested = 3;
+
+  // True when the target project no longer exists.
+  bool target_deleted = 4;
+}
+
+// Result of one maintain-assessment-projections batch.
+// Counts only. Project text and assessment text stay in the database.
+message MaintainAssessmentProjectionsRes {
+  // Exclusive cursor for the next batch. Empty when the scan is finished.
+  string project_uuid_cursor = 1;
+
+  // True when another project page remains after this batch.
+  bool has_more = 2;
+
+  // Projects processed in this batch.
+  int32 scanned = 3;
+
+  // Findings whose expected projection differed from the stored one.
+  int32 drift = 4;
+
+  // Projects for which full target work or refresh was requested.
+  int32 enqueued = 5;
+}
