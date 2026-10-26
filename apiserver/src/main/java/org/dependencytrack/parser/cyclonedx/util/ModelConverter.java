@@ -20,6 +20,7 @@ package org.dependencytrack.parser.cyclonedx.util;
 
 import alpine.config.AlpineConfigKeys;
 import alpine.model.IConfigProperty;
+import alpine.model.auth.Principal;
 import com.github.packageurl.MalformedPackageURLException;
 import com.github.packageurl.PackageURL;
 import org.apache.commons.lang3.StringUtils;
@@ -40,6 +41,9 @@ import org.cyclonedx.model.component.evidence.Occurrence;
 import org.cyclonedx.model.license.Expression;
 import org.cyclonedx.model.license.ExpressionDetailed;
 import org.cyclonedx.model.metadata.ToolInformation;
+import org.dependencytrack.assessmentsync.AssessmentTrailAssembler;
+import org.dependencytrack.assessmentsync.AssessmentTrailAssembler.SourceAssessment;
+import org.dependencytrack.assessmentsync.AssessmentTrailAssembler.Trail;
 import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
@@ -66,9 +70,11 @@ import org.dependencytrack.parser.cyclonedx.CycloneDXExporter;
 import org.dependencytrack.parser.spdx.expression.SpdxExpression;
 import org.dependencytrack.parser.spdx.expression.SpdxExpressionParser;
 import org.dependencytrack.persistence.QueryManager;
+import org.dependencytrack.persistence.jdbi.JdbiFactory;
 import org.dependencytrack.util.VulnerabilityUtil;
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -82,6 +88,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -107,6 +114,9 @@ import static org.dependencytrack.util.PurlUtil.silentPurlCoordinatesOnly;
 public class ModelConverter {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ModelConverter.class);
+
+    /// Names an authorized source project on a CycloneDX vulnerability. The value is identity, not explanation text.
+    static final String ASSESSMENT_SOURCE_PROPERTY = "dependency-track:assessment-source";
 
     private record ComponentHashFieldAccessors(
             Function<Component, String> getter, BiConsumer<Component, String> setter) {}
@@ -1027,7 +1037,10 @@ public class ModelConverter {
     }
 
     private static org.cyclonedx.model.vulnerability.Vulnerability convert(
-            Vulnerability vulnerability, Analysis analysis, SortedSet<String> affectedComponentUuids) {
+            Vulnerability vulnerability,
+            Analysis analysis,
+            SortedSet<String> affectedComponentUuids,
+            ExportedExplanation explanation) {
         // NB: No bom-ref. It is optional, nothing references a vulnerability entry,
         // and one vulnerability may yield several entries, which historically made the vulnerability
         // UUID a source of duplicate bom-refs. CycloneDX requires every bom-ref to be unique within the BOM.
@@ -1158,8 +1171,19 @@ public class ModelConverter {
                 cdxAnalysis.setJustification(convertDtVulnAnalysisJustificationToCdxAnalysisJustification(
                         analysis.getAnalysisJustification()));
             }
-            cdxAnalysis.setDetail(StringUtils.trimToNull(analysis.getAnalysisDetails()));
+            cdxAnalysis.setDetail(explanation.detail());
             cdxVulnerability.setAnalysis(cdxAnalysis);
+            if (!explanation.sources().isEmpty()) {
+                final var properties =
+                        new ArrayList<Property>(explanation.sources().size());
+                for (final SourceAttribution source : explanation.sources()) {
+                    final var property = new Property();
+                    property.setName(ASSESSMENT_SOURCE_PROPERTY);
+                    property.setValue(source.label());
+                    properties.add(property);
+                }
+                cdxVulnerability.setProperties(properties);
+            }
         }
 
         return cdxVulnerability;
@@ -1408,7 +1432,8 @@ public class ModelConverter {
         //   additional VEX statements MUST be created for the respective subset."
         //
         // Hence, we group by vulnerability and analysis.
-        final var groups = new LinkedHashMap<VulnerabilityGroupKey, VulnerabilityGroup>();
+        final boolean emitsAnalysis = variant.hasCapability(CycloneDXExporter.Capability.EMITS_ANALYSIS);
+        final var resolved = new ArrayList<ResolvedFinding>();
         for (final Finding finding : findings) {
             final Component component = qm.getObjectByUuid(
                     Component.class, finding.getComponent().get("uuid").toString());
@@ -1422,24 +1447,116 @@ public class ModelConverter {
                 continue;
             }
 
-            final Analysis analysis = variant.hasCapability(CycloneDXExporter.Capability.EMITS_ANALYSIS)
-                    ? qm.getAnalysis(component, vulnerability)
-                    : null;
+            final Analysis analysis = emitsAnalysis ? qm.getAnalysis(component, vulnerability) : null;
+            resolved.add(new ResolvedFinding(
+                    vulnerability, analysis, component.getUuid().toString()));
+        }
 
+        final Map<Long, Trail> trails = emitsAnalysis ? sourceTrails(qm, resolved) : Map.of();
+        final var groups = new LinkedHashMap<VulnerabilityGroupKey, VulnerabilityGroup>();
+        for (final ResolvedFinding row : resolved) {
+            final ExportedExplanation explanation = exportedExplanation(row.analysis(), trails);
             groups.computeIfAbsent(
-                            VulnerabilityGroupKey.of(vulnerability, analysis),
-                            ignored -> new VulnerabilityGroup(vulnerability, analysis, new TreeSet<>()))
+                            VulnerabilityGroupKey.of(row.vulnerability(), row.analysis(), explanation),
+                            ignored -> new VulnerabilityGroup(
+                                    row.vulnerability(), row.analysis(), new TreeSet<>(), explanation))
                     .affectedComponentUuids()
-                    .add(component.getUuid().toString());
+                    .add(row.componentUuid());
         }
 
         return groups.values().stream()
-                .map(group -> convert(group.vulnerability(), group.analysis(), group.affectedComponentUuids()))
+                .map(group -> convert(
+                        group.vulnerability(), group.analysis(), group.affectedComponentUuids(), group.explanation()))
                 .toList();
     }
 
+    /// CycloneDX has one analysis.detail string. Copy source text only when every authorized
+    /// explanation is that same string, and name those sources. Differing text is omitted.
+    private static ExportedExplanation exportedExplanation(
+            final @Nullable Analysis analysis, final Map<Long, Trail> trails) {
+        if (analysis == null) {
+            return ExportedExplanation.none();
+        }
+        final Trail trail = trails.get(analysis.getId());
+        final String local =
+                trail == null ? trimToNull(analysis.getAnalysisDetails()) : trimToNull(trail.localDetails());
+        if (local != null) {
+            return new ExportedExplanation(local, List.of());
+        }
+        if (trail == null || trail.sourceAssessments().isEmpty()) {
+            return ExportedExplanation.none();
+        }
+        final var sources = new ArrayList<SourceAttribution>();
+        for (final SourceAssessment source : trail.sourceAssessments()) {
+            final String text = trimToNull(source.sourceDetails());
+            if (text == null) {
+                continue;
+            }
+            sources.add(new SourceAttribution(source.project().uuid(), sourceLabel(source), text));
+        }
+        final List<String> distinctTexts =
+                sources.stream().map(SourceAttribution::text).distinct().toList();
+        if (distinctTexts.size() != 1) {
+            return ExportedExplanation.none();
+        }
+        sources.sort(Comparator.comparing(SourceAttribution::projectUuid));
+        return new ExportedExplanation(distinctTexts.getFirst(), List.copyOf(sources));
+    }
+
+    private static String sourceLabel(final SourceAssessment source) {
+        return identityLabel(source.project().name(), source.project().version())
+                + " "
+                + identityLabel(source.component().name(), source.component().version())
+                + " "
+                + source.project().uuid();
+    }
+
+    private static String identityLabel(final String name, final @Nullable String version) {
+        return version == null || version.isBlank() ? name : name + "@" + version;
+    }
+
+    private static Map<Long, Trail> sourceTrails(final QueryManager qm, final List<ResolvedFinding> resolved) {
+        final List<Long> ids = resolved.stream()
+                .map(ResolvedFinding::analysis)
+                .filter(Objects::nonNull)
+                .map(Analysis::getId)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        final Principal principal =
+                qm.getAlpineRequest() == null ? null : qm.getAlpineRequest().getPrincipal();
+        final List<Trail> trails = JdbiFactory.withJdbiHandle(
+                qm, handle -> new AssessmentTrailAssembler().assemble(handle, principal, ids));
+        final var byId = new LinkedHashMap<Long, Trail>();
+        for (final Trail trail : trails) {
+            byId.put(trail.analysisId(), trail);
+        }
+        return byId;
+    }
+
+    private record ResolvedFinding(
+            Vulnerability vulnerability, @Nullable Analysis analysis, String componentUuid) {}
+
+    private record SourceAttribution(UUID projectUuid, String label, String text) {}
+
+    private record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sources) {
+
+        private static ExportedExplanation none() {
+            return new ExportedExplanation(null, List.of());
+        }
+
+        private ExportedExplanation {
+            sources = List.copyOf(sources);
+        }
+    }
+
     private record VulnerabilityGroup(
-            Vulnerability vulnerability, Analysis analysis, SortedSet<String> affectedComponentUuids) {}
+            Vulnerability vulnerability,
+            Analysis analysis,
+            SortedSet<String> affectedComponentUuids,
+            ExportedExplanation explanation) {}
 
     private record VulnerabilityGroupKey(
             UUID vulnerabilityUuid,
@@ -1447,11 +1564,17 @@ public class ModelConverter {
             AnalysisState analysisState,
             AnalysisJustification analysisJustification,
             AnalysisResponse analysisResponse,
-            String analysisDetails) {
+            String analysisDetails,
+            String sourceProjects) {
 
-        private static VulnerabilityGroupKey of(Vulnerability vulnerability, Analysis analysis) {
+        private static VulnerabilityGroupKey of(
+                Vulnerability vulnerability, Analysis analysis, ExportedExplanation explanation) {
+            final String sourceProjects = explanation.sources().stream()
+                    .map(source -> source.projectUuid().toString())
+                    .collect(Collectors.joining(","));
             if (analysis == null) {
-                return new VulnerabilityGroupKey(vulnerability.getUuid(), false, null, null, null, null);
+                return new VulnerabilityGroupKey(
+                        vulnerability.getUuid(), false, null, null, null, explanation.detail(), sourceProjects);
             }
 
             return new VulnerabilityGroupKey(
@@ -1460,7 +1583,8 @@ public class ModelConverter {
                     analysis.getAnalysisState(),
                     analysis.getAnalysisJustification(),
                     analysis.getAnalysisResponse(),
-                    StringUtils.trimToNull(analysis.getAnalysisDetails()));
+                    explanation.detail(),
+                    sourceProjects);
         }
     }
 
