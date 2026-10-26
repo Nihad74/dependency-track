@@ -34,7 +34,12 @@ COPY ./target/dependency-track-apiserver.jar ./
 
 RUN ./create-jre.sh -i ./dependency-track-apiserver.jar -o ./jre
 
-FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+# Distrust compromised eMudhra intermediates until Temurin drops the root,
+# see https://emudhra.we-have-a-problem.com/
+RUN keytool -delete -keystore ./jre/lib/security/cacerts -storepass changeit \
+    -alias 'cn_emsign_ecc_root_ca__g3,o_emudhra_technologies_limited,ou_emsign_pki,c_in [jdk]'
+
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 ARG COMMIT_SHA
 ARG APP_VERSION
@@ -45,7 +50,7 @@ ARG GID
 
 ENV TZ=Etc/UTC \
     # JVM Options that are passed at runtime by default
-    JAVA_OPTIONS="-XX:+UseG1GC -XX:+UseStringDeduplication -XX:+UseCompactObjectHeaders -XX:MaxGCPauseMillis=250 -XX:MaxRAMPercentage=80.0 -XX:+ExitOnOutOfMemoryError" \
+    JAVA_OPTIONS="-XX:+UseG1GC -XX:+UseStringDeduplication -XX:+UseCompactObjectHeaders -XX:MaxGCPauseMillis=250 -XX:G1PeriodicGCInterval=300000 -XX:MaxRAMPercentage=80.0 -XX:+ExitOnOutOfMemoryError" \
     # JVM Options that can be passed at runtime, while maintaining also those set in JAVA_OPTIONS.
     # e.g. EXTRA_JAVA_OPTIONS="-Dlogback.configurationFile=logback-json.xml"
     EXTRA_JAVA_OPTIONS="" \
