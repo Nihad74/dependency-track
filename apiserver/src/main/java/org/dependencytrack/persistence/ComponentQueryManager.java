@@ -26,6 +26,8 @@ import alpine.resources.AlpineRequest;
 import com.github.packageurl.MalformedPackageURLException;
 import com.github.packageurl.PackageURL;
 import org.apache.commons.lang3.tuple.Pair;
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.metrics.DependencyMetrics;
 import org.dependencytrack.metrics.MetricsDao;
 import org.dependencytrack.model.Component;
@@ -50,12 +52,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.datanucleus.PropertyNames.PROPERTY_QUERY_SQL_ALLOWALL;
 import static org.dependencytrack.model.sqlmapping.ComponentProjection.mapToComponent;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.dependencytrack.util.PersistenceUtil.assertNonPersistent;
 import static org.dependencytrack.util.PersistenceUtil.assertPersistent;
@@ -425,8 +429,29 @@ final class ComponentQueryManager extends QueryManager {
      */
     @Override
     public Component createComponent(Component component, boolean commitIndex) {
+        if (!pm.currentTransaction().isActive()) {
+            return callInTransaction(() -> createComponent(component, commitIndex));
+        }
+        final Project project = component.getProject();
+        if (project != null && project.getUuid() != null) {
+            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
+        }
         final Component result = persist(component);
         seedPackageMetadataResolution(result);
+        if (project != null && project.getUuid() != null) {
+            final String projectName = project.getName();
+            final String projectVersion = project.getVersion();
+            useJdbiHandle(
+                    this,
+                    handle -> AssessmentStructureCapture.rebuildAndRecord(
+                            handle,
+                            project.getUuid(),
+                            AssessmentStructureCapture.COMPONENT_CHANGED,
+                            projectName,
+                            projectVersion,
+                            projectName,
+                            projectVersion));
+        }
         return result;
     }
 
@@ -440,6 +465,24 @@ final class ComponentQueryManager extends QueryManager {
     @Override
     public Component updateComponent(Component transientComponent, boolean commitIndex) {
         final Component component = getObjectByUuid(Component.class, transientComponent.getUuid());
+        final Project projectBefore = component.getProject();
+        final UUID projectUuidBefore = projectBefore == null ? null : projectBefore.getUuid();
+        final String projectNameBefore = projectBefore == null ? null : projectBefore.getName();
+        final String projectVersionBefore = projectBefore == null ? null : projectBefore.getVersion();
+        final UUID transientProjectUuid = transientComponent.getProject() == null
+                ? null
+                : transientComponent.getProject().getUuid();
+        final String structureBefore = structuralSignature(component);
+        if (projectUuidBefore != null || transientProjectUuid != null) {
+            final var projectUuids = new ArrayList<UUID>(2);
+            if (projectUuidBefore != null) {
+                projectUuids.add(projectUuidBefore);
+            }
+            if (transientProjectUuid != null) {
+                projectUuids.add(transientProjectUuid);
+            }
+            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProjects(handle, projectUuids));
+        }
         component.setName(transientComponent.getName());
         component.setVersion(transientComponent.getVersion());
         component.setGroup(transientComponent.getGroup());
@@ -474,7 +517,72 @@ final class ComponentQueryManager extends QueryManager {
         component.setExternalReferences(transientComponent.getExternalReferences());
         final Component result = persist(component);
         seedPackageMetadataResolution(result);
+        final Project projectAfter = result.getProject();
+        final UUID projectUuidAfter = projectAfter == null ? null : projectAfter.getUuid();
+        if (projectUuidBefore != null && projectUuidAfter != null && !projectUuidBefore.equals(projectUuidAfter)) {
+            final String projectNameAfter = projectAfter.getName();
+            final String projectVersionAfter = projectAfter.getVersion();
+            useJdbiHandle(this, handle -> {
+                AssessmentStructureCapture.rebuildAndRecord(
+                        handle,
+                        projectUuidBefore,
+                        AssessmentStructureCapture.COMPONENT_CHANGED,
+                        projectNameBefore,
+                        projectVersionBefore,
+                        projectNameBefore,
+                        projectVersionBefore);
+                AssessmentStructureCapture.rebuildAndRecord(
+                        handle,
+                        projectUuidAfter,
+                        AssessmentStructureCapture.COMPONENT_CHANGED,
+                        projectNameAfter,
+                        projectVersionAfter,
+                        projectNameAfter,
+                        projectVersionAfter);
+            });
+        } else if (projectUuidAfter != null && !structureBefore.equals(structuralSignature(result))) {
+            useJdbiHandle(
+                    this,
+                    handle -> AssessmentStructureCapture.rebuildAndRecord(
+                            handle,
+                            projectUuidAfter,
+                            AssessmentStructureCapture.COMPONENT_CHANGED,
+                            projectNameBefore,
+                            projectVersionBefore,
+                            projectAfter.getName(),
+                            projectAfter.getVersion()));
+        }
         return result;
+    }
+
+    private static String structuralSignature(final Component component) {
+        final Project project = component.getProject();
+        return String.join(
+                "\0",
+                project == null || project.getUuid() == null
+                        ? ""
+                        : project.getUuid().toString(),
+                Objects.toString(component.getName(), ""),
+                Objects.toString(component.getVersion(), ""),
+                Objects.toString(component.getGroup(), ""),
+                Objects.toString(component.getClassifier(), ""),
+                component.getPurl() == null ? "" : component.getPurl().canonicalize(),
+                Objects.toString(component.getCpe(), ""),
+                Objects.toString(component.getDirectDependencies(), ""),
+                Objects.toString(component.getMd5(), ""),
+                Objects.toString(component.getSha1(), ""),
+                Objects.toString(component.getSha256(), ""),
+                Objects.toString(component.getSha384(), ""),
+                Objects.toString(component.getSha512(), ""),
+                Objects.toString(component.getSha3_256(), ""),
+                Objects.toString(component.getSha3_384(), ""),
+                Objects.toString(component.getSha3_512(), ""),
+                Objects.toString(component.getBlake2b_256(), ""),
+                Objects.toString(component.getBlake2b_384(), ""),
+                Objects.toString(component.getBlake2b_512(), ""),
+                Objects.toString(component.getBlake3(), ""),
+                Objects.toString(component.getStreebog_256(), ""),
+                Objects.toString(component.getStreebog_512(), ""));
     }
 
     /// @since 5.1.0

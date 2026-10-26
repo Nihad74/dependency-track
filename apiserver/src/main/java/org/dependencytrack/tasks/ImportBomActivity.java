@@ -27,6 +27,8 @@ import org.cyclonedx.parsers.Parser;
 import org.datanucleus.flush.FlushMode;
 import org.dependencytrack.analysis.AnalyzeProjectWorkflow;
 import org.dependencytrack.analysis.ProjectLastAnalysisDao;
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.common.Mappers;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
@@ -110,6 +112,7 @@ import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertSe
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertToProject;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertToProjectMetadata;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.flatten;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.proto.internal.workflow.v1.AnalysisTrigger.ANALYSIS_TRIGGER_BOM_UPLOAD;
 import static org.dependencytrack.util.PersistenceUtil.applyIfChanged;
@@ -371,7 +374,33 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
             qm.getPersistenceManager().setProperty(PROPERTY_RETAIN_VALUES, "true");
 
             return qm.callInTransaction(() -> {
+                final UUID knownProjectUuid = ctx.project.getUuid();
+                final boolean[] projectLocked = {false};
+                if (knownProjectUuid != null) {
+                    useJdbiHandle(qm, handle -> {
+                        final Long existingId = handle.createQuery(/* language=SQL */ """
+                                        SELECT "ID"
+                                          FROM "PROJECT"
+                                         WHERE "UUID" = :projectUuid
+                                        """)
+                                .bind("projectUuid", knownProjectUuid)
+                                .mapTo(Long.class)
+                                .findOne()
+                                .orElse(null);
+                        if (existingId != null) {
+                            AssessmentMutationGuard.lockProject(handle, knownProjectUuid);
+                            projectLocked[0] = true;
+                        }
+                    });
+                }
+
                 final Project persistentProject = processProject(ctx, qm, bom.project(), bom.projectMetadata());
+                if (!projectLocked[0]) {
+                    useJdbiHandle(
+                            qm, handle -> AssessmentMutationGuard.lockProject(handle, persistentProject.getUuid()));
+                }
+                final String nameBefore = persistentProject.getName();
+                final String versionBefore = persistentProject.getVersion();
 
                 LOGGER.info("Processing {} components", bom.components().size());
                 final Map<ComponentIdentity, Component> persistentComponentsByIdentity = processComponents(
@@ -399,6 +428,17 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
                 recordBomImport(ctx, qm, persistentProject);
 
                 qm.seedPackageMetadataResolution(persistentProject);
+
+                useJdbiHandle(
+                        qm,
+                        handle -> AssessmentStructureCapture.rebuildAndRecord(
+                                handle,
+                                persistentProject.getUuid(),
+                                AssessmentStructureCapture.BOM_IMPORT,
+                                nameBefore,
+                                versionBefore,
+                                persistentProject.getName(),
+                                persistentProject.getVersion()));
 
                 return new ProcessedBom(
                         persistentProject,

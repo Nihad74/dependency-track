@@ -26,6 +26,7 @@ import org.apache.http.HttpStatus;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
 import org.dependencytrack.auth.Permissions;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.engine.api.DexEngine;
 import org.dependencytrack.model.Classifier;
 import org.dependencytrack.model.Component;
@@ -35,10 +36,12 @@ import org.dependencytrack.model.OrganizationalContact;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.ProjectCollectionLogic;
 import org.dependencytrack.model.RepositoryType;
+import org.dependencytrack.persistence.jdbi.ComponentDao;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadata;
 import org.dependencytrack.pkgmetadata.PackageArtifactMetadataDao;
 import org.dependencytrack.pkgmetadata.PackageMetadata;
 import org.dependencytrack.pkgmetadata.PackageMetadataDao;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.dependencytrack.util.PurlUtil;
 import org.glassfish.jersey.inject.hk2.AbstractBinder;
 import org.glassfish.jersey.server.ResourceConfig;
@@ -61,7 +64,9 @@ import java.util.function.Supplier;
 
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.hamcrest.Matchers.equalTo;
 import static org.mockito.Mockito.mock;
@@ -1020,6 +1025,77 @@ public class ComponentResourceTest extends ResourceTest {
                 .header(X_API_KEY, apiKey)
                 .delete();
         Assertions.assertEquals(204, response.getStatus(), 0);
+    }
+
+    @Test
+    public void deleteComponentRecordsProjectOutbox() {
+        initializeWithPermissions(Permissions.PORTFOLIO_MANAGEMENT_DELETE);
+        final Project project = qm.createProject("Acme Application", null, "9.9.9", null, null, null, null, false);
+        Component component = new Component();
+        component.setProject(project);
+        component.setUuid(UUID.randomUUID());
+        component.setName("My Component");
+        component.setVersion("1.0");
+        component = qm.createComponent(component, false);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            final Response response = jersey.target(V1_COMPONENT + "/" + component.getUuid())
+                    .request()
+                    .header(X_API_KEY, apiKey)
+                    .delete();
+            assertThat(response.getStatus()).isEqualTo(204);
+            assertThat(componentCount(component.getUuid())).isZero();
+            assertThat(outboxCount(project.getUuid())).isOne();
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    @Test
+    public void deleteComponentRollbackRecordsNothing() {
+        final Project project = qm.createProject("Acme Application", null, "9.9.9", null, null, null, null, false);
+        final Component component = new Component();
+        component.setProject(project);
+        component.setUuid(UUID.randomUUID());
+        component.setName("My Component");
+        component.setVersion("1.0");
+        qm.createComponent(component, false);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            assertThatThrownBy(() -> useJdbiTransaction(handle -> {
+                        handle.attach(ComponentDao.class).deleteComponent(component.getUuid());
+                        throw new IllegalStateException("force rollback");
+                    }))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThat(componentCount(component.getUuid())).isOne();
+            assertThat(outboxCount(project.getUuid())).isZero();
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    private static int componentCount(final UUID componentUuid) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT COUNT(*)::int
+                          FROM "COMPONENT"
+                         WHERE "UUID" = :componentUuid
+                        """)
+                .bind("componentUuid", componentUuid)
+                .mapTo(int.class)
+                .one());
+    }
+
+    private static int outboxCount(final UUID projectUuid) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT COUNT(*)::int
+                          FROM "ASSESSMENT_SYNC_OUTBOX"
+                         WHERE "PROJECT_UUID" = :projectUuid
+                        """)
+                .bind("projectUuid", projectUuid)
+                .mapTo(int.class)
+                .one());
     }
 
     @Test

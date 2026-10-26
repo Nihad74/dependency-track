@@ -24,6 +24,7 @@ import org.dependencytrack.model.AnalysisState;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.Vulnerability;
 import org.dependencytrack.notification.proto.v1.Group;
+import org.jspecify.annotations.Nullable;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -41,9 +42,11 @@ import static java.util.Objects.requireNonNull;
  * @param suppress      Whether to suppress the finding
  * @param commenter     Name of the principal on which behalf audit trail entries will be created
  * @param comment       The comment to add to the audit trail
- * @param owaspVector   The OWASP Risk Rating vector to set
- * @param owaspScore    The OWASP Risk Rating score to set
- * @param options       Additional options
+ * @param owaspVector             The OWASP Risk Rating vector to set
+ * @param owaspScore              The OWASP Risk Rating score to set
+ * @param options                 Additional options
+ * @param decisionAction          Authored intent. Null is stored as {@link DecisionAction#AUTO}
+ * @param expectedDecisionVersion Optional origin version. Null skips the check
  * @since 5.0.0
  */
 public record MakeAnalysisCommand(
@@ -58,7 +61,21 @@ public record MakeAnalysisCommand(
         String comment,
         String owaspVector,
         BigDecimal owaspScore,
-        Set<Option> options) {
+        Set<Option> options,
+        DecisionAction decisionAction,
+        @Nullable Long expectedDecisionVersion) {
+
+    /**
+     * How an authored writer wants the analysis changed.
+     * {@link #VEX} is internal and is not an API choice.
+     */
+    public enum DecisionAction {
+        AUTO,
+        COMMENT_ONLY,
+        TAKE_LOCAL,
+        RELEASE_LOCAL,
+        VEX
+    }
 
     public enum Option {
 
@@ -78,10 +95,27 @@ public record MakeAnalysisCommand(
         requireNonNull(component, "component must not be null");
         requireNonNull(vulnerability, "vulnerability must not be null");
         requireNonNull(options, "options must not be null");
+        if (decisionAction == null) {
+            decisionAction = DecisionAction.AUTO;
+        }
     }
 
     public MakeAnalysisCommand(final Component component, final Vulnerability vulnerability) {
-        this(component, vulnerability, null, null, null, null, null, null, null, null, null, Collections.emptySet());
+        this(
+                component,
+                vulnerability,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Collections.emptySet(),
+                DecisionAction.AUTO,
+                null);
     }
 
     public MakeAnalysisCommand withState(final AnalysisState state) {
@@ -97,7 +131,9 @@ public record MakeAnalysisCommand(
                 this.comment,
                 this.owaspVector,
                 this.owaspScore,
-                this.options);
+                this.options,
+                this.decisionAction,
+                this.expectedDecisionVersion);
     }
 
     public MakeAnalysisCommand withJustification(final AnalysisJustification justification) {
@@ -113,7 +149,9 @@ public record MakeAnalysisCommand(
                 this.comment,
                 this.owaspVector,
                 this.owaspScore,
-                this.options);
+                this.options,
+                this.decisionAction,
+                this.expectedDecisionVersion);
     }
 
     public MakeAnalysisCommand withResponse(final AnalysisResponse response) {
@@ -129,7 +167,9 @@ public record MakeAnalysisCommand(
                 this.comment,
                 this.owaspVector,
                 this.owaspScore,
-                this.options);
+                this.options,
+                this.decisionAction,
+                this.expectedDecisionVersion);
     }
 
     public MakeAnalysisCommand withDetails(final String detail) {
@@ -145,7 +185,9 @@ public record MakeAnalysisCommand(
                 this.comment,
                 this.owaspVector,
                 this.owaspScore,
-                this.options);
+                this.options,
+                this.decisionAction,
+                this.expectedDecisionVersion);
     }
 
     public MakeAnalysisCommand withSuppress(final Boolean suppress) {
@@ -161,7 +203,9 @@ public record MakeAnalysisCommand(
                 this.comment,
                 this.owaspVector,
                 this.owaspScore,
-                this.options);
+                this.options,
+                this.decisionAction,
+                this.expectedDecisionVersion);
     }
 
     public MakeAnalysisCommand withCommenter(final String commenter) {
@@ -177,7 +221,9 @@ public record MakeAnalysisCommand(
                 this.comment,
                 this.owaspVector,
                 this.owaspScore,
-                this.options);
+                this.options,
+                this.decisionAction,
+                this.expectedDecisionVersion);
     }
 
     public MakeAnalysisCommand withComment(final String comment) {
@@ -193,7 +239,9 @@ public record MakeAnalysisCommand(
                 comment,
                 this.owaspVector,
                 this.owaspScore,
-                this.options);
+                this.options,
+                this.decisionAction,
+                this.expectedDecisionVersion);
     }
 
     public MakeAnalysisCommand withOwasp(final String owaspVector, final BigDecimal owaspScore) {
@@ -209,7 +257,9 @@ public record MakeAnalysisCommand(
                 this.comment,
                 owaspVector,
                 owaspScore,
-                this.options);
+                this.options,
+                this.decisionAction,
+                this.expectedDecisionVersion);
     }
 
     public MakeAnalysisCommand withOptions(final Set<Option> options) {
@@ -225,6 +275,44 @@ public record MakeAnalysisCommand(
                 this.comment,
                 this.owaspVector,
                 this.owaspScore,
-                options);
+                options,
+                this.decisionAction,
+                this.expectedDecisionVersion);
+    }
+
+    public MakeAnalysisCommand withDecisionAction(final DecisionAction decisionAction) {
+        return new MakeAnalysisCommand(
+                this.component,
+                this.vulnerability,
+                this.state,
+                this.justification,
+                this.response,
+                this.details,
+                this.suppress,
+                this.commenter,
+                this.comment,
+                this.owaspVector,
+                this.owaspScore,
+                this.options,
+                decisionAction,
+                this.expectedDecisionVersion);
+    }
+
+    public MakeAnalysisCommand withExpectedDecisionVersion(final Long expectedDecisionVersion) {
+        return new MakeAnalysisCommand(
+                this.component,
+                this.vulnerability,
+                this.state,
+                this.justification,
+                this.response,
+                this.details,
+                this.suppress,
+                this.commenter,
+                this.comment,
+                this.owaspVector,
+                this.owaspScore,
+                this.options,
+                this.decisionAction,
+                expectedDecisionVersion);
     }
 }

@@ -23,6 +23,7 @@ import org.cyclonedx.Version;
 import org.cyclonedx.exception.ParseException;
 import org.cyclonedx.parsers.BomParserFactory;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisComment;
 import org.dependencytrack.model.AnalysisJustification;
@@ -33,6 +34,7 @@ import org.dependencytrack.model.Project;
 import org.dependencytrack.model.Severity;
 import org.dependencytrack.model.Vulnerability;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.junit.jupiter.api.Test;
 
 import javax.jdo.Query;
@@ -44,6 +46,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 public class CycloneDXVexImporterTest extends PersistenceCapableTest {
 
@@ -774,5 +777,77 @@ public class CycloneDXVexImporterTest extends PersistenceCapableTest {
         final Analysis analysis = qm.getAnalysis(component, vuln);
         assertThat(analysis.getOwaspVector()).isNull();
         assertThat(analysis.getOwaspScore()).isNull();
+    }
+
+    @Test
+    public void shouldWriteLocalOriginAndOneOutboxRow() throws ParseException {
+        final var project = new Project();
+        project.setName("acme-app");
+        project.setVersion("1.0");
+        qm.persist(project);
+
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("Acme Component");
+        component.setVersion("1.0");
+        qm.persist(component);
+
+        final var vuln = new Vulnerability();
+        vuln.setVulnId("CVE-2099-0001");
+        vuln.setSource(Vulnerability.Source.NVD);
+        vuln.setSeverity(Severity.HIGH);
+        vuln.setComponents(List.of(component));
+        qm.persist(vuln);
+        qm.addVulnerability(vuln, component, "none");
+
+        final byte[] vexBytes = /* language=JSON */ """
+                {
+                  "bomFormat": "CycloneDX",
+                  "specVersion": "1.4",
+                  "version": 1,
+                  "metadata": {
+                    "component": {
+                      "type": "application",
+                      "bom-ref": "project",
+                      "name": "Acme Example",
+                      "version": "1.0"
+                    }
+                  },
+                  "vulnerabilities": [
+                    {
+                      "id": "CVE-2099-0001",
+                      "source": { "name": "NVD" },
+                      "analysis": { "state": "not_affected" },
+                      "affects": [{ "ref": "project" }]
+                    }
+                  ]
+                }
+                """.getBytes(StandardCharsets.UTF_8);
+        final var vex = BomParserFactory.createParser(vexBytes).parse(vexBytes);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            vexImporter.applyVex(qm, vex, project);
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+
+        final Analysis analysis = qm.getAnalysis(component, vuln);
+        assertThat(analysis.getAnalysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
+        final String owner = withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT "OWNER"
+                          FROM "ASSESSMENT_ORIGIN"
+                         WHERE "ANALYSIS_ID" = :analysisId
+                        """)
+                .bind("analysisId", analysis.getId())
+                .mapTo(String.class)
+                .one());
+        assertThat(owner).isEqualTo("LOCAL");
+        final int outboxRows = withJdbiHandle(
+                handle -> handle.createQuery("""
+                        SELECT COUNT(*)::int
+                          FROM "ASSESSMENT_SYNC_OUTBOX"
+                        """).mapTo(int.class).one());
+        assertThat(outboxRows).isEqualTo(1);
     }
 }

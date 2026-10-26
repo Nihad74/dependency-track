@@ -21,11 +21,13 @@ package org.dependencytrack.resources.v1.vo;
 import alpine.common.validation.RegexSequence;
 import alpine.server.json.TrimmedStringDeserializer;
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
 import org.dependencytrack.model.AnalysisState;
+import org.jspecify.annotations.Nullable;
 
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -81,6 +83,45 @@ public class AnalysisRequest {
     // thus using Boolean object rather than primitive.
     private final Boolean suppressed;
 
+    private final DecisionAction decisionAction;
+
+    private final @Nullable Long expectedDecisionVersion;
+
+    /**
+     * How the caller wants an existing decision changed.
+     * Clients cannot select policy or inherited ownership.
+     */
+    public enum DecisionAction {
+        AUTO,
+        COMMENT_ONLY,
+        TAKE_LOCAL,
+        RELEASE_LOCAL
+    }
+
+    public AnalysisRequest(
+            String project,
+            String component,
+            String vulnerability,
+            AnalysisState analysisState,
+            AnalysisJustification analysisJustification,
+            AnalysisResponse analysisResponse,
+            String analysisDetails,
+            String comment,
+            Boolean suppressed) {
+        this(
+                project,
+                component,
+                vulnerability,
+                analysisState,
+                analysisJustification,
+                analysisResponse,
+                analysisDetails,
+                comment,
+                suppressed,
+                DecisionAction.AUTO,
+                null);
+    }
+
     @JsonCreator
     public AnalysisRequest(
             @JsonProperty(value = "project") String project,
@@ -91,7 +132,9 @@ public class AnalysisRequest {
             @JsonProperty(value = "analysisResponse") AnalysisResponse analysisResponse,
             @JsonProperty(value = "analysisDetails") String analysisDetails,
             @JsonProperty(value = "comment") String comment,
-            @JsonProperty(value = "isSuppressed") Boolean suppressed) {
+            @JsonProperty(value = "isSuppressed") Boolean suppressed,
+            @JsonProperty(value = "decisionAction") DecisionAction decisionAction,
+            @JsonProperty(value = "expectedDecisionVersion") Long expectedDecisionVersion) {
         this.project = project;
         this.component = component;
         this.vulnerability = vulnerability;
@@ -101,6 +144,8 @@ public class AnalysisRequest {
         this.analysisDetails = analysisDetails;
         this.comment = comment;
         this.suppressed = suppressed;
+        this.decisionAction = decisionAction == null ? DecisionAction.AUTO : decisionAction;
+        this.expectedDecisionVersion = expectedDecisionVersion;
     }
 
     public String getProject() {
@@ -115,6 +160,11 @@ public class AnalysisRequest {
         return vulnerability;
     }
 
+    @JsonIgnore
+    public AnalysisState getRawAnalysisState() {
+        return analysisState;
+    }
+
     public AnalysisState getAnalysisState() {
         if (analysisState == null) {
             return AnalysisState.NOT_SET;
@@ -123,12 +173,22 @@ public class AnalysisRequest {
         }
     }
 
+    @JsonIgnore
+    public AnalysisJustification getRawAnalysisJustification() {
+        return analysisJustification;
+    }
+
     public AnalysisJustification getAnalysisJustification() {
         if (analysisJustification == null) {
             return AnalysisJustification.NOT_SET;
         } else {
             return analysisJustification;
         }
+    }
+
+    @JsonIgnore
+    public AnalysisResponse getRawAnalysisResponse() {
+        return analysisResponse;
     }
 
     public AnalysisResponse getAnalysisResponse() {
@@ -149,5 +209,18 @@ public class AnalysisRequest {
 
     public Boolean isSuppressed() {
         return suppressed;
+    }
+
+    @JsonIgnore
+    public Boolean getRawSuppressed() {
+        return suppressed;
+    }
+
+    public DecisionAction getDecisionAction() {
+        return decisionAction;
+    }
+
+    public @Nullable Long getExpectedDecisionVersion() {
+        return expectedDecisionVersion;
     }
 }
