@@ -32,6 +32,7 @@ import com.github.kagkarlsson.scheduler.task.schedule.Schedule;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
 import org.dependencytrack.analysis.PortfolioAnalysisTask;
+import org.dependencytrack.assessmentsync.workflow.MaintainAssessmentProjectionsWorkflow;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.HttpClient;
 import org.dependencytrack.common.datasource.DataSourceRegistry;
@@ -286,6 +287,15 @@ public final class TaskSchedulerInitializer implements ServletContextListener {
                         "Expired Session Cleanup",
                         getCronScheduleFromConfig(config, ConfigKeys.TASK_EXPIRED_SESSION_CLEANUP_CRON),
                         () -> new SessionTokenService().deleteExpiredSessions()),
+                recurringTask(
+                        "Assessment Projection Maintenance",
+                        getCronScheduleFromConfig(config, ConfigKeys.ASSESSMENT_SYNC_VERIFY_CRON),
+                        () -> {
+                            final var request = MaintainAssessmentProjectionsWorkflow.scheduledRun();
+                            if (request != null) {
+                                dexEngine.createRun(request);
+                            }
+                        }),
                 recurringTask(
                         "Scheduled Notification Dispatch",
                         getCronScheduleFromConfig(config, ConfigKeys.TASK_SCHEDULED_NOTIFICATION_DISPATCH_CRON),
