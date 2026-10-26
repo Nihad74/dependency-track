@@ -1,0 +1,68 @@
+/*
+ * This file is part of Dependency-Track.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) OWASP Foundation. All Rights Reserved.
+ */
+syntax = "proto3";
+
+package org.dependencytrack.internal.workflow.v1;
+
+option java_multiple_files = true;
+option java_package = "org.dependencytrack.proto.internal.workflow.v1";
+
+// Argument of the expand-assessment-changes workflow and activity.
+// Identifiers only. Expansion progress lives in the application database.
+message ExpandAssessmentChangesArg {
+  // Outbox row to expand.
+  int64 outbox_id = 1;
+
+  // Schema version stored on that outbox row.
+  int32 schema_version = 2;
+}
+
+// Argument of the synchronize-project-assessments workflow.
+message SynchronizeProjectAssessmentsArg {
+  // Target project to synchronize.
+  string project_uuid = 1;
+}
+
+// Argument of the refresh-synchronized-assessments workflow and its acknowledgement activity.
+// Identifiers only. Policy and metric state stay in the database.
+message RefreshSynchronizedAssessmentsArg {
+  // Target project whose captured refresh is being acknowledged.
+  string project_uuid = 1;
+
+  // Refresh revision captured before policy evaluation and metrics.
+  int64 refresh_revision = 2;
+}
+
+// Which maintenance pass to run. The scan cursor is not an event id or a timestamp.
+enum AssessmentMaintenanceOperation {
+  ASSESSMENT_MAINTENANCE_OPERATION_UNSPECIFIED = 0;
+  ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP = 1;
+  ASSESSMENT_MAINTENANCE_OPERATION_VERIFY = 2;
+  ASSESSMENT_MAINTENANCE_OPERATION_WITHDRAW = 3;
+}
+
+// Argument of the maintain-assessment-projections workflow and activity.
+// The optional cursor is the last project UUID finished by the previous batch.
+message MaintainAssessmentProjectionsArg {
+  // Backfill, verify, or withdraw.
+  AssessmentMaintenanceOperation operation = 1;
+
+  // Exclusive project UUID keyset cursor. Empty starts at the lowest UUID.
+  optional string project_uuid_cursor = 2;
+}
