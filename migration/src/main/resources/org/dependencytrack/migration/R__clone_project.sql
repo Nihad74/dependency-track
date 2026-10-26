@@ -376,6 +376,12 @@ BEGIN
                   AND fa."PROJECT_ID" = source_project.id
                   AND fa."DELETED_AT" IS NULL
              )
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM "ASSESSMENT_ORIGIN" AS origin
+                WHERE origin."ANALYSIS_ID" = a."ID"
+                  AND origin."OWNER" = 'INHERITED'
+             )
         ),
         target_analysis AS (
           INSERT INTO "ANALYSIS" (
