@@ -56,6 +56,7 @@ class TaskSchedulerInitializerTest {
         assertThat(tasks)
                 .extracting(RecurringTask::getName)
                 .containsExactlyInAnyOrder(
+                        "Assessment Projection Maintenance",
                         "Defect Dojo Upload",
                         "EPSS Mirror",
                         "Expired Session Cleanup",
