@@ -23,8 +23,11 @@ import alpine.server.filters.ApiFilter;
 import alpine.server.filters.AuthFeature;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.auth.Permissions;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.Project;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -33,8 +36,12 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import jakarta.ws.rs.client.Entity;
 import jakarta.ws.rs.core.Response;
 
+import java.util.List;
+import java.util.UUID;
+
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 public class AccessControlResourceTest extends ResourceTest {
 
@@ -170,6 +177,56 @@ public class AccessControlResourceTest extends ResourceTest {
 
         assertThat(project.getAccessTeams())
                 .satisfiesExactly(team -> assertThat(team.getId()).isEqualTo(super.team.getId()));
+    }
+
+    @Test
+    public void mappingChangesRecordAssessmentAccessChangeForProjectAndDescendants() {
+        initializeWithPermissions(Permissions.ACCESS_MANAGEMENT);
+
+        final var parent = new Project();
+        parent.setName("platform");
+        qm.persist(parent);
+        final var child = new Project();
+        child.setName("mrt.base.linux");
+        child.setParent(parent);
+        qm.persist(child);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            final Response added = jersey.target(V1_ACL + "/mapping")
+                    .request()
+                    .header(X_API_KEY, apiKey)
+                    .put(Entity.json(/* language=JSON */ """
+                            {
+                              "project": "%s",
+                              "team": "%s"
+                            }
+                            """.formatted(parent.getUuid(), super.team.getUuid())));
+            assertThat(added.getStatus()).isEqualTo(200);
+            assertThat(accessChangedProjects()).containsExactlyInAnyOrder(parent.getUuid(), child.getUuid());
+
+            final Response removed = jersey.target(
+                            V1_ACL + "/mapping/team/" + super.team.getUuid() + "/project/" + parent.getUuid())
+                    .request()
+                    .header(X_API_KEY, apiKey)
+                    .delete();
+            assertThat(removed.getStatus()).isEqualTo(200);
+            assertThat(accessChangedProjects())
+                    .containsExactlyInAnyOrder(parent.getUuid(), child.getUuid(), parent.getUuid(), child.getUuid());
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    private static List<UUID> accessChangedProjects() {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT "PROJECT_UUID"
+                          FROM "ASSESSMENT_SYNC_OUTBOX"
+                         WHERE "REASON" = :reason
+                        """)
+                .bind("reason", AssessmentStructureCapture.ACCESS_CHANGED)
+                .mapTo(UUID.class)
+                .list());
     }
 
     @Test

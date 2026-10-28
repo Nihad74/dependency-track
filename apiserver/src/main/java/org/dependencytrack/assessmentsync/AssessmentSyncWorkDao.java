@@ -35,6 +35,9 @@ import java.util.UUID;
 import static java.util.Objects.requireNonNull;
 
 /// Durable per-target reconciliation and refresh revisions. Mutators lock the work row first.
+///
+/// {@code PENDING_SINCE} is set when an idle row receives a request and cleared once reconciliation
+/// and refresh have both caught up. Its age is an upper bound on the delay of any pending request.
 public final class AssessmentSyncWorkDao {
 
     private static final RowMapper<WorkRow> WORK_ROW = (rs, ctx) -> new WorkRow(
@@ -68,12 +71,23 @@ public final class AssessmentSyncWorkDao {
                         , "REQUESTED_REVISION"
                         , "FULL_REVISION"
                         , "NEXT_DISPATCH_AT"
+                        , "PENDING_SINCE"
                         )
-                        VALUES (:targetUuid, 1, 1, date_trunc('milliseconds', clock_timestamp()))
+                        VALUES (
+                          :targetUuid
+                        , 1
+                        , 1
+                        , date_trunc('milliseconds', clock_timestamp())
+                        , date_trunc('milliseconds', clock_timestamp())
+                        )
                         ON CONFLICT ("TARGET_UUID") DO UPDATE
                         SET "REQUESTED_REVISION" = "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
                           , "FULL_REVISION" = "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
                           , "NEXT_DISPATCH_AT" = date_trunc('milliseconds', clock_timestamp())
+                          , "PENDING_SINCE" = COALESCE(
+                              "ASSESSMENT_SYNC_WORK"."PENDING_SINCE"
+                            , date_trunc('milliseconds', clock_timestamp())
+                            )
                         RETURNING "REQUESTED_REVISION"
                         """)
                 .bind("targetUuid", targetUuid)
@@ -91,11 +105,21 @@ public final class AssessmentSyncWorkDao {
                           "TARGET_UUID"
                         , "REQUESTED_REVISION"
                         , "NEXT_DISPATCH_AT"
+                        , "PENDING_SINCE"
                         )
-                        VALUES (:targetUuid, 1, date_trunc('milliseconds', clock_timestamp()))
+                        VALUES (
+                          :targetUuid
+                        , 1
+                        , date_trunc('milliseconds', clock_timestamp())
+                        , date_trunc('milliseconds', clock_timestamp())
+                        )
                         ON CONFLICT ("TARGET_UUID") DO UPDATE
                         SET "REQUESTED_REVISION" = "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
                           , "NEXT_DISPATCH_AT" = date_trunc('milliseconds', clock_timestamp())
+                          , "PENDING_SINCE" = COALESCE(
+                              "ASSESSMENT_SYNC_WORK"."PENDING_SINCE"
+                            , date_trunc('milliseconds', clock_timestamp())
+                            )
                         RETURNING "REQUESTED_REVISION"
                         """)
                 .bind("targetUuid", targetUuid)
@@ -227,6 +251,12 @@ public final class AssessmentSyncWorkDao {
                              , "CURSOR_COMPONENT_ID" = NULL
                              , "CURSOR_VULNERABILITY_ID" = NULL
                              , "LAST_SUCCESS_AT" = now()
+                             , "PENDING_SINCE" = CASE
+                                 WHEN "REQUESTED_REVISION" = :activeRevision
+                                  AND "REFRESH_COMPLETED" = "REFRESH_REQUESTED"
+                                 THEN NULL
+                                 ELSE "PENDING_SINCE"
+                               END
                          WHERE "TARGET_UUID" = :targetUuid
                            AND "ACTIVE_REVISION" = :activeRevision
                         """)
@@ -262,6 +292,7 @@ public final class AssessmentSyncWorkDao {
                              , "CURSOR_VULNERABILITY_ID" = NULL
                              , "LAST_SUCCESS_AT" = now()
                              , "LAST_ERROR_CODE" = NULL
+                             , "PENDING_SINCE" = NULL
                          WHERE "TARGET_UUID" = :targetUuid
                         """)
                 .bind("targetUuid", targetUuid)
@@ -277,11 +308,21 @@ public final class AssessmentSyncWorkDao {
                           "TARGET_UUID"
                         , "REFRESH_REQUESTED"
                         , "NEXT_DISPATCH_AT"
+                        , "PENDING_SINCE"
                         )
-                        VALUES (:targetUuid, 1, date_trunc('milliseconds', clock_timestamp()))
+                        VALUES (
+                          :targetUuid
+                        , 1
+                        , date_trunc('milliseconds', clock_timestamp())
+                        , date_trunc('milliseconds', clock_timestamp())
+                        )
                         ON CONFLICT ("TARGET_UUID") DO UPDATE
                         SET "REFRESH_REQUESTED" = "ASSESSMENT_SYNC_WORK"."REFRESH_REQUESTED" + 1
                           , "NEXT_DISPATCH_AT" = date_trunc('milliseconds', clock_timestamp())
+                          , "PENDING_SINCE" = COALESCE(
+                              "ASSESSMENT_SYNC_WORK"."PENDING_SINCE"
+                            , date_trunc('milliseconds', clock_timestamp())
+                            )
                         RETURNING "REFRESH_REQUESTED"
                         """)
                 .bind("targetUuid", targetUuid)
@@ -305,6 +346,15 @@ public final class AssessmentSyncWorkDao {
                                  "REFRESH_REQUESTED"
                                , GREATEST("REFRESH_COMPLETED", :capturedRefresh)
                                )
+                             , "PENDING_SINCE" = CASE
+                                 WHEN "COMPLETED_REVISION" = "REQUESTED_REVISION"
+                                  AND LEAST(
+                                        "REFRESH_REQUESTED"
+                                      , GREATEST("REFRESH_COMPLETED", :capturedRefresh)
+                                      ) = "REFRESH_REQUESTED"
+                                 THEN NULL
+                                 ELSE "PENDING_SINCE"
+                               END
                          WHERE "TARGET_UUID" = :targetUuid
                         RETURNING "REFRESH_COMPLETED"
                         """)

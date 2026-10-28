@@ -30,6 +30,7 @@ import org.dependencytrack.assessmentsync.AssessmentProjectionDao.SourceContribu
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.WorkerWrite;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDiff.Change;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDiff.CurrentProjection;
+import org.dependencytrack.assessmentsync.AssessmentSourceResolver.Identity;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
 import org.dependencytrack.model.AnalysisState;
@@ -52,6 +53,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -675,68 +677,27 @@ public final class AssessmentSynchronizer {
         if (links.isEmpty()) {
             return Map.of();
         }
-        final var identities = new LinkedHashMap<NameVersion, NameVersion>();
+        final var identities = new LinkedHashSet<Identity>();
         for (final MarkerLink link : links) {
-            if (link.name() == null || link.version() == null) {
-                continue;
+            if (link.name() != null && link.version() != null) {
+                identities.add(new Identity(link.name(), link.version()));
             }
-            final var identity = new NameVersion(link.name(), link.version());
-            identities.putIfAbsent(identity, identity);
         }
-        if (identities.isEmpty()) {
-            return Map.of();
-        }
-        final var names = new String[identities.size()];
-        final var versions = new String[identities.size()];
-        var index = 0;
-        for (final NameVersion identity : identities.values()) {
-            names[index] = identity.name();
-            versions[index] = identity.version();
-            index++;
-        }
-        final var projectsByIdentity = new LinkedHashMap<NameVersion, List<UUID>>();
-        handle.createQuery(/* language=SQL */ """
-                        SELECT "NAME"
-                             , "VERSION"
-                             , "UUID"
-                          FROM "PROJECT"
-                         WHERE "INACTIVE_SINCE" IS NULL
-                           AND "COLLECTION_LOGIC" IS NULL
-                           AND "UUID" <> :targetUuid
-                           AND ("NAME", "VERSION") IN (
-                             SELECT name, version
-                               FROM UNNEST(:names, :versions) AS marker(name, version)
-                           )
-                        """)
-                .bind("targetUuid", targetUuid)
-                .bind("names", names)
-                .bind("versions", versions)
-                .map((rs, ctx) -> {
-                    final String name = rs.getString("NAME");
-                    final String version = rs.getString("VERSION");
-                    final UUID uuid = rs.getObject("UUID", UUID.class);
-                    if (name == null || version == null || uuid == null) {
-                        return null;
-                    }
-                    projectsByIdentity
-                            .computeIfAbsent(new NameVersion(name, version), ignored -> new ArrayList<>())
-                            .add(uuid);
-                    return uuid;
-                })
-                .list();
+        // Resolved again at reconcile time so a stale index cannot keep a source that is gone or now gated.
+        final Map<Identity, UUID> sourceByIdentity = AssessmentSourceResolver.resolve(handle, targetUuid, identities);
         final var sourcesByComponent = new LinkedHashMap<Long, List<UUID>>();
         for (final MarkerLink link : links) {
             if (link.name() == null || link.version() == null) {
                 continue;
             }
-            final List<UUID> projects = projectsByIdentity.get(new NameVersion(link.name(), link.version()));
-            if (projects == null || projects.size() != 1) {
+            final UUID source = sourceByIdentity.get(new Identity(link.name(), link.version()));
+            if (source == null) {
                 continue;
             }
             final List<UUID> sources =
                     sourcesByComponent.computeIfAbsent(link.componentId(), ignored -> new ArrayList<>());
-            if (!sources.contains(projects.getFirst())) {
-                sources.add(projects.getFirst());
+            if (!sources.contains(source)) {
+                sources.add(source);
             }
         }
         return sourcesByComponent;
@@ -1189,8 +1150,6 @@ public final class AssessmentSynchronizer {
             long componentId,
             @Nullable String name,
             @Nullable String version) {}
-
-    private record NameVersion(String name, String version) {}
 
     private record CopiedTrail(
             Contributor contributor, @Nullable String details, List<SourceCommentWrite> comments) {}

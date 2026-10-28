@@ -30,6 +30,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.ConfigPropertyVisibility;
@@ -39,6 +40,7 @@ import org.dependencytrack.resources.v1.vo.ConfigPropertyResponse;
 import org.dependencytrack.resources.v1.vo.UpdateConfigPropertyRequest;
 import org.dependencytrack.secret.management.SecretManager;
 
+import org.jspecify.annotations.Nullable;
 import jakarta.inject.Inject;
 import jakarta.validation.Validator;
 import jakarta.ws.rs.ClientErrorException;
@@ -54,6 +56,7 @@ import jakarta.ws.rs.core.Response;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
@@ -272,7 +275,12 @@ public class ConfigPropertyResource extends AbstractConfigPropertyResource {
             return e.getResponse();
         }
 
+        final boolean aclBefore = isAclEnabledValue(property.groupName(), property.propertyName(), property.propertyValue());
         dao.setValue(property.groupName(), property.propertyName(), value);
+        if (aclBefore != isAclEnabledValue(property.groupName(), property.propertyName(), value)) {
+            // Source eligibility depends on portfolio access control (ADR 044).
+            AssessmentStructureCapture.recordAccessControlToggled(dao.getHandle());
+        }
         return Response.ok(ConfigPropertyResponse.of(new ConfigPropertyRow(
                         property.groupName(),
                         property.propertyName(),
@@ -280,5 +288,17 @@ public class ConfigPropertyResource extends AbstractConfigPropertyResource {
                         property.propertyType(),
                         property.description())))
                 .build();
+    }
+
+    /// Mirrors how authentication reads the flag, so both agree on what counts as enabled.
+    private static boolean isAclEnabledValue(
+            final String groupName, final String propertyName, final @Nullable String value) {
+        if (ConfigPropertyConstants.ofProperty(groupName, propertyName)
+                        != ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED
+                || value == null) {
+            return false;
+        }
+        final String normalized = value.trim().toLowerCase(Locale.ROOT);
+        return normalized.equals("true") || normalized.equals("1");
     }
 }
