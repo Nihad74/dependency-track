@@ -24,6 +24,7 @@ import alpine.resources.AlpineRequest;
 import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChangeRecorder;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentNotReleasableException;
 import org.dependencytrack.assessmentsync.AssessmentOwnership;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao;
 import org.dependencytrack.assessmentsync.StaleAssessmentDecisionException;
@@ -112,6 +113,11 @@ public class AnalysisQueryManager extends QueryManager {
             if (command.expectedDecisionVersion() != null
                     && (originBefore == null || originBefore.decisionVersion() != command.expectedDecisionVersion())) {
                 throw new StaleAssessmentDecisionException();
+            }
+            if (command.decisionAction() == DecisionAction.RELEASE_LOCAL
+                    && (analysis == null
+                            || (originBefore != null && originBefore.owner() != AssessmentOwnership.LOCAL))) {
+                throw new AssessmentNotReleasableException();
             }
 
             final boolean created = analysis == null;

@@ -33,12 +33,16 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.apache.commons.lang3.StringUtils;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentNotReleasableException;
 import org.dependencytrack.assessmentsync.AssessmentOwnership;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao;
 import org.dependencytrack.assessmentsync.AssessmentTrailAssembler;
 import org.dependencytrack.assessmentsync.StaleAssessmentDecisionException;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.model.Analysis;
+import org.dependencytrack.model.AnalysisJustification;
+import org.dependencytrack.model.AnalysisResponse;
+import org.dependencytrack.model.AnalysisState;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.Vulnerability;
@@ -63,6 +67,8 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.util.List;
+
+import static java.util.Objects.requireNonNullElse;
 
 /**
  * JAX-RS resources for processing analysis decisions.
@@ -185,7 +191,10 @@ public class AnalysisResource extends AbstractApiResource {
                 @ApiResponse(
                         responseCode = "404",
                         description = "The project, component, or vulnerability could not be found"),
-                @ApiResponse(responseCode = "409", description = "The supplied decision version is stale")
+                @ApiResponse(
+                        responseCode = "409",
+                        description = "The supplied decision version is stale, or RELEASE_LOCAL targets a decision"
+                                + " that is not local")
             })
     @PermissionRequired({
         Permissions.Constants.VULNERABILITY_ANALYSIS,
@@ -233,6 +242,10 @@ public class AnalysisResource extends AbstractApiResource {
                 return Response.status(Response.Status.CONFLICT)
                         .entity("The analysis decision version is stale. Reload the analysis and retry.")
                         .build();
+            } catch (AssessmentNotReleasableException e) {
+                return Response.status(Response.Status.CONFLICT)
+                        .entity("Only a local analysis decision can be released.")
+                        .build();
             }
         }
     }
@@ -270,7 +283,7 @@ public class AnalysisResource extends AbstractApiResource {
             case COMMENT_ONLY -> base.withDecisionAction(MakeAnalysisCommand.DecisionAction.COMMENT_ONLY);
             case RELEASE_LOCAL -> base.withDecisionAction(MakeAnalysisCommand.DecisionAction.RELEASE_LOCAL);
             case TAKE_LOCAL ->
-                applyRawEdits(base, request).withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL);
+                applySentFields(base, request).withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL);
             case AUTO -> {
                 JdbiFactory.useJdbiHandle(
                         qm,
@@ -282,9 +295,11 @@ public class AnalysisResource extends AbstractApiResource {
                         : JdbiFactory.withJdbiHandle(
                                 qm, handle -> new AssessmentProjectionDao(handle).findOrigin(existing.getId()));
                 if (origin == null || origin.owner() != AssessmentOwnership.INHERITED) {
-                    yield base.withState(request.getAnalysisState())
-                            .withJustification(request.getAnalysisJustification())
-                            .withResponse(request.getAnalysisResponse())
+                    // Unchanged v1 behavior: an omitted state, justification, or response resets to NOT_SET.
+                    yield base.withState(requireNonNullElse(request.getAnalysisState(), AnalysisState.NOT_SET))
+                            .withJustification(requireNonNullElse(
+                                    request.getAnalysisJustification(), AnalysisJustification.NOT_SET))
+                            .withResponse(requireNonNullElse(request.getAnalysisResponse(), AnalysisResponse.NOT_SET))
                             .withDetails(request.getAnalysisDetails())
                             .withSuppress(request.isSuppressed())
                             .withDecisionAction(MakeAnalysisCommand.DecisionAction.AUTO);
@@ -295,7 +310,7 @@ public class AnalysisResource extends AbstractApiResource {
                 // The comment travels on the base command, so both are stored. Rejecting this shape
                 // would break existing v1 clients on inherited rows.
                 if (decisionPresent && echoedDecisionDiffers(existing, request)) {
-                    yield applyRawEdits(base, request)
+                    yield applySentFields(base, request)
                             .withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL);
                 }
                 if (comment) {
@@ -306,35 +321,36 @@ public class AnalysisResource extends AbstractApiResource {
         };
     }
 
-    private static MakeAnalysisCommand applyRawEdits(final MakeAnalysisCommand command, final AnalysisRequest request) {
-        return command.withState(request.getRawAnalysisState())
-                .withJustification(request.getRawAnalysisJustification())
-                .withResponse(request.getRawAnalysisResponse())
+    /// Applies only the fields the client sent. Omitted fields keep their stored value.
+    private static MakeAnalysisCommand applySentFields(
+            final MakeAnalysisCommand command, final AnalysisRequest request) {
+        return command.withState(request.getAnalysisState())
+                .withJustification(request.getAnalysisJustification())
+                .withResponse(request.getAnalysisResponse())
                 .withDetails(request.getAnalysisDetails())
-                .withSuppress(request.getRawSuppressed());
+                .withSuppress(request.isSuppressed());
     }
 
     private static boolean hasDecisionField(final AnalysisRequest request) {
-        return request.getRawAnalysisState() != null
-                || request.getRawAnalysisJustification() != null
-                || request.getRawAnalysisResponse() != null
-                || request.getRawSuppressed() != null
+        return request.getAnalysisState() != null
+                || request.getAnalysisJustification() != null
+                || request.getAnalysisResponse() != null
+                || request.isSuppressed() != null
                 || request.getAnalysisDetails() != null;
     }
 
     private static boolean echoedDecisionDiffers(final Analysis analysis, final AnalysisRequest request) {
-        if (request.getRawAnalysisState() != null && request.getRawAnalysisState() != analysis.getAnalysisState()) {
+        if (request.getAnalysisState() != null && request.getAnalysisState() != analysis.getAnalysisState()) {
             return true;
         }
-        if (request.getRawAnalysisJustification() != null
-                && request.getRawAnalysisJustification() != analysis.getAnalysisJustification()) {
+        if (request.getAnalysisJustification() != null
+                && request.getAnalysisJustification() != analysis.getAnalysisJustification()) {
             return true;
         }
-        if (request.getRawAnalysisResponse() != null
-                && request.getRawAnalysisResponse() != analysis.getAnalysisResponse()) {
+        if (request.getAnalysisResponse() != null && request.getAnalysisResponse() != analysis.getAnalysisResponse()) {
             return true;
         }
-        if (request.getRawSuppressed() != null && request.getRawSuppressed() != analysis.isSuppressed()) {
+        if (request.isSuppressed() != null && request.isSuppressed() != analysis.isSuppressed()) {
             return true;
         }
         return request.getAnalysisDetails() != null

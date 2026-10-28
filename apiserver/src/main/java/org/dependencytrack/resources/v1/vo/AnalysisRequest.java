@@ -21,7 +21,6 @@ package org.dependencytrack.resources.v1.vo;
 import alpine.common.validation.RegexSequence;
 import alpine.server.json.TrimmedStringDeserializer;
 import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import org.dependencytrack.model.AnalysisJustification;
@@ -160,43 +159,17 @@ public class AnalysisRequest {
         return vulnerability;
     }
 
-    @JsonIgnore
-    public AnalysisState getRawAnalysisState() {
+    /// What the client sent; {@code null} when omitted. Callers that need the v1 default apply it themselves.
+    public @Nullable AnalysisState getAnalysisState() {
         return analysisState;
     }
 
-    public AnalysisState getAnalysisState() {
-        if (analysisState == null) {
-            return AnalysisState.NOT_SET;
-        } else {
-            return analysisState;
-        }
-    }
-
-    @JsonIgnore
-    public AnalysisJustification getRawAnalysisJustification() {
+    public @Nullable AnalysisJustification getAnalysisJustification() {
         return analysisJustification;
     }
 
-    public AnalysisJustification getAnalysisJustification() {
-        if (analysisJustification == null) {
-            return AnalysisJustification.NOT_SET;
-        } else {
-            return analysisJustification;
-        }
-    }
-
-    @JsonIgnore
-    public AnalysisResponse getRawAnalysisResponse() {
+    public @Nullable AnalysisResponse getAnalysisResponse() {
         return analysisResponse;
-    }
-
-    public AnalysisResponse getAnalysisResponse() {
-        if (analysisResponse == null) {
-            return AnalysisResponse.NOT_SET;
-        } else {
-            return analysisResponse;
-        }
     }
 
     public String getAnalysisDetails() {
@@ -207,12 +180,7 @@ public class AnalysisRequest {
         return comment;
     }
 
-    public Boolean isSuppressed() {
-        return suppressed;
-    }
-
-    @JsonIgnore
-    public Boolean getRawSuppressed() {
+    public @Nullable Boolean isSuppressed() {
         return suppressed;
     }
 
