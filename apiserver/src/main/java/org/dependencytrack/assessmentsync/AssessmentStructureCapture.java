@@ -21,6 +21,7 @@ package org.dependencytrack.assessmentsync;
 import org.dependencytrack.assessmentsync.AssessmentChange.LookupKey;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.statement.SqlStatements;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -43,6 +44,7 @@ public final class AssessmentStructureCapture {
     public static final String PROJECT_DELETED = "PROJECT_DELETED";
     public static final String PROJECT_CLONED = "PROJECT_CLONED";
     public static final String ATTRIBUTION = "ATTRIBUTION";
+    public static final String ACCESS_CHANGED = "ACCESS_CHANGED";
 
     private AssessmentStructureCapture() {}
 
@@ -103,5 +105,80 @@ public final class AssessmentStructureCapture {
 
     public static void recordFindings(final Handle handle, final Collection<AssessmentChange> changes) {
         recordProjects(handle, changes);
+    }
+
+    /// Records the projects and all their descendants, because access through a parent counts.
+    ///
+    /// Source eligibility depends on team access (ADR 044). Each event reaches the project as a target,
+    /// the targets that embed it, and the targets whose marker names it, so all affected pairs re-index.
+    public static void recordAccessChange(final Handle handle, final Collection<UUID> projectUuids) {
+        requireNonNull(handle, "handle must not be null");
+        requireNonNull(projectUuids, "projectUuids must not be null");
+        if (projectUuids.isEmpty() || !AssessmentSyncMode.current().recordsOutbox()) {
+            return;
+        }
+        final List<AssessmentChange> changes = handle.createQuery(/* language=SQL */ """
+                        SELECT DISTINCT project."UUID"
+                             , project."NAME"
+                             , project."VERSION"
+                          FROM "PROJECT" AS root
+                         INNER JOIN "PROJECT_HIERARCHY" AS hierarchy
+                            ON hierarchy."PARENT_PROJECT_ID" = root."ID"
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = hierarchy."CHILD_PROJECT_ID"
+                         WHERE root."UUID" = ANY(:projectUuids)
+                        """)
+                .bindArray("projectUuids", UUID.class, projectUuids.toArray(UUID[]::new))
+                .map((rs, ctx) ->
+                        accessChange(rs.getObject("UUID", UUID.class), rs.getString("NAME"), rs.getString("VERSION")))
+                .list();
+        new AssessmentChangeRecorder(handle).recordAll(changes);
+    }
+
+    /// Records every project that a team can access, before the team is deleted.
+    public static void recordTeamAccessRemoved(final Handle handle, final long teamId) {
+        requireNonNull(handle, "handle must not be null");
+        if (!AssessmentSyncMode.current().recordsOutbox()) {
+            return;
+        }
+        final List<UUID> projectUuids = handle.createQuery(/* language=SQL */ """
+                        SELECT project."UUID"
+                          FROM "PROJECT_ACCESS_TEAMS" AS access
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = access."PROJECT_ID"
+                         WHERE access."TEAM_ID" = :teamId
+                        """)
+                .bind("teamId", teamId)
+                .mapTo(UUID.class)
+                .list();
+        recordAccessChange(handle, projectUuids);
+    }
+
+    /// Records every target with a marker after portfolio access control is turned on or off.
+    ///
+    /// Every source-target pair has a target with an embedding row, so target events cover all pairs.
+    public static void recordAccessControlToggled(final Handle handle) {
+        requireNonNull(handle, "handle must not be null");
+        if (!AssessmentSyncMode.current().recordsOutbox()) {
+            return;
+        }
+        final List<AssessmentChange> changes = handle.createQuery(/* language=SQL */ """
+                        SELECT DISTINCT project."UUID"
+                          FROM "ASSESSMENT_EMBEDDING" AS embedding
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = embedding."TARGET_PROJECT_ID"
+                        """)
+                // Request-scoped handles bind pagination to every statement. This query declares no
+                // parameters, and JDBI rejects unused bindings only in that case.
+                .configure(SqlStatements.class, config -> config.setUnusedBindingAllowed(true))
+                .map((rs, ctx) -> new AssessmentChange(
+                        Scope.PROJECT, rs.getObject("UUID", UUID.class), null, null, ACCESS_CHANGED, List.of()))
+                .list();
+        new AssessmentChangeRecorder(handle).recordAll(changes);
+    }
+
+    private static AssessmentChange accessChange(
+            final UUID projectUuid, final @Nullable String name, final @Nullable String version) {
+        return new AssessmentChange(Scope.PROJECT, projectUuid, null, null, ACCESS_CHANGED, keys(name, version));
     }
 }

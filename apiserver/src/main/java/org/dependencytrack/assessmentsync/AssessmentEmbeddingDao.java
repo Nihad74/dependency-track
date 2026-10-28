@@ -249,7 +249,14 @@ public final class AssessmentEmbeddingDao {
             @Nullable UUID sourceProjectUuid,
             List<Long> componentIds) {
 
-        public MarkerMembership {
+        // Explicit canonical constructor: NullAway does not carry the component's @Nullable
+        // onto the parameters of a compact constructor.
+        public MarkerMembership(
+                final long markerComponentId,
+                final String markerName,
+                final String markerVersion,
+                final @Nullable UUID sourceProjectUuid,
+                final List<Long> componentIds) {
             if (markerComponentId <= 0) {
                 throw new IllegalArgumentException("markerComponentId must be positive");
             }
@@ -259,7 +266,11 @@ public final class AssessmentEmbeddingDao {
             if (markerName.isBlank() || markerVersion.isBlank()) {
                 throw new IllegalArgumentException("marker name and version must not be blank");
             }
-            componentIds = List.copyOf(componentIds);
+            this.markerComponentId = markerComponentId;
+            this.markerName = markerName;
+            this.markerVersion = markerVersion;
+            this.sourceProjectUuid = sourceProjectUuid;
+            this.componentIds = List.copyOf(componentIds);
         }
     }
 }

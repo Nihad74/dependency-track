@@ -39,6 +39,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.model.validation.ValidUuid;
 import org.dependencytrack.persistence.QueryManager;
@@ -70,6 +71,7 @@ import java.util.List;
 import java.util.Locale;
 
 import static org.datanucleus.PropertyNames.PROPERTY_RETAIN_VALUES;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.util.PersistenceUtil.isUniqueConstraintViolation;
 
 /**
@@ -254,6 +256,9 @@ public class TeamResource extends AbstractApiResource {
                 final Team team = qm.getObjectByUuid(Team.class, request.uuid(), Team.FetchGroup.ALL.name());
                 if (team != null) {
                     final String teamName = team.getName();
+                    // Must run before the delete removes the team's project mappings (ADR 044).
+                    useJdbiHandle(
+                            qm, handle -> AssessmentStructureCapture.recordTeamAccessRemoved(handle, team.getId()));
                     qm.delete(team);
                     super.logSecurityEvent(LOGGER, SecurityMarkers.SECURITY_AUDIT, "Team deleted: " + teamName);
                     return Response.status(Response.Status.NO_CONTENT).build();

@@ -23,6 +23,7 @@ import org.dependencytrack.assessmentsync.AssessmentEmbeddingDao.MarkerMembershi
 import org.dependencytrack.assessmentsync.AssessmentGraph.Edge;
 import org.dependencytrack.assessmentsync.AssessmentGraph.Graph;
 import org.dependencytrack.assessmentsync.AssessmentGraph.Node;
+import org.dependencytrack.assessmentsync.AssessmentSourceResolver.Identity;
 import org.dependencytrack.common.Mappers;
 import org.dependencytrack.model.Classifier;
 import org.jdbi.v3.core.Handle;
@@ -37,15 +38,29 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 
 /// Rebuilds one target project's marker index from the persisted dependency graph.
 ///
-/// Source projects are resolved by exact, case-sensitive name and version.
-/// The target itself, inactive projects, and collection projects are not sources.
+/// A marker is a reachable component whose classifier denotes an assembled unit (see ADR 044).
+/// Libraries, frameworks, files, and other package-level classifiers are never markers.
+/// Source projects are resolved by {@link AssessmentSourceResolver}, including the access gate.
 /// Organizational parent projects are not consulted. Services are not members.
 public final class AssessmentEmbeddingIndexer {
+
+    /// Allow-list on purpose: a classifier added to CycloneDX later stays out until added here.
+    private static final Set<String> MARKER_CLASSIFIERS = Stream.of(
+                    Classifier.APPLICATION,
+                    Classifier.CONTAINER,
+                    Classifier.DEVICE,
+                    Classifier.FIRMWARE,
+                    Classifier.OPERATING_SYSTEM,
+                    Classifier.PLATFORM)
+            .map(Classifier::name)
+            .collect(Collectors.toUnmodifiableSet());
 
     private final Handle handle;
 
@@ -158,17 +173,18 @@ public final class AssessmentEmbeddingIndexer {
             return new LoadedGraph(project.id(), List.of());
         }
 
-        final Map<NameVersion, UUID> sourceByIdentity = resolveSources(project.uuid(), markers);
+        final Map<Identity, UUID> sourceByIdentity = resolveSources(project.uuid(), markers);
         final var membership = new ArrayList<MarkerMembership>(markers.size());
         for (final ComponentRow marker : markers) {
             final String markerName = requireNonNull(marker.name());
             final String markerVersion = requireNonNull(marker.version());
             final Set<Long> descendants = AssessmentGraph.descendants(graph, marker.id());
+            // No source when the identity is ambiguous, unknown, or blocked by the access gate.
             membership.add(new MarkerMembership(
                     marker.id(),
                     markerName,
                     markerVersion,
-                    sourceByIdentity.get(new NameVersion(markerName, markerVersion)),
+                    sourceByIdentity.get(new Identity(markerName, markerVersion)),
                     List.copyOf(descendants)));
         }
         return new LoadedGraph(project.id(), membership);
@@ -186,7 +202,9 @@ public final class AssessmentEmbeddingIndexer {
     }
 
     private static boolean isMarker(final ComponentRow component) {
-        return Classifier.OPERATING_SYSTEM.name().equals(component.classifier())
+        // Immutable sets reject contains(null), so the null check comes first.
+        return component.classifier() != null
+                && MARKER_CLASSIFIERS.contains(component.classifier())
                 && component.name() != null
                 && component.version() != null
                 && !component.name().isBlank()
@@ -219,55 +237,12 @@ public final class AssessmentEmbeddingIndexer {
         return reachable;
     }
 
-    private Map<NameVersion, UUID> resolveSources(final UUID targetUuid, final List<ComponentRow> markers) {
-        final var identities = new LinkedHashSet<NameVersion>();
+    private Map<Identity, UUID> resolveSources(final UUID targetUuid, final List<ComponentRow> markers) {
+        final var identities = new LinkedHashSet<Identity>();
         for (final ComponentRow marker : markers) {
-            identities.add(new NameVersion(requireNonNull(marker.name()), requireNonNull(marker.version())));
+            identities.add(new Identity(requireNonNull(marker.name()), requireNonNull(marker.version())));
         }
-        final var names = new String[identities.size()];
-        final var versions = new String[identities.size()];
-        int index = 0;
-        for (final NameVersion identity : identities) {
-            names[index] = identity.name();
-            versions[index] = identity.version();
-            index++;
-        }
-
-        final var matches = new HashMap<NameVersion, List<UUID>>();
-        final List<SourceMatch> rows = handle.createQuery(/* language=SQL */ """
-                        SELECT "NAME"
-                             , "VERSION"
-                             , "UUID"
-                          FROM "PROJECT"
-                         WHERE "INACTIVE_SINCE" IS NULL
-                           AND "COLLECTION_LOGIC" IS NULL
-                           AND "UUID" <> :targetUuid
-                           AND ("NAME", "VERSION") IN (
-                                 SELECT name, version
-                                   FROM UNNEST(:names, :versions) AS marker(name, version)
-                               )
-                        """)
-                .bind("targetUuid", targetUuid)
-                .bindArray("names", String.class, names)
-                .bindArray("versions", String.class, versions)
-                .map((rs, ctx) -> new SourceMatch(
-                        rs.getString("NAME"), rs.getString("VERSION"), rs.getObject("UUID", UUID.class)))
-                .list();
-        for (final SourceMatch row : rows) {
-            if (row.name() == null || row.version() == null || row.uuid() == null) {
-                continue;
-            }
-            matches.computeIfAbsent(new NameVersion(row.name(), row.version()), ignored -> new ArrayList<>())
-                    .add(row.uuid());
-        }
-
-        final var resolved = new HashMap<NameVersion, UUID>();
-        for (final Map.Entry<NameVersion, List<UUID>> entry : matches.entrySet()) {
-            if (entry.getValue().size() == 1) {
-                resolved.put(entry.getKey(), entry.getValue().getFirst());
-            }
-        }
-        return resolved;
+        return AssessmentSourceResolver.resolve(handle, targetUuid, identities);
     }
 
     private static List<UUID> dependencyUuids(final @Nullable String directDependencies) {
@@ -310,11 +285,4 @@ public final class AssessmentEmbeddingIndexer {
             @Nullable String version,
             @Nullable String classifier,
             @Nullable String directDependencies) {}
-
-    private record NameVersion(String name, String version) {}
-
-    private record SourceMatch(
-            @Nullable String name,
-            @Nullable String version,
-            @Nullable UUID uuid) {}
 }

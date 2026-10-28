@@ -35,6 +35,7 @@ public final class AssessmentSyncMetrics {
     public static final String BACKLOG_EVENTS = "dt.assessment_sync.backlog.events";
     public static final String BACKLOG_WORK = "dt.assessment_sync.backlog.work";
     public static final String OLDEST_EVENT_AGE_SECONDS = "dt.assessment_sync.backlog.oldest_event_age_seconds";
+    public static final String OLDEST_WORK_AGE_SECONDS = "dt.assessment_sync.backlog.oldest_work_age_seconds";
     public static final String INHERITED = "dt.assessment_sync.inherited";
     public static final String ROLLBACK_INCOMPLETE = "dt.assessment_sync.rollback.incomplete";
     public static final String DRIFT = "dt.assessment_sync.drift";
@@ -66,6 +67,10 @@ public final class AssessmentSyncMetrics {
                 .register(registry);
         Gauge.builder(OLDEST_EVENT_AGE_SECONDS, AssessmentSyncMetrics::oldestEventAgeSeconds)
                 .description("Age in seconds of the oldest assessment sync outbox row")
+                .strongReference(true)
+                .register(registry);
+        Gauge.builder(OLDEST_WORK_AGE_SECONDS, AssessmentSyncMetrics::oldestWorkAgeSeconds)
+                .description("Seconds the longest-waiting target has had unfinished reconciliation or refresh")
                 .strongReference(true)
                 .register(registry);
         Gauge.builder(INHERITED, AssessmentSyncMetrics::inheritedRows)
@@ -101,6 +106,17 @@ public final class AssessmentSyncMetrics {
                        , 0
                        )::float8
                   FROM "ASSESSMENT_SYNC_OUTBOX"
+                """);
+    }
+
+    // Outbox rows are deleted once targets are listed, so this covers the stage after expansion.
+    private static double oldestWorkAgeSeconds() {
+        return query(/* language=SQL */ """
+                SELECT COALESCE(
+                         EXTRACT(EPOCH FROM (clock_timestamp() - MIN("PENDING_SINCE")))
+                       , 0
+                       )::float8
+                  FROM "ASSESSMENT_SYNC_WORK"
                 """);
     }
 
