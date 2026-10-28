@@ -46,6 +46,8 @@ import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import jakarta.json.Json;
 import jakarta.json.JsonArray;
@@ -1234,7 +1236,7 @@ class AnalysisResourceTest extends ResourceTest {
     @Test
     void releaseLocalClearsMachineFieldsAndKeepsComment() {
         initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
-        final var fixture = inheritedFinding();
+        final var fixture = findingOwnedBy("LOCAL");
         withCapture(() -> {
             final Response response = putAnalysis(fixture, """
                     {
@@ -1255,8 +1257,82 @@ class AnalysisResourceTest extends ResourceTest {
             assertThat(body.getString("decisionOrigin")).isEqualTo("NEUTRAL");
             assertThat(body.getJsonArray("analysisComments"))
                     .extracting(value -> ((JsonObject) value).getString("comment"))
-                    .contains("local note");
+                    .contains("local note", "released");
             assertThat(outboxCount()).isEqualTo(1);
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"INHERITED", "POLICY", "NEUTRAL"})
+    void releaseIsRejectedUnlessTheDecisionIsLocal(final String owner) {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = findingOwnedBy(owner);
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "decisionAction": "RELEASE_LOCAL"
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_CONFLICT);
+            assertThat(originOwner(fixture.analysisId())).isEqualTo(owner);
+            assertThat(isSuppressed(fixture.analysisId())).isTrue();
+            assertThat(outboxCount()).isZero();
+        });
+    }
+
+    @Test
+    void releaseOfLegacyRowWithoutOriginIsAllowed() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = findingOwnedBy("LOCAL");
+        useJdbiHandle(handle -> handle.createUpdate("""
+                        DELETE FROM "ASSESSMENT_ORIGIN"
+                         WHERE "ANALYSIS_ID" = :analysisId
+                        """)
+                .bind("analysisId", fixture.analysisId())
+                .execute());
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "decisionAction": "RELEASE_LOCAL"
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            assertThat(parseJsonObject(response).getString("decisionOrigin")).isEqualTo("NEUTRAL");
+            assertThat(isSuppressed(fixture.analysisId())).isFalse();
+        });
+    }
+
+    @Test
+    void releaseWithoutExistingAnalysisIsRejected() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final Project project = qm.createProject("Acme Example", null, "1.0", null, null, null, null, false);
+        var component = new Component();
+        component.setProject(project);
+        component.setName("Acme Component");
+        component.setVersion("1.0");
+        component = qm.createComponent(component, false);
+        var vulnerability = new Vulnerability();
+        vulnerability.setVulnId("INT-NONE");
+        vulnerability.setSource(Vulnerability.Source.INTERNAL);
+        vulnerability.setSeverity(Severity.HIGH);
+        vulnerability = qm.createVulnerability(vulnerability);
+        final var fixture = new FindingFixture(project, component, vulnerability, 0);
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "decisionAction": "RELEASE_LOCAL"
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_CONFLICT);
+            assertThat(qm.getAnalysis(fixture.component(), fixture.vulnerability()))
+                    .isNull();
+            assertThat(outboxCount()).isZero();
         });
     }
 
@@ -1304,6 +1380,75 @@ class AnalysisResourceTest extends ResourceTest {
                     .contains("exploitable in the product");
             assertThat(contributionCount(fixture.analysisId())).isZero();
             assertThat(outboxCount()).isEqualTo(1);
+        });
+    }
+
+    @Test
+    void legacyCommentWithEchoedDecisionOnInheritedRowKeepsInheritance() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = inheritedFinding();
+        withCapture(() -> {
+            // A v1 client re-sends the values it displays together with its comment.
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "comment": "agree with the source",
+                      "analysisState": "NOT_AFFECTED",
+                      "analysisJustification": "CODE_NOT_REACHABLE"
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            final JsonObject body = parseJsonObject(response);
+            assertThat(body.getString("decisionOrigin")).isEqualTo("INHERITED");
+            assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(4);
+            assertThat(body.getJsonArray("analysisComments"))
+                    .extracting(value -> ((JsonObject) value).getString("comment"))
+                    .contains("agree with the source");
+            assertThat(contributionCount(fixture.analysisId())).isEqualTo(1);
+        });
+    }
+
+    @Test
+    void takeLocalKeepsFieldsTheClientDidNotSend() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = inheritedFinding();
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "EXPLOITABLE",
+                      "decisionAction": "TAKE_LOCAL"
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            final JsonObject body = parseJsonObject(response);
+            assertThat(body.getString("analysisState")).isEqualTo("EXPLOITABLE");
+            assertThat(body.getString("analysisJustification")).isEqualTo("CODE_NOT_REACHABLE");
+            assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"""
+                {"component": "%s", "vulnerability": "%s", "decisionAction": "COMMENT_ONLY"}
+                """, """
+                {"component": "%s", "vulnerability": "%s", "decisionAction": "COMMENT_ONLY",
+                 "comment": "note", "analysisState": "EXPLOITABLE"}
+                """, """
+                {"component": "%s", "vulnerability": "%s", "decisionAction": "RELEASE_LOCAL",
+                 "isSuppressed": false}
+                """})
+    void rejectsDecisionActionThatDoesNotMatchTheFields(final String json) {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = inheritedFinding();
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, json);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_BAD_REQUEST);
+            assertThat(originOwner(fixture.analysisId())).isEqualTo("INHERITED");
+            assertThat(originVersion(fixture.analysisId())).isEqualTo(4);
+            assertThat(outboxCount()).isZero();
         });
     }
 
@@ -1372,6 +1517,11 @@ class AnalysisResourceTest extends ResourceTest {
     }
 
     private FindingFixture inheritedFinding() {
+        return findingOwnedBy("INHERITED");
+    }
+
+    /// A finding at decision version 4. Only an inherited finding gets a source contribution.
+    private FindingFixture findingOwnedBy(final String owner) {
         final Project project = qm.createProject("Acme Example", null, "1.0", null, null, null, null, false);
         var component = new Component();
         component.setProject(project);
@@ -1385,36 +1535,55 @@ class AnalysisResourceTest extends ResourceTest {
         vulnerability = qm.createVulnerability(vulnerability);
         final long analysisId = qm.makeAnalysis(new MakeAnalysisCommand(component, vulnerability)
                 .withState(AnalysisState.NOT_AFFECTED)
+                .withJustification(AnalysisJustification.CODE_NOT_REACHABLE)
+                .withSuppress(true)
                 .withComment("local note")
                 .withCommenter("Jane")
                 .withOptions(EnumSet.of(
                         MakeAnalysisCommand.Option.OMIT_AUDIT_TRAIL, MakeAnalysisCommand.Option.OMIT_NOTIFICATION)));
-        final int updated = withJdbiHandle(handle ->
-                handle.createUpdate("""
+        final boolean inherited = "INHERITED".equals(owner);
+        final int updated = withJdbiHandle(handle -> handle.createUpdate("""
                         UPDATE "ASSESSMENT_ORIGIN"
-                           SET "OWNER" = 'INHERITED'
+                           SET "OWNER" = :owner
                              , "DECISION_VERSION" = 4
-                             , "LAST_REASON" = 'SOURCE_CONFLICT'
+                             , "LAST_REASON" = :lastReason
                          WHERE "ANALYSIS_ID" = :analysisId
-                        """).bind("analysisId", analysisId).execute());
+                        """)
+                .bind("owner", owner)
+                .bind("lastReason", inherited ? "SOURCE_CONFLICT" : null)
+                .bind("analysisId", analysisId)
+                .execute());
         assertThat(updated).isEqualTo(1);
-        withJdbiHandle(handle -> handle.createUpdate("""
-                        INSERT INTO "ASSESSMENT_SOURCE_CONTRIBUTION" (
-                          "TARGET_ANALYSIS_ID"
-                        , "SOURCE_PROJECT_UUID"
-                        , "SOURCE_COMPONENT_UUID"
-                        , "SOURCE_VULNERABILITY_UUID"
-                        , "SOURCE_ANALYSIS_ID"
-                        , "SOURCE_DETAILS"
-                        )
-                        VALUES (:analysisId, :sourceProject, :sourceComponent, :sourceVulnerability, 42, 'copied')
+        if (inherited) {
+            withJdbiHandle(handle -> handle.createUpdate("""
+                            INSERT INTO "ASSESSMENT_SOURCE_CONTRIBUTION" (
+                              "TARGET_ANALYSIS_ID"
+                            , "SOURCE_PROJECT_UUID"
+                            , "SOURCE_COMPONENT_UUID"
+                            , "SOURCE_VULNERABILITY_UUID"
+                            , "SOURCE_ANALYSIS_ID"
+                            , "SOURCE_DETAILS"
+                            )
+                            VALUES (:analysisId, :sourceProject, :sourceComponent, :sourceVulnerability, 42, 'copied')
+                            """)
+                    .bind("analysisId", analysisId)
+                    .bind("sourceProject", UUID.randomUUID())
+                    .bind("sourceComponent", UUID.randomUUID())
+                    .bind("sourceVulnerability", UUID.randomUUID())
+                    .execute());
+        }
+        return new FindingFixture(project, component, vulnerability, analysisId);
+    }
+
+    private static boolean isSuppressed(final long analysisId) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT "SUPPRESSED"
+                          FROM "ANALYSIS"
+                         WHERE "ID" = :analysisId
                         """)
                 .bind("analysisId", analysisId)
-                .bind("sourceProject", UUID.randomUUID())
-                .bind("sourceComponent", UUID.randomUUID())
-                .bind("sourceVulnerability", UUID.randomUUID())
-                .execute());
-        return new FindingFixture(project, component, vulnerability, analysisId);
+                .mapTo(boolean.class)
+                .one());
     }
 
     private Response putAnalysis(final FindingFixture fixture, final String json) {
