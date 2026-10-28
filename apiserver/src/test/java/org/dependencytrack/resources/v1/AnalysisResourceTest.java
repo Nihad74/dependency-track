@@ -1282,7 +1282,7 @@ class AnalysisResourceTest extends ResourceTest {
     }
 
     @Test
-    void ambiguousInheritedCommentAndDecisionReturnsBadRequest() {
+    void legacyCommentWithChangedDecisionOnInheritedRowTakesLocalAndStoresBoth() {
         initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
         final var fixture = inheritedFinding();
         withCapture(() -> {
@@ -1290,14 +1290,20 @@ class AnalysisResourceTest extends ResourceTest {
                     {
                       "component": "%s",
                       "vulnerability": "%s",
-                      "comment": "which one",
+                      "comment": "exploitable in the product",
                       "analysisState": "EXPLOITABLE"
                     }
                     """);
-            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_BAD_REQUEST);
-            assertThat(getPlainTextBody(response)).contains("explicit");
-            assertThat(originOwner(fixture.analysisId())).isEqualTo("INHERITED");
-            assertThat(outboxCount()).isZero();
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            final JsonObject body = parseJsonObject(response);
+            assertThat(body.getString("analysisState")).isEqualTo("EXPLOITABLE");
+            assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
+            assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(5);
+            assertThat(body.getJsonArray("analysisComments"))
+                    .extracting(value -> ((JsonObject) value).getString("comment"))
+                    .contains("exploitable in the product");
+            assertThat(contributionCount(fixture.analysisId())).isZero();
+            assertThat(outboxCount()).isEqualTo(1);
         });
     }
 

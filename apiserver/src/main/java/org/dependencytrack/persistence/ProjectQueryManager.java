@@ -272,6 +272,8 @@ final class ProjectQueryManager extends QueryManager {
             final String versionBefore = project.getVersion();
             final boolean activeBefore = project.isActive();
             final ProjectCollectionLogic collectionBefore = project.getCollectionLogic();
+            final UUID parentBefore =
+                    project.getParent() == null ? null : project.getParent().getUuid();
             useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
 
             // NB: Resolve the parent BEFORE setting any field below, for the same reason the
@@ -376,6 +378,14 @@ final class ProjectQueryManager extends QueryManager {
                                 AssessmentStructureCapture.PROJECT_UPDATED,
                                 AssessmentStructureCapture.keys(
                                         nameBefore, versionBefore, updated.getName(), updated.getVersion())));
+            }
+            final UUID parentAfter =
+                    updated.getParent() == null ? null : updated.getParent().getUuid();
+            if (!Objects.equals(parentBefore, parentAfter)) {
+                // Access through a parent counts for source eligibility, so descendants are affected too.
+                useJdbiHandle(
+                        this,
+                        handle -> AssessmentStructureCapture.recordAccessChange(handle, List.of(updated.getUuid())));
             }
             return updated;
         });
@@ -581,9 +591,13 @@ final class ProjectQueryManager extends QueryManager {
 
         LOGGER.debug("adding Team to ACL of newly created project");
         final Team team = getObjectByUuid(Team.class, teams.getFirst().uuid());
-        project.addAccessTeam(team);
-        persist(project);
-        return true;
+        return callInTransaction(() -> {
+            project.addAccessTeam(team);
+            persist(project);
+            useJdbiHandle(
+                    this, handle -> AssessmentStructureCapture.recordAccessChange(handle, List.of(project.getUuid())));
+            return true;
+        });
     }
 
     /**

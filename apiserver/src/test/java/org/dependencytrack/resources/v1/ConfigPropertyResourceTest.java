@@ -23,11 +23,19 @@ import alpine.server.filters.ApiFilter;
 import alpine.server.filters.AuthFeature;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
+import org.dependencytrack.assessmentsync.AssessmentEmbeddingDao;
+import org.dependencytrack.assessmentsync.AssessmentEmbeddingDao.MarkerMembership;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.auth.Permissions;
+import org.dependencytrack.common.ConfigKeys;
+import org.dependencytrack.model.Classifier;
+import org.dependencytrack.model.Component;
 import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.ConfigPropertyVisibility;
+import org.dependencytrack.model.Project;
 import org.dependencytrack.secret.management.SecretManager;
 import org.dependencytrack.secret.management.SecretMetadata;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.glassfish.hk2.utilities.binding.AbstractBinder;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.junit.jupiter.api.Test;
@@ -36,6 +44,9 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import jakarta.ws.rs.client.Entity;
 import jakarta.ws.rs.core.Response;
 
+import java.util.List;
+import java.util.UUID;
+
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.dependencytrack.model.ConfigPropertyConstants.CUSTOM_RISK_SCORE_CRITICAL;
@@ -43,6 +54,8 @@ import static org.dependencytrack.model.ConfigPropertyConstants.CUSTOM_RISK_SCOR
 import static org.dependencytrack.model.ConfigPropertyConstants.CUSTOM_RISK_SCORE_LOW;
 import static org.dependencytrack.model.ConfigPropertyConstants.CUSTOM_RISK_SCORE_MEDIUM;
 import static org.dependencytrack.model.ConfigPropertyConstants.CUSTOM_RISK_SCORE_UNASSIGNED;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -150,6 +163,73 @@ class ConfigPropertyResourceTest extends ResourceTest {
                   "description": "A boolean"
                 }
                 """);
+    }
+
+    @Test
+    void shouldRecordAssessmentAccessChangeForEveryEmbeddingTargetWhenAclIsToggled() {
+        initializeWithPermissions(Permissions.SYSTEM_CONFIGURATION_UPDATE);
+        qm.createConfigProperty(
+                ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED.getGroupName(),
+                ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED.getPropertyName(),
+                "false",
+                ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED.getPropertyType(),
+                null);
+        final Project target = qm.createProject("cmx500", null, "1.0.0", null, null, null, null, false);
+        final var marker = new Component();
+        marker.setProject(target);
+        marker.setName("mrt.base.linux");
+        marker.setVersion("5.14.121");
+        marker.setClassifier(Classifier.OPERATING_SYSTEM);
+        final Component persistedMarker = qm.persist(marker);
+        useJdbiTransaction(handle -> new AssessmentEmbeddingDao(handle)
+                .replaceMembership(
+                        target.getId(),
+                        List.of(new MarkerMembership(
+                                persistedMarker.getId(), "mrt.base.linux", "5.14.121", null, List.of()))));
+        qm.createProject("unrelated", null, "1.0.0", null, null, null, null, false);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            final Response enabled = postAclEnabled("true");
+            assertThat(enabled.getStatus()).isEqualTo(200);
+            assertThat(accessChangedProjects()).containsExactly(target.getUuid());
+
+            final Response unchanged = postAclEnabled("TRUE");
+            assertThat(unchanged.getStatus()).isEqualTo(200);
+            assertThat(accessChangedProjects())
+                    .as("an equivalent value does not change eligibility")
+                    .containsExactly(target.getUuid());
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    private Response postAclEnabled(final String value) {
+        return jersey.target(V1_CONFIG_PROPERTY)
+                .request()
+                .header(X_API_KEY, apiKey)
+                .post(Entity.json(
+                        /* language=JSON */ """
+                        {
+                          "groupName": "%s",
+                          "propertyName": "%s",
+                          "propertyValue": "%s"
+                        }
+                        """.formatted(
+                                        ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED.getGroupName(),
+                                        ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED.getPropertyName(),
+                                        value)));
+    }
+
+    private static List<UUID> accessChangedProjects() {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT "PROJECT_UUID"
+                          FROM "ASSESSMENT_SYNC_OUTBOX"
+                         WHERE "REASON" = :reason
+                        """)
+                .bind("reason", AssessmentStructureCapture.ACCESS_CHANGED)
+                .mapTo(UUID.class)
+                .list());
     }
 
     @Test

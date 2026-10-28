@@ -2095,6 +2095,39 @@ class ImportBomActivityTest extends PersistenceCapableTest {
     }
 
     @Test
+    void importIndexesOnlyAllowListedMarkerClassifiers() throws Exception {
+        final Project firmwareSource = new Project();
+        firmwareSource.setName("mrt.firmware");
+        firmwareSource.setVersion("2.0.0");
+        qm.persist(firmwareSource);
+
+        final Project librarySource = new Project();
+        librarySource.setName("acme-lib");
+        librarySource.setVersion("1.0.0");
+        qm.persist(librarySource);
+
+        final Project target = new Project();
+        target.setName("cmx500");
+        target.setVersion("1.0.0");
+        qm.persist(target);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            activity.execute(null, buildArg(target, storeBomFile(firmwareAndLibraryBom()), UUID.randomUUID()));
+            assertBomProcessedNotification();
+
+            final long firmwarePackageId = componentId(target.getUuid(), "busybox");
+            assertThat(embeddingMembers(target.getUuid())).satisfiesExactly(member -> {
+                assertThat(member.markerName()).isEqualTo("mrt.firmware");
+                assertThat(member.sourceProjectUuid()).isEqualTo(firmwareSource.getUuid());
+                assertThat(member.componentId()).isEqualTo(firmwarePackageId);
+            });
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    @Test
     void importRollbackLeavesNoOutboxRow() throws Exception {
         final Project target = new Project();
         target.setName("cmx500");
@@ -2170,6 +2203,30 @@ class ImportBomActivityTest extends PersistenceCapableTest {
                   ],
                   "dependencies": [
                     { "ref": "root", "dependsOn": ["pkg"] }
+                  ]
+                }
+                """.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] firmwareAndLibraryBom() {
+        return /* language=JSON */ """
+                {
+                  "bomFormat": "CycloneDX",
+                  "specVersion": "1.5",
+                  "version": 1,
+                  "metadata": {
+                    "component": { "bom-ref": "root", "type": "application", "name": "cmx500", "version": "1.0.0" }
+                  },
+                  "components": [
+                    { "bom-ref": "fw", "type": "firmware", "name": "mrt.firmware", "version": "2.0.0" },
+                    { "bom-ref": "fw-pkg", "type": "library", "name": "busybox", "version": "1.36.1" },
+                    { "bom-ref": "lib", "type": "library", "name": "acme-lib", "version": "1.0.0" },
+                    { "bom-ref": "lib-pkg", "type": "library", "name": "zlib", "version": "1.3.1" }
+                  ],
+                  "dependencies": [
+                    { "ref": "root", "dependsOn": ["fw", "lib"] },
+                    { "ref": "fw", "dependsOn": ["fw-pkg"] },
+                    { "ref": "lib", "dependsOn": ["lib-pkg"] }
                   ]
                 }
                 """.getBytes(StandardCharsets.UTF_8);

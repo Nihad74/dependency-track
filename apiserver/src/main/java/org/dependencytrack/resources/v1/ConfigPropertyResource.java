@@ -31,6 +31,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.ConfigPropertyVisibility;
@@ -54,8 +55,10 @@ import jakarta.ws.rs.core.Response;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 /**
@@ -267,11 +270,26 @@ public class ConfigPropertyResource extends AbstractConfigPropertyResource {
                     .build();
         }
 
+        final boolean aclBefore = isAclEnabledValue(property);
         final Response validationError = applyPropertyValue(request.propertyValue(), property);
         if (validationError != null) {
             return validationError;
         }
+        if (aclBefore != isAclEnabledValue(property)) {
+            // Source eligibility depends on portfolio access control (ADR 044).
+            useJdbiHandle(qm, AssessmentStructureCapture::recordAccessControlToggled);
+        }
 
         return Response.ok(ConfigPropertyResponse.of(property)).build();
+    }
+
+    /// Mirrors how authentication reads the flag, so both agree on what counts as enabled.
+    private static boolean isAclEnabledValue(final ConfigProperty property) {
+        if (ConfigPropertyConstants.ofProperty(property) != ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED
+                || property.getPropertyValue() == null) {
+            return false;
+        }
+        final String value = property.getPropertyValue().trim().toLowerCase(Locale.ROOT);
+        return value.equals("true") || value.equals("1");
     }
 }

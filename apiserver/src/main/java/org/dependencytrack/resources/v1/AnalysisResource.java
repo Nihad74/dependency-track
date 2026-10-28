@@ -233,10 +233,6 @@ public class AnalysisResource extends AbstractApiResource {
                 return Response.status(Response.Status.CONFLICT)
                         .entity("The analysis decision version is stale. Reload the analysis and retry.")
                         .build();
-            } catch (AmbiguousAnalysisEditException e) {
-                return Response.status(Response.Status.BAD_REQUEST)
-                        .entity(e.getMessage())
-                        .build();
             }
         }
     }
@@ -295,16 +291,15 @@ public class AnalysisResource extends AbstractApiResource {
                 }
                 final boolean comment = StringUtils.isNotBlank(request.getComment());
                 final boolean decisionPresent = hasDecisionField(request);
-                final boolean differs = echoedDecisionDiffers(existing, request);
-                if (comment && decisionPresent && differs) {
-                    throw new AmbiguousAnalysisEditException();
+                // A changed decision from a client without decisionAction is an explicit takeover (ADR 044).
+                // The comment travels on the base command, so both are stored. Rejecting this shape
+                // would break existing v1 clients on inherited rows.
+                if (decisionPresent && echoedDecisionDiffers(existing, request)) {
+                    yield applyRawEdits(base, request)
+                            .withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL);
                 }
                 if (comment) {
                     yield base.withDecisionAction(MakeAnalysisCommand.DecisionAction.COMMENT_ONLY);
-                }
-                if (decisionPresent && differs) {
-                    yield applyRawEdits(base, request)
-                            .withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL);
                 }
                 yield base.withDecisionAction(MakeAnalysisCommand.DecisionAction.AUTO);
             }
@@ -353,12 +348,5 @@ public class AnalysisResource extends AbstractApiResource {
         final var trails = JdbiFactory.withJdbiHandle(
                 qm, handle -> new AssessmentTrailAssembler().assemble(handle, principal, List.of(analysisId)));
         return AnalysisTrailResponse.of(analysis, trails.isEmpty() ? null : trails.getFirst());
-    }
-
-    private static final class AmbiguousAnalysisEditException extends RuntimeException {
-
-        private AmbiguousAnalysisEditException() {
-            super("Send an explicit decision action. A comment combined with a different decision is ambiguous.");
-        }
     }
 }

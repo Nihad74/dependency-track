@@ -18,12 +18,15 @@
  */
 package org.dependencytrack.assessmentsync.workflow;
 
+import alpine.model.Team;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.model.AnalysisState;
+import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.FindingKey;
+import org.dependencytrack.model.Project;
 import org.dependencytrack.notification.NotificationScope;
 import org.dependencytrack.notification.NotificationTestUtil;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand;
@@ -108,6 +111,52 @@ class ReconcileProjectAssessmentsActivityTest extends PersistenceCapableTest {
         assertThat(ReconcileFixture.details(componentId, vulnerabilityId)).isNull();
         assertThat(ReconcileFixture.contributionCount(componentId, vulnerabilityId))
                 .isZero();
+    }
+
+    @Test
+    void sourceAccessGateWithdrawsAndRestoresInheritance() throws Exception {
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        final long componentId = fixture.library().getId();
+        final long vulnerabilityId = fixture.vulnerability.getId();
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+        reconcile(fixture.target.getUuid(), 50);
+        assertThat(ReconcileFixture.owner(componentId, vulnerabilityId)).isEqualTo("INHERITED");
+
+        qm.createConfigProperty(
+                ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED.getGroupName(),
+                ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED.getPropertyName(),
+                "true",
+                ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED.getPropertyType(),
+                null);
+        final Team productTeam = qm.createTeam("product-team");
+        fixture.target.addAccessTeam(productTeam);
+        qm.persist(fixture.target);
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+
+        reconcile(fixture.target.getUuid(), 50);
+
+        assertThat(ReconcileFixture.state(componentId, vulnerabilityId))
+                .as("the product team cannot see the source, so its decision must not reach the product")
+                .isEqualTo("NOT_SET");
+        assertThat(ReconcileFixture.owner(componentId, vulnerabilityId)).isEqualTo("NEUTRAL");
+        assertThat(ReconcileFixture.contributionCount(componentId, vulnerabilityId))
+                .isZero();
+
+        final var platform = new Project();
+        platform.setName("platform");
+        platform.setVersion("all");
+        platform.addAccessTeam(productTeam);
+        final Project persistedPlatform = qm.persist(platform);
+        fixture.alpine.setParent(persistedPlatform);
+        qm.persist(fixture.alpine);
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+
+        reconcile(fixture.target.getUuid(), 50);
+
+        assertThat(ReconcileFixture.state(componentId, vulnerabilityId))
+                .as("access through the source's parent counts")
+                .isEqualTo("EXPLOITABLE");
+        assertThat(ReconcileFixture.owner(componentId, vulnerabilityId)).isEqualTo("INHERITED");
     }
 
     @Test

@@ -27,7 +27,13 @@ import java.util.TreeMap;
 import java.util.UUID;
 
 /// Agreement across eligible authored source decisions. Explanation text is ignored.
+///
+/// A source row whose structured decision is neutral does not vote (see ADR 044).
+/// Otherwise a comment-only row in one source would block a real decision from another.
+/// Suppression and rating overrides are part of the decision, so a suppressed {@code NOT_SET} row still votes.
 public final class AssessmentConsensus {
+
+    private static final AssessmentDecision NEUTRAL = AssessmentDecision.neutral();
 
     private AssessmentConsensus() {}
 
@@ -37,7 +43,9 @@ public final class AssessmentConsensus {
         var sameIdentityDisagrees = false;
         for (final SourceAssessment assessment : sourceAssessments) {
             Objects.requireNonNull(assessment, "source assessment must not be null");
-            if (assessment.decision() == null || !eligible(assessment.origin())) {
+            if (assessment.decision() == null
+                    || NEUTRAL.equals(assessment.decision())
+                    || !eligible(assessment.origin())) {
                 continue;
             }
             final AssessmentDecision existing = decisions.putIfAbsent(assessment.contributor(), assessment.decision());

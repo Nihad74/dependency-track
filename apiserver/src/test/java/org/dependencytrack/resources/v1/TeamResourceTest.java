@@ -31,10 +31,13 @@ import alpine.server.filters.AuthFeature;
 import org.assertj.core.api.Assertions;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.auth.Permissions;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.persistence.DatabaseSeedingInitTask;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.glassfish.jersey.client.ClientProperties;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.junit.jupiter.api.Test;
@@ -56,6 +59,7 @@ import java.util.UUID;
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.hamcrest.CoreMatchers.equalTo;
 
 public class TeamResourceTest extends ResourceTest {
@@ -414,6 +418,46 @@ public class TeamResourceTest extends ResourceTest {
                         }
                         """.formatted(team.getUuid())));
         org.junit.jupiter.api.Assertions.assertEquals(204, response.getStatus(), 0);
+    }
+
+    @Test
+    public void deleteTeamRecordsAssessmentAccessChangeForMappedProjects() {
+        initializeWithPermissions(Permissions.ACCESS_MANAGEMENT_DELETE);
+
+        final Team deleted = qm.createTeam("Platform Team");
+        final Project mapped = qm.createProject("mrt.base.linux", null, "5.14.121", null, null, null, null, false);
+        mapped.addAccessTeam(deleted);
+        qm.persist(mapped);
+        final Project unmapped = qm.createProject("cmx500", null, "1.0.0", null, null, null, null, false);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            final Response response = jersey.target(V1_TEAM)
+                    .request()
+                    .header(X_API_KEY, apiKey)
+                    .property(ClientProperties.SUPPRESS_HTTP_COMPLIANCE_VALIDATION, true)
+                    // Workaround for https://github.com/eclipse-ee4j/jersey/issues/3798
+                    .method("DELETE", Entity.json(/* language=JSON */ """
+                            {
+                              "uuid": "%s"
+                            }
+                            """.formatted(deleted.getUuid())));
+            assertThat(response.getStatus()).isEqualTo(204);
+
+            final List<UUID> recorded = withJdbiHandle(handle -> handle.createQuery("""
+                            SELECT "PROJECT_UUID"
+                              FROM "ASSESSMENT_SYNC_OUTBOX"
+                             WHERE "REASON" = :reason
+                            """)
+                    .bind("reason", AssessmentStructureCapture.ACCESS_CHANGED)
+                    .mapTo(UUID.class)
+                    .list());
+            org.assertj.core.api.Assertions.assertThat(recorded)
+                    .containsExactly(mapped.getUuid())
+                    .doesNotContain(unmapped.getUuid());
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
     }
 
     @Test

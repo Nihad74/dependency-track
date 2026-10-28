@@ -31,6 +31,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.common.pagination.Page;
 import org.dependencytrack.model.Project;
@@ -58,8 +59,10 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.List;
 import java.util.NoSuchElementException;
 
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 /**
@@ -195,6 +198,10 @@ public class AccessControlResource extends AbstractApiResource {
                     problemDetails.setDetail("A mapping with the same team and project already exists");
                     throw new ClientErrorException(problemDetails.toResponse());
                 }
+                // Team access decides which sources may feed this project and its descendants (ADR 044).
+                useJdbiHandle(
+                        qm,
+                        handle -> AssessmentStructureCapture.recordAccessChange(handle, List.of(project.getUuid())));
             });
 
             return Response.ok().build();
@@ -248,7 +255,12 @@ public class AccessControlResource extends AbstractApiResource {
                     throw new NoSuchElementException("Project could not be found");
                 }
 
-                project.removeAccessTeam(team);
+                if (project.removeAccessTeam(team)) {
+                    useJdbiHandle(
+                            qm,
+                            handle ->
+                                    AssessmentStructureCapture.recordAccessChange(handle, List.of(project.getUuid())));
+                }
             });
         }
 

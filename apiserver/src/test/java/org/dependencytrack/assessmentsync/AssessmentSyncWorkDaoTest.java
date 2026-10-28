@@ -24,8 +24,10 @@ import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.PendingFinding;
 import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.model.FindingKey;
 import org.jdbi.v3.core.Handle;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -34,9 +36,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.openJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
 
@@ -80,6 +84,42 @@ class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
             first.close();
             second.close();
         }
+    }
+
+    @Test
+    void shouldKeepPendingSinceUntilReconciliationAndRefreshBothCatchUp() {
+        final UUID targetUuid = UUID.fromString("40000000-0000-4000-8000-000000000009");
+        useJdbiTransaction(handle -> new AssessmentSyncWorkDao(handle).requestFull(targetUuid));
+        final OffsetDateTime firstPending = pendingSince(targetUuid);
+        assertThat(firstPending).isNotNull();
+
+        useJdbiTransaction(handle -> {
+            final var dao = new AssessmentSyncWorkDao(handle);
+            dao.requestFindings(targetUuid, List.of(new FindingKey(11, 22)));
+            final Pass pass = requireNonNull(dao.beginOrResumePass(targetUuid));
+            dao.requestRefresh(targetUuid);
+            assertThat(dao.completePass(targetUuid, pass.activeRevision())).isTrue();
+        });
+        assertThat(pendingSince(targetUuid))
+                .as("reconciliation caught up, but the open refresh keeps the original start")
+                .isEqualTo(firstPending);
+
+        useJdbiTransaction(handle -> new AssessmentSyncWorkDao(handle).acknowledgeRefresh(targetUuid, 1));
+        assertThat(pendingSince(targetUuid)).isNull();
+
+        useJdbiTransaction(handle -> new AssessmentSyncWorkDao(handle).requestRefresh(targetUuid));
+        assertThat(pendingSince(targetUuid)).isNotNull().isAfterOrEqualTo(firstPending);
+    }
+
+    private static @Nullable OffsetDateTime pendingSince(final UUID targetUuid) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT "PENDING_SINCE"
+                          FROM "ASSESSMENT_SYNC_WORK"
+                         WHERE "TARGET_UUID" = :targetUuid
+                        """)
+                .bind("targetUuid", targetUuid)
+                .mapTo(OffsetDateTime.class)
+                .one());
     }
 
     @Test
