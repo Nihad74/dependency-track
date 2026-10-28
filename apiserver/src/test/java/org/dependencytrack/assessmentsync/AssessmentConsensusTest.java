@@ -376,6 +376,35 @@ class AssessmentConsensusTest {
     }
 
     @Test
+    void shouldNotLetANeutralSourceRowBlockAgreement() {
+        final Result result = AssessmentConsensus.resolve(List.of(
+                source(FIRST, AssessmentOwnership.LOCAL, AssessmentDecision.neutral(), "comment only"),
+                source(SECOND, AssessmentOwnership.LOCAL, BASE, "decided")));
+        final Result neutralOnly = AssessmentConsensus.resolve(
+                List.of(source(FIRST, AssessmentOwnership.LOCAL, AssessmentDecision.neutral(), "comment only")));
+
+        assertThat(result).isInstanceOfSatisfying(Agreed.class, agreed -> {
+            assertThat(agreed.decision()).isEqualTo(BASE);
+            assertThat(agreed.contributors()).containsExactly(SECOND);
+        });
+        assertThat(neutralOnly)
+                .isInstanceOfSatisfying(
+                        Unavailable.class,
+                        unavailable -> assertThat(unavailable.reason()).isEqualTo(AssessmentReason.NO_AUTHORED_SOURCE));
+    }
+
+    @Test
+    void shouldLetSuppressedNotSetAndInTriageRowsVote() {
+        final AssessmentDecision suppressedNotSet = AssessmentDecision.of(
+                AnalysisState.NOT_SET, null, null, true, null, null, null, null, null, null, null, null, null);
+        final AssessmentDecision inTriage = AssessmentDecision.of(
+                AnalysisState.IN_TRIAGE, null, null, false, null, null, null, null, null, null, null, null, null);
+
+        assertFieldConflict(suppressedNotSet);
+        assertFieldConflict(inTriage);
+    }
+
+    @Test
     void shouldCollapseDuplicateGraphPathsToOneContributor() {
         final Result result = AssessmentConsensus.resolve(List.of(
                 source(FIRST, AssessmentOwnership.LOCAL, BASE, "path through the marker"),
