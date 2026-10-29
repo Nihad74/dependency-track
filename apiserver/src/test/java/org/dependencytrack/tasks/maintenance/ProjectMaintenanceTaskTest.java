@@ -19,6 +19,7 @@
 package org.dependencytrack.tasks.maintenance;
 
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.pagination.Page;
 import org.dependencytrack.model.Project;
@@ -32,11 +33,10 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
-import java.util.List;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 import static org.dependencytrack.model.ConfigPropertyConstants.MAINTENANCE_PROJECTS_RETENTION_DAYS;
 import static org.dependencytrack.model.ConfigPropertyConstants.MAINTENANCE_PROJECTS_RETENTION_TYPE;
 import static org.dependencytrack.model.ConfigPropertyConstants.MAINTENANCE_PROJECTS_RETENTION_VERSIONS;
@@ -246,23 +246,15 @@ class ProjectMaintenanceTaskTest extends PersistenceCapableTest {
                     withJdbiHandle(handle -> handle.attach(ProjectDao.class).getProjectId(child.getUuid()));
             assertThat(parentId).isNull();
             assertThat(childId).isNull();
-            final List<String> lookupKeys = lookupKeys(parent.getUuid(), child.getUuid());
-            assertThat(lookupKeys).hasSize(2);
-            assertThat(String.join("\n", lookupKeys)).contains("retained-parent", "1.0.0", "retained-child", "2.0.0");
+            assertThat(recordedChanges())
+                    .filteredOn(change -> change.projectUuid().equals(parent.getUuid())
+                            || change.projectUuid().equals(child.getUuid()))
+                    .flatExtracting(AssessmentChange::lookupKeys)
+                    .containsExactlyInAnyOrder(
+                            new AssessmentChange.LookupKey("retained-parent", "1.0.0"),
+                            new AssessmentChange.LookupKey("retained-child", "2.0.0"));
         } finally {
             MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
         }
-    }
-
-    private static List<String> lookupKeys(final UUID parentUuid, final UUID childUuid) {
-        return withJdbiHandle(handle -> handle.createQuery("""
-                        SELECT "LOOKUP_KEYS"::text
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
-                         WHERE "PROJECT_UUID" IN (:parentUuid, :childUuid)
-                        """)
-                .bind("parentUuid", parentUuid)
-                .bind("childUuid", childUuid)
-                .mapTo(String.class)
-                .list());
     }
 }

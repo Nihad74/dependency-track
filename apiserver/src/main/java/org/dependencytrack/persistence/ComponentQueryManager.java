@@ -53,6 +53,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -444,110 +445,42 @@ final class ComponentQueryManager extends QueryManager {
                             handle,
                             project.getUuid(),
                             AssessmentChange.Reason.COMPONENT_CHANGED,
-                            projectName,
-                            projectVersion,
-                            projectName,
-                            projectVersion));
+                            AssessmentChange.LookupKey.listOf(projectName, projectVersion)));
         }
         return result;
     }
 
     /**
-     * Updated an existing Component.
+     * Applies {@code update} to an existing Component, and records a change for assessment synchronization
+     * when its structure changed. The structure is compared before and after {@code update} runs.
      *
-     * @param transientComponent the component to update
-     * @param commitIndex        specifies if the search index should be committed (an expensive operation)
-     * @return a Component
+     * @param uuid        the UUID of the component to update
+     * @param update      changes the component's fields; it must not move the component to another project
+     * @param commitIndex specifies if the search index should be committed (an expensive operation)
+     * @return the updated Component, or {@code null} when no component has this UUID
      */
     @Override
-    public Component updateComponent(Component transientComponent, boolean commitIndex) {
-        final Component component = getObjectByUuid(Component.class, transientComponent.getUuid());
-        final Project projectBefore = component.getProject();
-        final UUID projectUuidBefore = projectBefore == null ? null : projectBefore.getUuid();
-        final String projectNameBefore = projectBefore == null ? null : projectBefore.getName();
-        final String projectVersionBefore = projectBefore == null ? null : projectBefore.getVersion();
-        final UUID transientProjectUuid = transientComponent.getProject() == null
-                ? null
-                : transientComponent.getProject().getUuid();
-        final String structureBefore = structuralSignature(component);
-        if (projectUuidBefore != null || transientProjectUuid != null) {
-            final var projectUuids = new ArrayList<UUID>(2);
-            if (projectUuidBefore != null) {
-                projectUuids.add(projectUuidBefore);
-            }
-            if (transientProjectUuid != null) {
-                projectUuids.add(transientProjectUuid);
-            }
-            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProjects(handle, projectUuids));
+    public Component updateComponent(final UUID uuid, final Consumer<Component> update, final boolean commitIndex) {
+        final Component component = getObjectByUuid(Component.class, uuid);
+        if (component == null) {
+            return null;
         }
-        component.setName(transientComponent.getName());
-        component.setVersion(transientComponent.getVersion());
-        component.setGroup(transientComponent.getGroup());
-        component.setFilename(transientComponent.getFilename());
-        component.setMd5(transientComponent.getMd5());
-        component.setSha1(transientComponent.getSha1());
-        component.setSha256(transientComponent.getSha256());
-        component.setSha384(transientComponent.getSha384());
-        component.setSha512(transientComponent.getSha512());
-        component.setSha3_256(transientComponent.getSha3_256());
-        component.setSha3_384(transientComponent.getSha3_384());
-        component.setSha3_512(transientComponent.getSha3_512());
-        component.setBlake2b_256(transientComponent.getBlake2b_256());
-        component.setBlake2b_384(transientComponent.getBlake2b_384());
-        component.setBlake2b_512(transientComponent.getBlake2b_512());
-        component.setBlake3(transientComponent.getBlake3());
-        component.setStreebog_256(transientComponent.getStreebog_256());
-        component.setStreebog_512(transientComponent.getStreebog_512());
-        component.setDescription(transientComponent.getDescription());
-        component.setCopyright(transientComponent.getCopyright());
-        component.setLicense(transientComponent.getLicense());
-        component.setLicenseExpression(transientComponent.getLicenseExpression());
-        component.setLicenseUrl(transientComponent.getLicenseUrl());
-        component.setResolvedLicense(transientComponent.getResolvedLicense());
-        component.setParent(transientComponent.getParent());
-        component.setCpe(transientComponent.getCpe());
-        component.setPurl(transientComponent.getPurl());
-        component.setPurlCoordinates(component.getPurl());
-        component.setInternal(transientComponent.isInternal());
-        component.setAuthors(transientComponent.getAuthors());
-        component.setSupplier(transientComponent.getSupplier());
-        component.setExternalReferences(transientComponent.getExternalReferences());
+        final Project project = component.getProject();
+        if (project != null && project.getUuid() != null) {
+            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
+        }
+        final String structureBefore = structuralSignature(component);
+        update.accept(component);
         final Component result = persist(component);
         seedPackageMetadataResolution(result);
-        final Project projectAfter = result.getProject();
-        final UUID projectUuidAfter = projectAfter == null ? null : projectAfter.getUuid();
-        if (projectUuidBefore != null && projectUuidAfter != null && !projectUuidBefore.equals(projectUuidAfter)) {
-            final String projectNameAfter = projectAfter.getName();
-            final String projectVersionAfter = projectAfter.getVersion();
-            useJdbiHandle(this, handle -> {
-                AssessmentStructureCapture.rebuildAndRecord(
-                        handle,
-                        projectUuidBefore,
-                        AssessmentChange.Reason.COMPONENT_CHANGED,
-                        projectNameBefore,
-                        projectVersionBefore,
-                        projectNameBefore,
-                        projectVersionBefore);
-                AssessmentStructureCapture.rebuildAndRecord(
-                        handle,
-                        projectUuidAfter,
-                        AssessmentChange.Reason.COMPONENT_CHANGED,
-                        projectNameAfter,
-                        projectVersionAfter,
-                        projectNameAfter,
-                        projectVersionAfter);
-            });
-        } else if (projectUuidAfter != null && !structureBefore.equals(structuralSignature(result))) {
+        if (project != null && project.getUuid() != null && !structureBefore.equals(structuralSignature(result))) {
             useJdbiHandle(
                     this,
                     handle -> AssessmentStructureCapture.rebuildAndRecord(
                             handle,
-                            projectUuidAfter,
+                            project.getUuid(),
                             AssessmentChange.Reason.COMPONENT_CHANGED,
-                            projectNameBefore,
-                            projectVersionBefore,
-                            projectAfter.getName(),
-                            projectAfter.getVersion()));
+                            AssessmentChange.LookupKey.listOf(project.getName(), project.getVersion())));
         }
         return result;
     }

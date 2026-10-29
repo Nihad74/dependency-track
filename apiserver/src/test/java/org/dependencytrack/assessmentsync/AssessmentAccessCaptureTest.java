@@ -32,7 +32,6 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
-import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 /// Access changes decide source eligibility (ADR 044), so they must reach every project whose access changed.
 class AssessmentAccessCaptureTest extends PersistenceCapableTest {
@@ -105,13 +104,9 @@ class AssessmentAccessCaptureTest extends PersistenceCapableTest {
     }
 
     private static List<UUID> accessChangedProjects() {
-        return withJdbiHandle(handle -> handle.createQuery("""
-                        SELECT "PROJECT_UUID"
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
-                         WHERE "REASON" = :reason
-                        """)
-                .bind("reason", Reason.ACCESS_CHANGED.name())
-                .mapTo(UUID.class)
-                .list());
+        return AssessmentSyncTestSupport.recordedChanges().stream()
+                .filter(change -> change.reason() == Reason.ACCESS_CHANGED)
+                .map(AssessmentChange::projectUuid)
+                .toList();
     }
 }

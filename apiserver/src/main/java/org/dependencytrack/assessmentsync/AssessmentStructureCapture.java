@@ -64,19 +64,13 @@ public final class AssessmentStructureCapture {
 
     /// Replaces the project's embedding index and records one project invalidation.
     public static void rebuildAndRecord(
-            final Handle handle,
-            final UUID projectUuid,
-            final Reason reason,
-            final @Nullable String oldName,
-            final @Nullable String oldVersion,
-            final @Nullable String newName,
-            final @Nullable String newVersion) {
+            final Handle handle, final UUID projectUuid, final Reason reason, final List<LookupKey> lookupKeys) {
         requireNonNull(handle, "handle must not be null");
         if (!AssessmentSyncMode.current().recordsOutbox()) {
             return;
         }
         new AssessmentEmbeddingIndexer(handle).rebuild(projectUuid);
-        recordProject(handle, projectUuid, reason, keys(oldName, oldVersion, newName, newVersion));
+        recordProject(handle, projectUuid, reason, lookupKeys);
     }
 
     public static void recordProjects(final Handle handle, final Collection<AssessmentChange> changes) {

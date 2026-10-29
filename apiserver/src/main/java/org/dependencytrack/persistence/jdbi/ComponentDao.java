@@ -112,10 +112,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
                     getHandle(),
                     projectUuid,
                     AssessmentChange.Reason.COMPONENT_CHANGED,
-                    snapshot.projectName(),
-                    snapshot.projectVersion(),
-                    snapshot.projectName(),
-                    snapshot.projectVersion());
+                    AssessmentChange.LookupKey.listOf(snapshot.projectName(), snapshot.projectVersion()));
         }
         return deleted;
     }

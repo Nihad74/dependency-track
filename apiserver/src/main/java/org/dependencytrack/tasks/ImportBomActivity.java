@@ -405,10 +405,7 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
                     handle,
                     ctx.project.getUuid(),
                     AssessmentChange.Reason.BOM_IMPORT,
-                    name,
-                    version,
-                    name,
-                    version);
+                    AssessmentStructureCapture.keys(name, version, name, version));
         });
     }
 
