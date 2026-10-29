@@ -18,9 +18,7 @@
  */
 package org.dependencytrack.assessmentsync;
 
-import org.dependencytrack.assessmentsync.AssessmentChange.LookupKey;
 import org.jdbi.v3.core.Handle;
-import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.List;
@@ -31,10 +29,6 @@ import static java.util.Objects.requireNonNull;
 ///
 /// Does not commit, open a transaction, or call Dex.
 public final class AssessmentChangeRecorder {
-
-    public static final String AUTHORED = "AUTHORED";
-    public static final String POLICY = "POLICY";
-    public static final String POLICY_UNASSIGNED = "POLICY_UNASSIGNED";
 
     private final Handle handle;
 
@@ -54,13 +48,5 @@ public final class AssessmentChangeRecorder {
             return;
         }
         new AssessmentSyncOutboxDao(handle).recordAll(changes);
-    }
-
-    /// One lookup key when both name and version are present.
-    public static List<LookupKey> lookupKeys(final @Nullable String name, final @Nullable String version) {
-        if (name == null || version == null || name.isBlank() || version.isBlank()) {
-            return List.of();
-        }
-        return List.of(new LookupKey(name, version));
     }
 }

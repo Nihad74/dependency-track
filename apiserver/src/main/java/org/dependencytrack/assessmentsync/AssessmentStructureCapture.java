@@ -19,6 +19,7 @@
 package org.dependencytrack.assessmentsync;
 
 import org.dependencytrack.assessmentsync.AssessmentChange.LookupKey;
+import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.statement.SqlStatements;
@@ -37,20 +38,7 @@ import static java.util.Objects.requireNonNull;
 /// The caller still locks the project before mutating it.
 public final class AssessmentStructureCapture {
 
-    public static final String BOM_IMPORT = "BOM_IMPORT";
-    public static final String PROJECT_CREATED = "PROJECT_CREATED";
-    public static final String PROJECT_UPDATED = "PROJECT_UPDATED";
-    public static final String COMPONENT_CHANGED = "COMPONENT_CHANGED";
-    public static final String PROJECT_DELETED = "PROJECT_DELETED";
-    public static final String PROJECT_CLONED = "PROJECT_CLONED";
-    public static final String ATTRIBUTION = "ATTRIBUTION";
-    public static final String ACCESS_CHANGED = "ACCESS_CHANGED";
-
     private AssessmentStructureCapture() {}
-
-    public static List<LookupKey> keys(final @Nullable String name, final @Nullable String version) {
-        return AssessmentChangeRecorder.lookupKeys(name, version);
-    }
 
     public static List<LookupKey> keys(
             final @Nullable String oldName,
@@ -58,21 +46,18 @@ public final class AssessmentStructureCapture {
             final @Nullable String newName,
             final @Nullable String newVersion) {
         final var combined = new ArrayList<LookupKey>(2);
-        combined.addAll(keys(oldName, oldVersion));
-        combined.addAll(keys(newName, newVersion));
+        combined.addAll(LookupKey.listOf(oldName, oldVersion));
+        combined.addAll(LookupKey.listOf(newName, newVersion));
         return combined;
     }
 
     /// One project invalidation. Does not rebuild embeddings.
     public static void recordProject(
-            final Handle handle, final UUID projectUuid, final String reason, final List<LookupKey> lookupKeys) {
+            final Handle handle, final UUID projectUuid, final Reason reason, final List<LookupKey> lookupKeys) {
         requireNonNull(handle, "handle must not be null");
         requireNonNull(projectUuid, "projectUuid must not be null");
         requireNonNull(reason, "reason must not be null");
         requireNonNull(lookupKeys, "lookupKeys must not be null");
-        if (!AssessmentSyncMode.current().recordsOutbox()) {
-            return;
-        }
         new AssessmentChangeRecorder(handle)
                 .record(new AssessmentChange(Scope.PROJECT, projectUuid, null, null, reason, lookupKeys));
     }
@@ -81,7 +66,7 @@ public final class AssessmentStructureCapture {
     public static void rebuildAndRecord(
             final Handle handle,
             final UUID projectUuid,
-            final String reason,
+            final Reason reason,
             final @Nullable String oldName,
             final @Nullable String oldVersion,
             final @Nullable String newName,
@@ -97,9 +82,6 @@ public final class AssessmentStructureCapture {
     public static void recordProjects(final Handle handle, final Collection<AssessmentChange> changes) {
         requireNonNull(handle, "handle must not be null");
         requireNonNull(changes, "changes must not be null");
-        if (changes.isEmpty() || !AssessmentSyncMode.current().recordsOutbox()) {
-            return;
-        }
         new AssessmentChangeRecorder(handle).recordAll(changes);
     }
 
@@ -172,13 +154,14 @@ public final class AssessmentStructureCapture {
                 // parameters, and JDBI rejects unused bindings only in that case.
                 .configure(SqlStatements.class, config -> config.setUnusedBindingAllowed(true))
                 .map((rs, ctx) -> new AssessmentChange(
-                        Scope.PROJECT, rs.getObject("UUID", UUID.class), null, null, ACCESS_CHANGED, List.of()))
+                        Scope.PROJECT, rs.getObject("UUID", UUID.class), null, null, Reason.ACCESS_CHANGED, List.of()))
                 .list();
         new AssessmentChangeRecorder(handle).recordAll(changes);
     }
 
     private static AssessmentChange accessChange(
             final UUID projectUuid, final @Nullable String name, final @Nullable String version) {
-        return new AssessmentChange(Scope.PROJECT, projectUuid, null, null, ACCESS_CHANGED, keys(name, version));
+        return new AssessmentChange(
+                Scope.PROJECT, projectUuid, null, null, Reason.ACCESS_CHANGED, LookupKey.listOf(name, version));
     }
 }

@@ -21,6 +21,7 @@ package org.dependencytrack.assessmentsync;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import org.dependencytrack.assessmentsync.AssessmentChange.LookupKey;
+import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.mapper.RowMapper;
@@ -44,22 +45,31 @@ public final class AssessmentSyncOutboxDao {
 
     private static final TypeReference<List<LookupKey>> LOOKUP_KEYS = new TypeReference<>() {};
 
+    private static final String SELECT_ENTRY = /* language=SQL */ """
+            SELECT "ID"
+                 , "SCHEMA_VERSION"
+                 , "SCOPE"
+                 , "PROJECT_UUID"
+                 , "COMPONENT_UUID"
+                 , "VULNERABILITY_UUID"
+                 , "REASON"
+                 , "LOOKUP_KEYS"::text AS "LOOKUP_KEYS"
+                 , "FANOUT_CURSOR"
+                 , "CREATED_AT"
+                 , "NEXT_DISPATCH_AT"
+                 , "DISPATCH_ATTEMPTS"
+                 , "LAST_ERROR_CODE"
+              FROM "ASSESSMENT_SYNC_OUTBOX"
+            """;
+
     private final Handle handle;
 
     public AssessmentSyncOutboxDao(final Handle handle) {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Inserts one change. A same-transaction conflict keeps the row and unions lookup keys.
-    public long record(final AssessmentChange change) {
-        final List<Long> ids = recordAll(List.of(change));
-        if (ids.size() != 1) {
-            throw new IllegalStateException("Expected one outbox id, got " + ids.size());
-        }
-        return ids.getFirst();
-    }
-
-    /// Inserts a batch. Rows already stored in this transaction are merged, not replaced.
+    /// Inserts a batch. A row already stored in this transaction for the same scope keeps its reason
+    /// and gains the new lookup keys.
     public List<Long> recordAll(final Collection<AssessmentChange> changes) {
         requireNonNull(changes, "changes must not be null");
         requireTransaction();
@@ -82,7 +92,7 @@ public final class AssessmentSyncOutboxDao {
             projectUuids[i] = change.projectUuid();
             componentUuids[i] = change.componentUuid();
             vulnerabilityUuids[i] = change.vulnerabilityUuid();
-            reasons[i] = change.reason();
+            reasons[i] = change.reason().name();
             lookupKeys[i] = writeLookupKeys(change.lookupKeys());
         }
 
@@ -154,21 +164,7 @@ public final class AssessmentSyncOutboxDao {
     public List<OutboxEntry> pollDue(final int limit) {
         requireTransaction();
         requireLimit(limit);
-        return handle.createQuery(/* language=SQL */ """
-                        SELECT "ID"
-                             , "SCHEMA_VERSION"
-                             , "SCOPE"
-                             , "PROJECT_UUID"
-                             , "COMPONENT_UUID"
-                             , "VULNERABILITY_UUID"
-                             , "REASON"
-                             , "LOOKUP_KEYS"::text AS "LOOKUP_KEYS"
-                             , "FANOUT_CURSOR"
-                             , "CREATED_AT"
-                             , "NEXT_DISPATCH_AT"
-                             , "DISPATCH_ATTEMPTS"
-                             , "LAST_ERROR_CODE"
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
+        return handle.createQuery(SELECT_ENTRY + /* language=SQL */ """
                          WHERE "NEXT_DISPATCH_AT" <= clock_timestamp()
                          ORDER BY "NEXT_DISPATCH_AT", "ID"
                          LIMIT :limit
@@ -182,21 +178,7 @@ public final class AssessmentSyncOutboxDao {
     /// Locks one row so the caller can advance its expansion cursor. Null means it was deleted.
     public @Nullable OutboxEntry lock(final long id) {
         requireTransaction();
-        return handle.createQuery(/* language=SQL */ """
-                        SELECT "ID"
-                             , "SCHEMA_VERSION"
-                             , "SCOPE"
-                             , "PROJECT_UUID"
-                             , "COMPONENT_UUID"
-                             , "VULNERABILITY_UUID"
-                             , "REASON"
-                             , "LOOKUP_KEYS"::text AS "LOOKUP_KEYS"
-                             , "FANOUT_CURSOR"
-                             , "CREATED_AT"
-                             , "NEXT_DISPATCH_AT"
-                             , "DISPATCH_ATTEMPTS"
-                             , "LAST_ERROR_CODE"
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
+        return handle.createQuery(SELECT_ENTRY + /* language=SQL */ """
                          WHERE "ID" = :id
                            FOR UPDATE
                         """)
@@ -259,7 +241,7 @@ public final class AssessmentSyncOutboxDao {
                         rs.getObject("PROJECT_UUID", UUID.class),
                         rs.getObject("COMPONENT_UUID", UUID.class),
                         rs.getObject("VULNERABILITY_UUID", UUID.class),
-                        rs.getString("REASON"),
+                        Reason.valueOf(rs.getString("REASON")),
                         readLookupKeys(rs.getString("LOOKUP_KEYS"))),
                 rs.getObject("FANOUT_CURSOR", UUID.class),
                 readInstant(rs, "CREATED_AT"),

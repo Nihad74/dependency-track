@@ -19,6 +19,7 @@
 package org.dependencytrack.assessmentsync;
 
 import org.dependencytrack.common.ConfigKeys;
+import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
 
 /// Cluster-wide deployment mode for assessment synchronization.
@@ -37,8 +38,11 @@ public enum AssessmentSyncMode {
 
     /// Current mode. A missing property is OFF. Any other unknown value is rejected.
     public static AssessmentSyncMode current() {
-        final String raw = ConfigProvider.getConfig()
-                .getOptionalValue(ConfigKeys.ASSESSMENT_SYNC_MODE, String.class)
+        return from(ConfigProvider.getConfig());
+    }
+
+    static AssessmentSyncMode from(final Config config) {
+        final String raw = config.getOptionalValue(ConfigKeys.ASSESSMENT_SYNC_MODE, String.class)
                 .filter(value -> !value.isBlank())
                 .orElse(OFF.name());
         try {

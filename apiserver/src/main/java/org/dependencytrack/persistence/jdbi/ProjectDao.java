@@ -1297,8 +1297,8 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
                     project.uuid(),
                     null,
                     null,
-                    AssessmentStructureCapture.PROJECT_DELETED,
-                    AssessmentStructureCapture.keys(project.name(), project.version())));
+                    AssessmentChange.Reason.PROJECT_DELETED,
+                    AssessmentChange.LookupKey.listOf(project.name(), project.version())));
         }
         AssessmentStructureCapture.recordProjects(getHandle(), changes);
         return deleted;
@@ -1315,8 +1315,8 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
                     project.uuid(),
                     null,
                     null,
-                    AssessmentStructureCapture.PROJECT_DELETED,
-                    AssessmentStructureCapture.keys(project.name(), project.version())));
+                    AssessmentChange.Reason.PROJECT_DELETED,
+                    AssessmentChange.LookupKey.listOf(project.name(), project.version())));
         }
         AssessmentStructureCapture.recordProjects(getHandle(), changes);
     }
@@ -1329,8 +1329,8 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
                     project.uuid(),
                     null,
                     null,
-                    AssessmentStructureCapture.PROJECT_DELETED,
-                    AssessmentStructureCapture.keys(project.name(), project.version())));
+                    AssessmentChange.Reason.PROJECT_DELETED,
+                    AssessmentChange.LookupKey.listOf(project.name(), project.version())));
         }
         AssessmentStructureCapture.recordProjects(getHandle(), changes);
     }
@@ -1443,7 +1443,7 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
         AssessmentStructureCapture.rebuildAndRecord(
                 getHandle(),
                 clonedProjectUuid,
-                AssessmentStructureCapture.PROJECT_CLONED,
+                AssessmentChange.Reason.PROJECT_CLONED,
                 cloned.name(),
                 cloned.version(),
                 cloned.name(),

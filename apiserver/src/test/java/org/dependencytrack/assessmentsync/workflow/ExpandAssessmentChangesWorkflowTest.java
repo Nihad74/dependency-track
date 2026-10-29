@@ -22,6 +22,7 @@ import io.github.resilience4j.core.IntervalFunction;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChange.LookupKey;
+import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.dependencytrack.assessmentsync.AssessmentEmbeddingDao;
 import org.dependencytrack.assessmentsync.AssessmentEmbeddingDao.MarkerMembership;
@@ -96,7 +97,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
         embed(targetB, sourceUuid, "marker-b", "1");
         embed(targetC, sourceUuid, "marker-c", "1");
         final long outboxId =
-                record(new AssessmentChange(Scope.PROJECT, sourceUuid, null, null, "PROJECT_CHANGED", List.of()));
+                record(new AssessmentChange(Scope.PROJECT, sourceUuid, null, null, Reason.PROJECT_UPDATED, List.of()));
 
         final ExpandAssessmentChangesRes firstPage = activity.execute(ACTIVITY_CONTEXT, argument(outboxId));
 
@@ -137,7 +138,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
                 source.getUuid(),
                 null,
                 null,
-                "PROJECT_CHANGED",
+                Reason.PROJECT_UPDATED,
                 List.of(new LookupKey("source-app", "9.9.9"))));
 
         final UUID runId = workflowTest
@@ -162,8 +163,8 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
         final long analysisId = analysis(target, "lib", "1.0.0");
         contribute(analysisId, source.getUuid(), UUID.randomUUID(), UUID.randomUUID());
         useJdbiTransaction(handle -> handle.attach(ProjectDao.class).deleteProject(source.getUuid()));
-        final long outboxId =
-                record(new AssessmentChange(Scope.PROJECT, source.getUuid(), null, null, "PROJECT_DELETED", List.of()));
+        final long outboxId = record(
+                new AssessmentChange(Scope.PROJECT, source.getUuid(), null, null, Reason.PROJECT_DELETED, List.of()));
 
         final UUID runId = workflowTest
                 .getEngine()
@@ -195,7 +196,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
                 source.getUuid(),
                 null,
                 null,
-                "PROJECT_RENAMED",
+                Reason.PROJECT_UPDATED,
                 List.of(new LookupKey("old-name", "1.0.0"), new LookupKey("new-name", "2.0.0"))));
 
         final UUID runId = workflowTest
@@ -228,7 +229,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
             contribute(analysisId, sourceProject, sourceComponent, sourceVulnerability);
         }
         final long outboxId = record(new AssessmentChange(
-                Scope.FINDING, sourceProject, sourceComponent, sourceVulnerability, "FINDING_CHANGED", List.of()));
+                Scope.FINDING, sourceProject, sourceComponent, sourceVulnerability, Reason.AUTHORED, List.of()));
 
         final UUID runId = workflowTest
                 .getEngine()
@@ -273,7 +274,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
                 source.getUuid(),
                 sourceComponent.getUuid(),
                 vulnerability.getUuid(),
-                "FINDING_CHANGED",
+                Reason.AUTHORED,
                 List.of(new LookupKey(source.getName(), source.getVersion()))));
 
         final UUID runId = workflowTest
@@ -310,7 +311,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
         embed(first, sourceUuid, "page-one", "1");
         embed(second, sourceUuid, "page-two", "1");
         final long outboxId =
-                record(new AssessmentChange(Scope.PROJECT, sourceUuid, null, null, "PROJECT_CHANGED", List.of()));
+                record(new AssessmentChange(Scope.PROJECT, sourceUuid, null, null, Reason.PROJECT_UPDATED, List.of()));
 
         final UUID runId = workflowTest
                 .getEngine()
@@ -439,7 +440,8 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
 
     private static long record(final AssessmentChange change) {
         clearOutbox();
-        return inJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle).record(change));
+        return inJdbiTransaction(handle ->
+                new AssessmentSyncOutboxDao(handle).recordAll(List.of(change)).getFirst());
     }
 
     private static void clearOutbox() {

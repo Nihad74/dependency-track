@@ -31,7 +31,7 @@ public record AssessmentChange(
         UUID projectUuid,
         @Nullable UUID componentUuid,
         @Nullable UUID vulnerabilityUuid,
-        String reason,
+        Reason reason,
         List<LookupKey> lookupKeys) {
 
     public AssessmentChange {
@@ -39,9 +39,6 @@ public record AssessmentChange(
         Objects.requireNonNull(projectUuid, "projectUuid must not be null");
         Objects.requireNonNull(reason, "reason must not be null");
         Objects.requireNonNull(lookupKeys, "lookupKeys must not be null");
-        if (reason.isBlank()) {
-            throw new IllegalArgumentException("reason must not be blank");
-        }
         lookupKeys = dedupe(lookupKeys);
         switch (scope) {
             case PROJECT -> {
@@ -72,6 +69,21 @@ public record AssessmentChange(
         PROJECT
     }
 
+    /// The writer that recorded the change. Stored for diagnostics only; expansion ignores it.
+    public enum Reason {
+        AUTHORED,
+        POLICY,
+        POLICY_UNASSIGNED,
+        BOM_IMPORT,
+        PROJECT_CREATED,
+        PROJECT_UPDATED,
+        COMPONENT_CHANGED,
+        PROJECT_DELETED,
+        PROJECT_CLONED,
+        ATTRIBUTION,
+        ACCESS_CHANGED
+    }
+
     /// Project name and version observed before or after a change.
     public record LookupKey(String name, String version) {
 
@@ -81,6 +93,14 @@ public record AssessmentChange(
             if (name.isBlank() || version.isBlank()) {
                 throw new IllegalArgumentException("lookup key name and version must not be blank");
             }
+        }
+
+        /// One key when both name and version are present, otherwise none.
+        public static List<LookupKey> listOf(final @Nullable String name, final @Nullable String version) {
+            if (name == null || version == null || name.isBlank() || version.isBlank()) {
+                return List.of();
+            }
+            return List.of(new LookupKey(name, version));
         }
     }
 

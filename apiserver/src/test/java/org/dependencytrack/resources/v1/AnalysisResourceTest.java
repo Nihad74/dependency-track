@@ -136,7 +136,7 @@ class AnalysisResourceTest extends ResourceTest {
                   ],
                   "isSuppressed": true,
                   "decisionOrigin": "LOCAL",
-                  "decisionVersion": 0
+                  "decisionVersion": 1
                 }
                 """);
     }
@@ -201,7 +201,7 @@ class AnalysisResourceTest extends ResourceTest {
                   "owaspVector": "OWASP/K9:M1:O0:Z2/D1:X1:W1:L1/C1:I1:A1:T1/F1:R1:S1:P1/",
                   "owaspScore": 4.5,
                   "decisionOrigin": "LOCAL",
-                  "decisionVersion": 0
+                  "decisionVersion": 1
                 }
                 """);
     }
@@ -502,7 +502,7 @@ class AnalysisResourceTest extends ResourceTest {
                   ],
                   "isSuppressed": true,
                   "decisionOrigin": "LOCAL",
-                  "decisionVersion": 0
+                  "decisionVersion": 1
                 }
                 """);
 
@@ -1509,6 +1509,68 @@ class AnalysisResourceTest extends ResourceTest {
     }
 
     @Test
+    void firstDecisionWithoutOriginRejectsALaterWriterWhoSawVersionZero() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = findingWithoutOrigin();
+        withCapture(() -> {
+            final Response first = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "EXPLOITABLE",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 0
+                    }
+                    """);
+            assertThat(first.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            assertThat(parseJsonObject(first).getJsonNumber("decisionVersion").longValue())
+                    .isEqualTo(1);
+
+            final Response stale = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "FALSE_POSITIVE",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 0
+                    }
+                    """);
+            assertThat(stale.getStatus()).isEqualTo(HttpStatus.SC_CONFLICT);
+        });
+    }
+
+    @Test
+    void firstDecisionOnANewFindingRejectsALaterWriterWhoSawVersionZero() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = findingWithoutAnalysis();
+        withCapture(() -> {
+            final Response first = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "EXPLOITABLE",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 0
+                    }
+                    """);
+            assertThat(first.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            assertThat(parseJsonObject(first).getJsonNumber("decisionVersion").longValue())
+                    .isEqualTo(1);
+
+            final Response stale = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "FALSE_POSITIVE",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 0
+                    }
+                    """);
+            assertThat(stale.getStatus()).isEqualTo(HttpStatus.SC_CONFLICT);
+        });
+    }
+
+    @Test
     void expectedNonZeroVersionWithoutOriginReturnsConflict() {
         initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS, Permissions.VIEW_VULNERABILITY);
         final var fixture = findingWithoutOrigin();
@@ -1775,7 +1837,7 @@ class AnalysisResourceTest extends ResourceTest {
                             fixture.project().getUuid(),
                             fixture.component().getUuid(),
                             fixture.vulnerability().getUuid(),
-                            "AUTHORED",
+                            AssessmentChange.Reason.AUTHORED,
                             List.of(new AssessmentChange.LookupKey("Acme Example", "1.0"))));
         });
     }

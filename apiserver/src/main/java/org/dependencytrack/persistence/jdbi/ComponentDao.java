@@ -18,6 +18,7 @@
  */
 package org.dependencytrack.persistence.jdbi;
 
+import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.common.pagination.Page;
@@ -110,7 +111,7 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             AssessmentStructureCapture.rebuildAndRecord(
                     getHandle(),
                     projectUuid,
-                    AssessmentStructureCapture.COMPONENT_CHANGED,
+                    AssessmentChange.Reason.COMPONENT_CHANGED,
                     snapshot.projectName(),
                     snapshot.projectVersion(),
                     snapshot.projectName(),

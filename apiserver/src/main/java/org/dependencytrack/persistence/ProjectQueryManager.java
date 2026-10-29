@@ -27,6 +27,7 @@ import alpine.model.auth.UserType;
 import alpine.resources.AlpineRequest;
 import com.github.packageurl.PackageURL;
 import org.datanucleus.api.jdo.JDOQuery;
+import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.metrics.MetricsDao;
@@ -246,8 +247,8 @@ final class ProjectQueryManager extends QueryManager {
                     AssessmentStructureCapture.recordProject(
                             handle,
                             newProject.getUuid(),
-                            AssessmentStructureCapture.PROJECT_CREATED,
-                            AssessmentStructureCapture.keys(projectName, projectVersion));
+                            AssessmentChange.Reason.PROJECT_CREATED,
+                            AssessmentChange.LookupKey.listOf(projectName, projectVersion));
                 });
             }
             final Set<Tag> resolvedTags = resolveTags(tags);
@@ -374,7 +375,7 @@ final class ProjectQueryManager extends QueryManager {
                         handle -> AssessmentStructureCapture.recordProject(
                                 handle,
                                 updated.getUuid(),
-                                AssessmentStructureCapture.PROJECT_UPDATED,
+                                AssessmentChange.Reason.PROJECT_UPDATED,
                                 AssessmentStructureCapture.keys(
                                         nameBefore, versionBefore, updated.getName(), updated.getVersion())));
             }
