@@ -82,6 +82,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * This QueryManager provides a concrete extension of {@link AlpineQueryManager} by
@@ -449,8 +450,8 @@ public class QueryManager extends AlpineQueryManager {
         return getComponentQueryManager().createComponent(component, commitIndex);
     }
 
-    public Component updateComponent(Component transientComponent, boolean commitIndex) {
-        return getComponentQueryManager().updateComponent(transientComponent, commitIndex);
+    public Component updateComponent(UUID uuid, Consumer<Component> update, boolean commitIndex) {
+        return getComponentQueryManager().updateComponent(uuid, update, commitIndex);
     }
 
     public PaginatedResult getLicenses() {

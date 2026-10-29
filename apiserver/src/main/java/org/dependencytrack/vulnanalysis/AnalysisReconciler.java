@@ -229,38 +229,6 @@ final class AnalysisReconciler {
             hasChanged |= diffField(comments, AnalysisCommentField.OWASP_VECTOR, owaspVector, desiredOwaspVector);
             hasChanged |= diffField(comments, AnalysisCommentField.OWASP_SCORE, owaspScore, desiredOwaspScore);
 
-            if (!hasChanged) {
-                if (this.vulnPolicyId == null) {
-                    return null;
-                }
-                final var unchanged = new MakeAnalysisCommand(
-                        this.projectId,
-                        this.componentId,
-                        this.vulnDbId,
-                        policy.getName(),
-                        desiredState,
-                        desiredJustification,
-                        desiredResponse,
-                        desiredDetails,
-                        desiredSuppressed,
-                        desiredSeverity,
-                        desiredCvssV2Vector,
-                        desiredCvssV2Score,
-                        desiredCvssV3Vector,
-                        desiredCvssV3Score,
-                        desiredCvssV4Vector,
-                        desiredCvssV4Score,
-                        desiredOwaspVector,
-                        desiredOwaspScore);
-                return new Result(
-                        new FindingKey(componentId, vulnDbId),
-                        unchanged.asOwnershipOnly(),
-                        commenter,
-                        List.of(),
-                        false,
-                        false);
-            }
-
             final var command = new MakeAnalysisCommand(
                     this.projectId,
                     this.componentId,
@@ -280,6 +248,19 @@ final class AnalysisReconciler {
                     desiredCvssV4Score,
                     desiredOwaspVector,
                     desiredOwaspScore);
+
+            if (!hasChanged) {
+                if (this.vulnPolicyId == null) {
+                    return null;
+                }
+                return new Result(
+                        new FindingKey(componentId, vulnDbId),
+                        command.asOwnershipOnly(),
+                        commenter,
+                        List.of(),
+                        false,
+                        false);
+            }
 
             if (policy.getCondition() != null && !policy.getCondition().isEmpty()) {
                 comments.addFirst("Matched on condition: " + policy.getCondition());

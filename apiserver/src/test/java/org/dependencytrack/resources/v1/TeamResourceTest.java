@@ -30,6 +30,7 @@ import alpine.server.filters.AuthFeature;
 import org.assertj.core.api.Assertions;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
+import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.common.ConfigKeys;
@@ -57,8 +58,8 @@ import java.util.UUID;
 
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
-import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.hamcrest.CoreMatchers.equalTo;
 
 public class TeamResourceTest extends ResourceTest {
@@ -430,14 +431,10 @@ public class TeamResourceTest extends ResourceTest {
                             """.formatted(deleted.getUuid())));
             assertThat(response.getStatus()).isEqualTo(204);
 
-            final List<UUID> recorded = withJdbiHandle(handle -> handle.createQuery("""
-                            SELECT "PROJECT_UUID"
-                              FROM "ASSESSMENT_SYNC_OUTBOX"
-                             WHERE "REASON" = :reason
-                            """)
-                    .bind("reason", Reason.ACCESS_CHANGED.name())
-                    .mapTo(UUID.class)
-                    .list());
+            final List<UUID> recorded = recordedChanges().stream()
+                    .filter(change -> change.reason() == Reason.ACCESS_CHANGED)
+                    .map(AssessmentChange::projectUuid)
+                    .toList();
             org.assertj.core.api.Assertions.assertThat(recorded)
                     .containsExactly(mapped.getUuid())
                     .doesNotContain(unmapped.getUuid());

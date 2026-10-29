@@ -26,7 +26,6 @@ import org.apache.http.HttpStatus;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
 import org.dependencytrack.assessmentsync.AssessmentChange;
-import org.dependencytrack.assessmentsync.AssessmentSyncOutboxDao;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.Analysis;
@@ -66,12 +65,12 @@ import java.util.function.Supplier;
 
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 import static org.dependencytrack.notification.NotificationTestUtil.createCatchAllNotificationRule;
 import static org.dependencytrack.notification.NotificationTestUtil.getNotificationOutbox;
 import static org.dependencytrack.notification.proto.v1.Group.GROUP_PROJECT_AUDIT_CHANGE;
 import static org.dependencytrack.notification.proto.v1.Level.LEVEL_INFORMATIONAL;
 import static org.dependencytrack.notification.proto.v1.Scope.SCOPE_PORTFOLIO;
-import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
@@ -1840,14 +1839,6 @@ class AnalysisResourceTest extends ResourceTest {
                             AssessmentChange.Reason.AUTHORED,
                             List.of(new AssessmentChange.LookupKey("Acme Example", "1.0"))));
         });
-    }
-
-    /// What step 1 hands to the relay, read the way the relay reads it.
-    private static List<AssessmentChange> recordedChanges() {
-        return inJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle)
-                .pollDue(100).stream()
-                        .map(AssessmentSyncOutboxDao.OutboxEntry::change)
-                        .toList());
     }
 
     private FindingFixture findingWithoutAnalysis() {

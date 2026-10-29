@@ -23,6 +23,7 @@ import alpine.server.filters.ApiFilter;
 import alpine.server.filters.AuthFeature;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
+import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.common.ConfigKeys;
@@ -41,7 +42,7 @@ import java.util.UUID;
 
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 
 public class AccessControlResourceTest extends ResourceTest {
 
@@ -219,14 +220,10 @@ public class AccessControlResourceTest extends ResourceTest {
     }
 
     private static List<UUID> accessChangedProjects() {
-        return withJdbiHandle(handle -> handle.createQuery("""
-                        SELECT "PROJECT_UUID"
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
-                         WHERE "REASON" = :reason
-                        """)
-                .bind("reason", Reason.ACCESS_CHANGED.name())
-                .mapTo(UUID.class)
-                .list());
+        return recordedChanges().stream()
+                .filter(change -> change.reason() == Reason.ACCESS_CHANGED)
+                .map(AssessmentChange::projectUuid)
+                .toList();
     }
 
     @Test

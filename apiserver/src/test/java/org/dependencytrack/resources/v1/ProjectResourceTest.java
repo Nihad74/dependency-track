@@ -29,9 +29,12 @@ import alpine.server.filters.AuthFeature;
 import alpine.server.resources.GlobalExceptionHandler;
 import com.github.packageurl.PackageURL;
 import net.javacrumbs.jsonunit.core.Option;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
+import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.auth.Permissions;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.Mappers;
 import org.dependencytrack.metrics.ProjectMetrics;
 import org.dependencytrack.model.AnalysisJustification;
@@ -69,9 +72,11 @@ import org.dependencytrack.policy.vulnerability.VulnerabilityPolicy;
 import org.dependencytrack.policy.vulnerability.VulnerabilityPolicyAnalysis;
 import org.dependencytrack.policy.vulnerability.VulnerabilityPolicyDao;
 import org.dependencytrack.policy.vulnerability.VulnerabilityPolicyDao.VulnPolicyIdentityRow;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.glassfish.jersey.client.HttpUrlConnectorProvider;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.hamcrest.CoreMatchers;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -108,6 +113,7 @@ import java.util.stream.Stream;
 
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 import static org.dependencytrack.notification.NotificationTestUtil.createCatchAllNotificationRule;
 import static org.dependencytrack.notification.NotificationTestUtil.getNotificationOutbox;
 import static org.dependencytrack.notification.proto.v1.Group.GROUP_PROJECT_CREATED;
@@ -2812,6 +2818,91 @@ class ProjectResourceTest extends ResourceTest {
 
         response = responseSupplier.get();
         assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @AfterEach
+    void clearAssessmentSyncMode() {
+        MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+    }
+
+    @Test
+    void createProjectRecordsAProjectChangeWithItsNameAndVersion() {
+        initializeWithPermissions(Permissions.PORTFOLIO_MANAGEMENT_CREATE);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        final Response response =
+                jersey.target(V1_PROJECT).request().header(X_API_KEY, apiKey).put(Entity.json(/* language=JSON */ """
+                        {
+                          "name": "acme-os",
+                          "version": "1.0"
+                        }
+                        """));
+
+        assertThat(response.getStatus()).isEqualTo(201);
+        final UUID projectUuid = UUID.fromString(parseJsonObject(response).getString("uuid"));
+        assertThat(recordedChanges())
+                .containsExactly(new AssessmentChange(
+                        AssessmentChange.Scope.PROJECT,
+                        projectUuid,
+                        null,
+                        null,
+                        AssessmentChange.Reason.PROJECT_CREATED,
+                        List.of(new AssessmentChange.LookupKey("acme-os", "1.0"))));
+    }
+
+    @Test
+    void patchingTheNameRecordsAProjectChangeWithOldAndNewNames() {
+        initializeWithPermissions(Permissions.PORTFOLIO_MANAGEMENT_UPDATE);
+        final Project project = qm.createProject("acme-os", null, "1.0", null, null, null, null, false);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        final Response response = jersey.target(V1_PROJECT + "/" + project.getUuid())
+                .request()
+                .header(X_API_KEY, apiKey)
+                .property(HttpUrlConnectorProvider.SET_METHOD_WORKAROUND, true)
+                .method("PATCH", Entity.json(/* language=JSON */ """
+                        {
+                          "name": "acme-linux"
+                        }
+                        """));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(recordedChanges(project.getUuid()))
+                .singleElement()
+                .extracting(AssessmentChange::lookupKeys)
+                .asInstanceOf(InstanceOfAssertFactories.list(AssessmentChange.LookupKey.class))
+                .containsExactlyInAnyOrder(
+                        new AssessmentChange.LookupKey("acme-os", "1.0"),
+                        new AssessmentChange.LookupKey("acme-linux", "1.0"));
+    }
+
+    @Test
+    void changingTheParentRecordsAnAccessChangeForTheProjectAndItsDescendants() {
+        initializeWithPermissions(Permissions.PORTFOLIO_MANAGEMENT_UPDATE);
+        final Project parent = qm.createProject("acme-parent", null, "1.0", null, null, null, null, false);
+        final Project project = qm.createProject("acme-app", null, "1.0", null, null, null, null, false);
+        final Project child = qm.createProject("acme-module", null, "1.0", null, project, null, null, false);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        final Response response = jersey.target(V1_PROJECT)
+                .request()
+                .header(X_API_KEY, apiKey)
+                .post(Entity.json(/* language=JSON */ """
+                        {
+                          "parent": {
+                            "uuid": "%s"
+                          },
+                          "uuid": "%s",
+                          "name": "acme-app",
+                          "version": "1.0"
+                        }
+                        """.formatted(parent.getUuid(), project.getUuid())));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(recordedChanges())
+                .filteredOn(change -> change.reason() == AssessmentChange.Reason.ACCESS_CHANGED)
+                .extracting(AssessmentChange::projectUuid)
+                .containsExactlyInAnyOrder(project.getUuid(), child.getUuid());
     }
 
     @Test

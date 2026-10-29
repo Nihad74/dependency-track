@@ -25,7 +25,10 @@ import org.cyclonedx.proto.v1_7.Source;
 import org.cyclonedx.proto.v1_7.VulnerabilityAffects;
 import org.cyclonedx.proto.v1_7.VulnerabilityReference;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.assessmentsync.AssessmentChange;
+import org.dependencytrack.assessmentsync.AssessmentOwnership;
 import org.dependencytrack.cache.api.NoopCacheManager;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.datasource.DataSourceRegistry;
 import org.dependencytrack.dex.activity.DeleteFilesActivity;
 import org.dependencytrack.dex.engine.api.DexEngine;
@@ -69,6 +72,7 @@ import org.dependencytrack.proto.internal.workflow.v1.PrepareVulnAnalysisRes;
 import org.dependencytrack.proto.internal.workflow.v1.ReconcileVulnAnalysisResultsArg;
 import org.dependencytrack.proto.internal.workflow.v1.VulnAnalysisWorkflowArg;
 import org.dependencytrack.proto.internal.workflow.v1.VulnAnalysisWorkflowContext;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.dependencytrack.support.net.OutboundConnectionPolicy;
 import org.dependencytrack.vulnanalysis.api.RetryableVulnAnalysisException;
 import org.dependencytrack.vulnanalysis.api.VulnAnalyzer;
@@ -98,6 +102,8 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.owner;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.protoConverter;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.voidConverter;
 import static org.dependencytrack.notification.NotificationTestUtil.createCatchAllNotificationRule;
@@ -196,6 +202,7 @@ class VulnAnalysisWorkflowTest extends PersistenceCapableTest {
         if (pluginManager != null) {
             pluginManager.close();
         }
+        MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
     }
 
     @Test
@@ -1472,6 +1479,177 @@ class VulnAnalysisWorkflowTest extends PersistenceCapableTest {
                         .collect(Collectors.toUnmodifiableSet()))
                 .toList());
     }
+
+    @Test
+    void policyDecisionDuringAnalysisIsOwnedByThePolicyAndRecorded() {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        final PolicyFixture fixture = vulnerableFinding();
+        createPolicy("testPolicy", "testAuthor", "true", notAffectedPolicyAnalysis(), List.of());
+
+        analyze(fixture.project());
+
+        assertThat(origin(fixture)).isEqualTo(AssessmentOwnership.POLICY);
+        assertThat(recordedChanges())
+                .extracting(
+                        AssessmentChange::scope,
+                        AssessmentChange::projectUuid,
+                        AssessmentChange::componentUuid,
+                        AssessmentChange::vulnerabilityUuid,
+                        AssessmentChange::lookupKeys)
+                .containsExactly(tuple(
+                        AssessmentChange.Scope.FINDING,
+                        fixture.project().getUuid(),
+                        fixture.component().getUuid(),
+                        fixture.vulnerability().getUuid(),
+                        List.of(new AssessmentChange.LookupKey("acme-app", "1.0.0"))));
+    }
+
+    @Test
+    void unchangedPolicyTakesOwnershipOfARowItWroteBeforeTheFeature() {
+        final PolicyFixture fixture = vulnerableFinding();
+        createPolicy("testPolicy", "testAuthor", "true", notAffectedPolicyAnalysis(), List.of());
+        analyze(fixture.project());
+        forgetOrigin(fixture);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        analyze(fixture.project());
+
+        assertThat(origin(fixture)).isEqualTo(AssessmentOwnership.POLICY);
+        assertThat(recordedChanges())
+                .extracting(AssessmentChange::componentUuid, AssessmentChange::vulnerabilityUuid)
+                .containsExactly(tuple(
+                        fixture.component().getUuid(), fixture.vulnerability().getUuid()));
+    }
+
+    @Test
+    void policyMatchingAHandWrittenDecisionLeavesItLocal() {
+        final PolicyFixture fixture = vulnerableFinding();
+        analyze(fixture.project());
+        qm.makeAnalysis(new MakeAnalysisCommand(fixture.component(), fixture.vulnerability())
+                .withState(AnalysisState.NOT_AFFECTED)
+                .withJustification(AnalysisJustification.CODE_NOT_REACHABLE)
+                .withOptions(Set.of(MakeAnalysisCommand.Option.OMIT_NOTIFICATION)));
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        createPolicy("testPolicy", "testAuthor", "true", notAffectedPolicyAnalysis(), List.of());
+
+        analyze(fixture.project());
+
+        assertThat(origin(fixture)).isEqualTo(AssessmentOwnership.LOCAL);
+        assertThat(recordedChanges()).isEmpty();
+    }
+
+    @Test
+    void policyThatNoLongerMatchesLeavesTheRowNeutralAndIsRecorded() {
+        final PolicyFixture fixture = vulnerableFinding();
+        final var policy = new VulnerabilityPolicy();
+        policy.setName("testPolicy");
+        policy.setAuthor("testAuthor");
+        policy.setCondition("true");
+        policy.setAnalysis(notAffectedPolicyAnalysis());
+        policy.setRatings(List.of());
+        final UUID policyUuid = withJdbiHandle(
+                        handle -> handle.attach(VulnerabilityPolicyDao.class).create(policy))
+                .uuid();
+        analyze(fixture.project());
+        policy.setCondition("false");
+        withJdbiHandle(
+                handle -> handle.attach(VulnerabilityPolicyDao.class).updateUserManagedByUuid(policyUuid, policy));
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        analyze(fixture.project());
+
+        assertThat(origin(fixture)).isEqualTo(AssessmentOwnership.NEUTRAL);
+        assertThat(recordedChanges())
+                .extracting(AssessmentChange::componentUuid, AssessmentChange::vulnerabilityUuid)
+                .containsExactly(tuple(
+                        fixture.component().getUuid(), fixture.vulnerability().getUuid()));
+    }
+
+    @Test
+    void newlyAttributedFindingIsRecorded() {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        final PolicyFixture fixture = vulnerableFinding();
+
+        analyze(fixture.project());
+
+        assertThat(recordedChanges())
+                .containsExactly(new AssessmentChange(
+                        AssessmentChange.Scope.FINDING,
+                        fixture.project().getUuid(),
+                        fixture.component().getUuid(),
+                        fixture.vulnerability().getUuid(),
+                        AssessmentChange.Reason.ATTRIBUTION,
+                        List.of(new AssessmentChange.LookupKey("acme-app", "1.0.0"))));
+    }
+
+    /// A row from before assessment synchronization has no origin record.
+    private void forgetOrigin(final PolicyFixture fixture) {
+        final long analysisId =
+                qm.getAnalysis(fixture.component(), fixture.vulnerability()).getId();
+        withJdbiHandle(handle ->
+                handle.createUpdate("""
+                        DELETE FROM "ASSESSMENT_ORIGIN"
+                         WHERE "ANALYSIS_ID" = :analysisId
+                        """).bind("analysisId", analysisId).execute());
+    }
+
+    private PolicyFixture vulnerableFinding() {
+        var vuln = new Vulnerability();
+        vuln.setVulnId("INT-200");
+        vuln.setSource(Vulnerability.Source.INTERNAL);
+        vuln.setSeverity(Severity.CRITICAL);
+        vuln = qm.persist(vuln);
+
+        final var vs = new VulnerableSoftware();
+        vs.setPurlType("maven");
+        vs.setPurlNamespace("com.example");
+        vs.setPurlName("acme-lib");
+        vs.setVersionStartIncluding("1.0.0");
+        vs.setVersionEndExcluding("2.0.0");
+        vs.setVulnerable(true);
+        vs.addVulnerability(vuln);
+        qm.persist(vs);
+
+        var project = new Project();
+        project.setName("acme-app");
+        project.setVersion("1.0.0");
+        project = qm.persist(project);
+
+        var component = new Component();
+        component.setProject(project);
+        component.setGroup("com.example");
+        component.setName("acme-lib");
+        component.setVersion("1.1.0");
+        component.setPurl("pkg:maven/com.example/acme-lib@1.1.0");
+        component = qm.persist(component);
+        return new PolicyFixture(project, component, vuln);
+    }
+
+    private static VulnerabilityPolicyAnalysis notAffectedPolicyAnalysis() {
+        final var analysis = new VulnerabilityPolicyAnalysis();
+        analysis.setState(VulnerabilityPolicyAnalysis.State.NOT_AFFECTED);
+        analysis.setJustification(VulnerabilityPolicyAnalysis.Justification.CODE_NOT_REACHABLE);
+        return analysis;
+    }
+
+    private void analyze(final Project project) {
+        final UUID runId = workflowTest
+                .getEngine()
+                .createRun(new CreateWorkflowRunRequest<>(VulnAnalysisWorkflow.class)
+                        .withArgument(VulnAnalysisWorkflowArg.newBuilder()
+                                .setProjectUuid(project.getUuid().toString())
+                                .build()));
+        workflowTest.awaitRunStatus(runId, WorkflowRunStatus.COMPLETED);
+        qm.getPersistenceManager().evictAll();
+    }
+
+    private AssessmentOwnership origin(final PolicyFixture fixture) {
+        final Analysis analysis = qm.getAnalysis(fixture.component(), fixture.vulnerability());
+        assertThat(analysis).isNotNull();
+        return owner(analysis.getId());
+    }
+
+    private record PolicyFixture(Project project, Component component, Vulnerability vulnerability) {}
 
     private static void createPolicy(
             String name,
