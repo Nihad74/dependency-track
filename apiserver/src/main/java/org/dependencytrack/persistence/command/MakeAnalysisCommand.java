@@ -67,17 +67,21 @@ public record MakeAnalysisCommand(
 
     /**
      * How an authored writer wants the analysis changed.
-     * {@link #VEX} is internal and is not an API choice.
      */
     public enum DecisionAction {
         AUTO,
         COMMENT_ONLY,
         TAKE_LOCAL,
-        RELEASE_LOCAL,
-        VEX
+        RELEASE_LOCAL
     }
 
     public enum Option {
+
+        /**
+         * Reset an omitted state, justification, or response to {@code NOT_SET}, as REST API v1 does.
+         * Not applied to an inherited analysis, whose omitted fields keep their value.
+         */
+        V1_RESET_OMITTED_DECISION,
 
         /**
          * Do not generate any audit trail entries.
