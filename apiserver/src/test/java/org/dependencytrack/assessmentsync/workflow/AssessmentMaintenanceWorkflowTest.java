@@ -22,6 +22,7 @@ import io.github.resilience4j.core.IntervalFunction;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentChange;
+import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.dependencytrack.assessmentsync.AssessmentChangeRecorder;
 import org.dependencytrack.assessmentsync.AssessmentSyncMetrics;
@@ -94,15 +95,15 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
         MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "OFF");
         final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
         MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
-        recordProject(fixture.target.getUuid(), "before-scan");
+        recordProject(fixture.target.getUuid(), Reason.PROJECT_UPDATED);
 
         final Handle slow = openJdbiHandle();
         try {
             slow.begin();
-            new AssessmentChangeRecorder(slow).record(projectChange(fixture.target.getUuid(), "during-scan"));
+            new AssessmentChangeRecorder(slow).record(projectChange(fixture.target.getUuid(), Reason.PROJECT_CREATED));
             scan(activity(1, new SimpleMeterRegistry()), BOOTSTRAP);
 
-            assertThat(outboxReasons()).containsExactly("before-scan");
+            assertThat(outboxReasons()).containsExactly("PROJECT_UPDATED");
             assertThat(ReconcileFixture.state(fixture.library().getId(), fixture.vulnerability.getId()))
                     .isNull();
             assertThat(ReconcileFixture.owner(fixture.library().getId(), fixture.vulnerability.getId()))
@@ -117,7 +118,7 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
             slow.close();
         }
 
-        assertThat(outboxReasons()).containsExactly("before-scan", "during-scan");
+        assertThat(outboxReasons()).containsExactly("PROJECT_UPDATED", "PROJECT_CREATED");
         assertThat(ReconcileFixture.state(fixture.library().getId(), fixture.vulnerability.getId()))
                 .isNull();
         assertThat(registryBacklog()).isGreaterThanOrEqualTo(2d);
@@ -128,7 +129,7 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
         MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
         insertProject(UUID_1, "behind");
         insertProject(UUID_3, "ahead");
-        recordProject(UUID_1, "behind-cursor");
+        recordProject(UUID_1, Reason.PROJECT_CREATED);
 
         final MaintainAssessmentProjectionsRes page =
                 activity(10, new SimpleMeterRegistry()).execute(CONTEXT, argument(BOOTSTRAP, UUID_2));
@@ -137,7 +138,7 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
         assertThat(page.getProjectUuidCursor()).isEqualTo(UUID_3.toString());
         assertThat(requestedRevision(UUID_3)).isEqualTo(1);
         assertThat(requestedRevision(UUID_1)).isZero();
-        assertThat(outboxReasons()).containsExactly("behind-cursor");
+        assertThat(outboxReasons()).containsExactly("PROJECT_CREATED");
     }
 
     @Test
@@ -432,11 +433,11 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
                         """).bind("name", name).bind("uuid", uuid).execute());
     }
 
-    private static void recordProject(final UUID projectUuid, final String reason) {
+    private static void recordProject(final UUID projectUuid, final Reason reason) {
         useJdbiTransaction(handle -> new AssessmentChangeRecorder(handle).record(projectChange(projectUuid, reason)));
     }
 
-    private static AssessmentChange projectChange(final UUID projectUuid, final String reason) {
+    private static AssessmentChange projectChange(final UUID projectUuid, final Reason reason) {
         return new AssessmentChange(Scope.PROJECT, projectUuid, null, null, reason, List.of());
     }
 

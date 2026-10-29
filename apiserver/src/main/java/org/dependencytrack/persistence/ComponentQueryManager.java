@@ -26,6 +26,7 @@ import alpine.resources.AlpineRequest;
 import com.github.packageurl.MalformedPackageURLException;
 import com.github.packageurl.PackageURL;
 import org.apache.commons.lang3.tuple.Pair;
+import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.metrics.DependencyMetrics;
@@ -446,7 +447,7 @@ final class ComponentQueryManager extends QueryManager {
                     handle -> AssessmentStructureCapture.rebuildAndRecord(
                             handle,
                             project.getUuid(),
-                            AssessmentStructureCapture.COMPONENT_CHANGED,
+                            AssessmentChange.Reason.COMPONENT_CHANGED,
                             projectName,
                             projectVersion,
                             projectName,
@@ -526,7 +527,7 @@ final class ComponentQueryManager extends QueryManager {
                 AssessmentStructureCapture.rebuildAndRecord(
                         handle,
                         projectUuidBefore,
-                        AssessmentStructureCapture.COMPONENT_CHANGED,
+                        AssessmentChange.Reason.COMPONENT_CHANGED,
                         projectNameBefore,
                         projectVersionBefore,
                         projectNameBefore,
@@ -534,7 +535,7 @@ final class ComponentQueryManager extends QueryManager {
                 AssessmentStructureCapture.rebuildAndRecord(
                         handle,
                         projectUuidAfter,
-                        AssessmentStructureCapture.COMPONENT_CHANGED,
+                        AssessmentChange.Reason.COMPONENT_CHANGED,
                         projectNameAfter,
                         projectVersionAfter,
                         projectNameAfter,
@@ -546,7 +547,7 @@ final class ComponentQueryManager extends QueryManager {
                     handle -> AssessmentStructureCapture.rebuildAndRecord(
                             handle,
                             projectUuidAfter,
-                            AssessmentStructureCapture.COMPONENT_CHANGED,
+                            AssessmentChange.Reason.COMPONENT_CHANGED,
                             projectNameBefore,
                             projectVersionBefore,
                             projectAfter.getName(),

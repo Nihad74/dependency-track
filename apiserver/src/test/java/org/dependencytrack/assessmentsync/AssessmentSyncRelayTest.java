@@ -24,6 +24,7 @@ import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.dependencytrack.assessmentsync.AssessmentSyncOutboxDao.OutboxEntry;
 import org.dependencytrack.assessmentsync.workflow.ExpandAssessmentChangesActivity;
@@ -203,7 +204,7 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
             handle.createUpdate("""
                             INSERT INTO "ASSESSMENT_SYNC_OUTBOX" (
                               "SCHEMA_VERSION", "SCOPE_KEY", "SCOPE", "PROJECT_UUID", "REASON"
-                            ) VALUES (2, :scopeKey, 'PROJECT', :projectUuid, 'SCHEMA')
+                            ) VALUES (2, :scopeKey, 'PROJECT', :projectUuid, 'PROJECT_UPDATED')
                             """)
                     .bind("scopeKey", "project:" + projectUuid)
                     .bind("projectUuid", projectUuid)
@@ -392,8 +393,9 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
 
     private static long insertProjectOutbox() {
         return inJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle)
-                .record(new AssessmentChange(
-                        Scope.PROJECT, UUID.randomUUID(), null, null, "PROJECT_CHANGED", List.of())));
+                .recordAll(List.of(new AssessmentChange(
+                        Scope.PROJECT, UUID.randomUUID(), null, null, Reason.PROJECT_UPDATED, List.of())))
+                .getFirst());
     }
 
     private static OutboxEntry outbox(final long id) {

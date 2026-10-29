@@ -53,7 +53,6 @@ import java.util.List;
 
 import static java.util.Objects.requireNonNullElse;
 import static org.dependencytrack.assessmentsync.AssessmentChange.Scope.FINDING;
-import static org.dependencytrack.assessmentsync.AssessmentChangeRecorder.AUTHORED;
 import static org.dependencytrack.notification.api.NotificationFactory.createVulnerabilityAnalysisDecisionChangeNotification;
 import static org.dependencytrack.util.AnalysisCommentFormatter.formatComment;
 import static org.dependencytrack.util.PersistenceUtil.assertPersistent;
@@ -169,15 +168,15 @@ public class AnalysisQueryManager extends QueryManager {
                         project.getUuid(),
                         effective.component().getUuid(),
                         effective.vulnerability().getUuid(),
-                        AUTHORED,
-                        AssessmentChangeRecorder.lookupKeys(project.getName(), project.getVersion()));
+                        AssessmentChange.Reason.AUTHORED,
+                        AssessmentChange.LookupKey.listOf(project.getName(), project.getVersion()));
                 JdbiFactory.useJdbiHandle(this, handle -> {
                     final var dao = new AssessmentProjectionDao(handle);
                     if (originWrite.clearContributions()) {
                         dao.deleteCopiedContributions(analysisId);
                     }
                     if (originWrite.owner() != null) {
-                        dao.upsertOrigin(analysisId, originWrite.owner(), null, update.machineChanged());
+                        dao.upsertOrigin(analysisId, originWrite.owner(), update.machineChanged());
                     }
                     if (originWrite.recordChange()) {
                         new AssessmentChangeRecorder(handle).record(change);

@@ -48,28 +48,19 @@ public final class AssessmentProjectionDao {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Inserts origin or updates it. The version moves only when ownership changes.
-    public long upsertOrigin(
-            final long analysisId, final AssessmentOwnership owner, final @Nullable String lastReason) {
-        return upsertOrigin(analysisId, owner, lastReason, false);
-    }
-
-    /// Inserts origin or updates it. An existing version moves by one when ownership or the decision changes.
-    /// A new origin row starts at version 0.
-    public long upsertOrigin(
-            final long analysisId,
-            final AssessmentOwnership owner,
-            final @Nullable String lastReason,
-            final boolean decisionChanged) {
+    /// Inserts origin or updates it, and clears the worker's last reason. The version moves by one when
+    /// ownership or the decision changes. A missing row is version 0, so a new row starts at 1 when the
+    /// decision changed.
+    public long upsertOrigin(final long analysisId, final AssessmentOwnership owner, final boolean decisionChanged) {
         requireAnalysisId(analysisId);
         requireNonNull(owner, "owner must not be null");
         requireTransaction();
         return handle.createQuery(/* language=SQL */ """
-                        INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER", "LAST_REASON")
-                        VALUES (:analysisId, :owner, :lastReason)
+                        INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER", "DECISION_VERSION")
+                        VALUES (:analysisId, :owner, CASE WHEN :decisionChanged THEN 1 ELSE 0 END)
                         ON CONFLICT ("ANALYSIS_ID") DO UPDATE
                         SET "OWNER" = EXCLUDED."OWNER"
-                          , "LAST_REASON" = EXCLUDED."LAST_REASON"
+                          , "LAST_REASON" = NULL
                           , "DECISION_VERSION" = "ASSESSMENT_ORIGIN"."DECISION_VERSION" + CASE
                               WHEN :decisionChanged
                                 OR "ASSESSMENT_ORIGIN"."OWNER" IS DISTINCT FROM EXCLUDED."OWNER" THEN 1
@@ -79,13 +70,13 @@ public final class AssessmentProjectionDao {
                         """)
                 .bind("analysisId", analysisId)
                 .bind("owner", owner.name())
-                .bind("lastReason", lastReason)
                 .bind("decisionChanged", decisionChanged)
                 .mapTo(long.class)
                 .one();
     }
 
-    /// Reads the origin row. Null means the analysis is protected local state.
+    /// Reads the origin row. Null means the analysis predates the feature: protected as local, or as policy
+    /// when a vulnerability policy wrote it.
     public @Nullable Origin findOrigin(final long analysisId) {
         requireAnalysisId(analysisId);
         return handle.createQuery(/* language=SQL */ """

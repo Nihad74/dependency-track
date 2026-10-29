@@ -51,7 +51,9 @@ public record AssessmentSyncSettings(
         }
     }
 
+    /// Also rejects an unknown mode, so a typo fails startup instead of every later write.
     public static AssessmentSyncSettings read(final Config config) {
+        AssessmentSyncMode.from(config);
         return new AssessmentSyncSettings(
                 positiveLong(config, ConfigKeys.ASSESSMENT_SYNC_RELAY_POLL_INTERVAL_MS),
                 positiveInt(config, ConfigKeys.ASSESSMENT_SYNC_RELAY_BATCH_SIZE),
