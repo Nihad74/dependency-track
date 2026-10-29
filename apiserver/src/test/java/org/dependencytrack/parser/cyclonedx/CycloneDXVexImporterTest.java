@@ -23,6 +23,7 @@ import org.cyclonedx.Version;
 import org.cyclonedx.exception.ParseException;
 import org.cyclonedx.parsers.BomParserFactory;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.assessmentsync.AssessmentOwnership;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisComment;
@@ -46,7 +47,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.owner;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 
 public class CycloneDXVexImporterTest extends PersistenceCapableTest {
 
@@ -834,20 +836,7 @@ public class CycloneDXVexImporterTest extends PersistenceCapableTest {
 
         final Analysis analysis = qm.getAnalysis(component, vuln);
         assertThat(analysis.getAnalysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
-        final String owner = withJdbiHandle(handle -> handle.createQuery("""
-                        SELECT "OWNER"
-                          FROM "ASSESSMENT_ORIGIN"
-                         WHERE "ANALYSIS_ID" = :analysisId
-                        """)
-                .bind("analysisId", analysis.getId())
-                .mapTo(String.class)
-                .one());
-        assertThat(owner).isEqualTo("LOCAL");
-        final int outboxRows = withJdbiHandle(
-                handle -> handle.createQuery("""
-                        SELECT COUNT(*)::int
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
-                        """).mapTo(int.class).one());
-        assertThat(outboxRows).isEqualTo(1);
+        assertThat(owner(analysis.getId())).isEqualTo(AssessmentOwnership.LOCAL);
+        assertThat(recordedChanges()).hasSize(1);
     }
 }

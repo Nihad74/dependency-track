@@ -25,6 +25,8 @@ import com.github.packageurl.PackageURL;
 import org.apache.http.HttpStatus;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
+import org.dependencytrack.assessmentsync.AssessmentChange;
+import org.dependencytrack.assessmentsync.AssessmentEmbeddingDao;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.engine.api.DexEngine;
@@ -45,6 +47,7 @@ import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.dependencytrack.util.PurlUtil;
 import org.glassfish.jersey.inject.hk2.AbstractBinder;
 import org.glassfish.jersey.server.ResourceConfig;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -65,6 +68,7 @@ import java.util.function.Supplier;
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
@@ -653,6 +657,11 @@ public class ComponentResourceTest extends ResourceTest {
         Assertions.assertEquals(response.getHeaderString(TOTAL_COUNT_HEADER), "0");
     }
 
+    @AfterEach
+    public void clearAssessmentSyncMode() {
+        MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+    }
+
     @Test
     public void createComponentTest() {
         initializeWithPermissions(Permissions.PORTFOLIO_MANAGEMENT_UPDATE);
@@ -1087,15 +1096,119 @@ public class ComponentResourceTest extends ResourceTest {
                 .one());
     }
 
+    @Test
+    public void createComponentRecordsAProjectChange() {
+        initializeWithPermissions(Permissions.PORTFOLIO_MANAGEMENT_UPDATE);
+        final Project project = qm.createProject("Acme Application", null, "9.9.9", null, null, null, null, false);
+        final var component = new Component();
+        component.setName("My Component");
+        component.setVersion("1.0");
+        component.setPurl("pkg:maven/org.acme/abc@1.0");
+        component.setClassifier(Classifier.APPLICATION);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        final Response response = jersey.target(V1_COMPONENT + "/project/" + project.getUuid())
+                .request()
+                .header(X_API_KEY, apiKey)
+                .put(Entity.entity(component, MediaType.APPLICATION_JSON));
+
+        assertThat(response.getStatus()).isEqualTo(201);
+        assertThat(recordedChanges()).containsExactly(componentChange(project));
+    }
+
+    @Test
+    public void updatingAComponentVersionRecordsAProjectChange() {
+        initializeWithPermissions(Permissions.PORTFOLIO_MANAGEMENT_UPDATE);
+        final Project project = qm.createProject("Acme Application", null, "9.9.9", null, null, null, null, false);
+        final Component component = persistComponent(project);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        final Response response = postComponent(component, "2.0", null);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(recordedChanges()).containsExactly(componentChange(project));
+    }
+
+    @Test
+    public void updatingOnlyAComponentDescriptionRecordsNothing() {
+        initializeWithPermissions(Permissions.PORTFOLIO_MANAGEMENT_UPDATE);
+        final Project project = qm.createProject("Acme Application", null, "9.9.9", null, null, null, null, false);
+        final Component component = persistComponent(project);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        final Response response = postComponent(component, "1.0", "Now with a description");
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(recordedChanges()).isEmpty();
+    }
+
+    @Test
+    public void updatingAMarkerInModeOffBuildsNoEmbeddingAndRecordsNothing() {
+        initializeWithPermissions(Permissions.PORTFOLIO_MANAGEMENT_UPDATE);
+        final Project target = qm.createProject("Acme Application", null, "9.9.9", null, null, null, null, false);
+        qm.createProject("acme-os", null, "1.0", null, null, null, null, false);
+        var marker = new Component();
+        marker.setProject(target);
+        marker.setName("acme-os");
+        marker.setVersion("0.9");
+        marker.setClassifier(Classifier.OPERATING_SYSTEM);
+        marker = qm.createComponent(marker, false);
+        target.setDirectDependencies("[{\"uuid\":\"%s\"}]".formatted(marker.getUuid()));
+        qm.persist(target);
+
+        final var update = new Component();
+        update.setUuid(marker.getUuid());
+        update.setName("acme-os");
+        update.setVersion("1.0");
+        update.setClassifier(Classifier.OPERATING_SYSTEM);
+        final Response response = jersey.target(V1_COMPONENT)
+                .request()
+                .header(X_API_KEY, apiKey)
+                .post(Entity.entity(update, MediaType.APPLICATION_JSON));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        final List<AssessmentEmbeddingDao.Embedding> embeddings = withJdbiHandle(
+                handle -> new AssessmentEmbeddingDao(handle).findByMarkerNameAndVersion("acme-os", "1.0"));
+        assertThat(embeddings).isEmpty();
+        assertThat(recordedChanges()).isEmpty();
+    }
+
+    private Component persistComponent(final Project project) {
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("My Component");
+        component.setVersion("1.0");
+        component.setPurl("pkg:maven/org.acme/abc@1.0");
+        component.setClassifier(Classifier.APPLICATION);
+        return qm.createComponent(component, false);
+    }
+
+    private Response postComponent(final Component component, final String version, final String description) {
+        final var update = new Component();
+        update.setUuid(component.getUuid());
+        update.setName("My Component");
+        update.setVersion(version);
+        update.setPurl("pkg:maven/org.acme/abc@1.0");
+        update.setClassifier(Classifier.APPLICATION);
+        update.setDescription(description);
+        return jersey.target(V1_COMPONENT)
+                .request()
+                .header(X_API_KEY, apiKey)
+                .post(Entity.entity(update, MediaType.APPLICATION_JSON));
+    }
+
+    private static AssessmentChange componentChange(final Project project) {
+        return new AssessmentChange(
+                AssessmentChange.Scope.PROJECT,
+                project.getUuid(),
+                null,
+                null,
+                AssessmentChange.Reason.COMPONENT_CHANGED,
+                List.of(new AssessmentChange.LookupKey("Acme Application", "9.9.9")));
+    }
+
     private static int outboxCount(final UUID projectUuid) {
-        return withJdbiHandle(handle -> handle.createQuery("""
-                        SELECT COUNT(*)::int
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
-                         WHERE "PROJECT_UUID" = :projectUuid
-                        """)
-                .bind("projectUuid", projectUuid)
-                .mapTo(int.class)
-                .one());
+        return recordedChanges(projectUuid).size();
     }
 
     @Test

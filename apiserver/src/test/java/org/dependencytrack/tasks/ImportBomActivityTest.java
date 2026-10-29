@@ -21,6 +21,8 @@ package org.dependencytrack.tasks;
 import alpine.model.IConfigProperty.PropertyType;
 import com.github.packageurl.PackageURL;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.assessmentsync.AssessmentChange;
+import org.dependencytrack.assessmentsync.AssessmentEmbeddingDao;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.dex.engine.api.DexEngine;
@@ -78,6 +80,9 @@ import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThatExceptionOfType;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.embeddings;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.isEmbeddedMember;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 import static org.dependencytrack.model.ConfigPropertyConstants.ACCEPT_ARTIFACT_CYCLONEDX;
 import static org.dependencytrack.notification.NotificationTestUtil.createCatchAllNotificationRule;
 import static org.dependencytrack.notification.NotificationTestUtil.getNotificationOutbox;
@@ -2067,24 +2072,27 @@ class ImportBomActivityTest extends PersistenceCapableTest {
             activity.execute(null, buildArg(target, storeBomFile(operatingSystemBom()), UUID.randomUUID()));
             assertBomProcessedNotification();
 
-            assertThat(outboxRows(target.getUuid())).satisfiesExactly(row -> {
-                assertThat(row.scope()).isEqualTo("PROJECT");
-                assertThat(row.reason()).isEqualTo("BOM_IMPORT");
-                assertThat(row.lookupKeys()).contains("cmx500").contains("1.0.0");
-            });
-            assertThat(outboxRows(source.getUuid())).isEmpty();
+            assertThat(recordedChanges(target.getUuid()))
+                    .containsExactly(new AssessmentChange(
+                            AssessmentChange.Scope.PROJECT,
+                            target.getUuid(),
+                            null,
+                            null,
+                            AssessmentChange.Reason.BOM_IMPORT,
+                            List.of(new AssessmentChange.LookupKey("cmx500", "1.0.0"))));
+            assertThat(recordedChanges(source.getUuid())).isEmpty();
 
             final long packageId = componentId(target.getUuid(), "busybox");
-            assertThat(embeddingMembers(target.getUuid())).satisfiesExactly(member -> {
-                assertThat(member.markerName()).isEqualTo("mrt.base.linux");
-                assertThat(member.markerVersion()).isEqualTo("5.14.121");
-                assertThat(member.sourceProjectUuid()).isEqualTo(source.getUuid());
-                assertThat(member.componentId()).isEqualTo(packageId);
-            });
+            assertThat(embeddings(target.getUuid(), "mrt.base.linux", "5.14.121"))
+                    .extracting(AssessmentEmbeddingDao.Embedding::sourceProjectUuid)
+                    .containsExactly(source.getUuid());
+            assertThat(isEmbeddedMember(target.getUuid(), packageId)).isTrue();
 
             activity.execute(null, buildArg(target, storeBomFile(libraryOnlyBom()), UUID.randomUUID()));
             assertBomProcessedNotification();
-            assertThat(embeddingMembers(target.getUuid())).isEmpty();
+            assertThat(embeddings(target.getUuid(), "mrt.base.linux", "5.14.121"))
+                    .isEmpty();
+            assertThat(isEmbeddedMember(target.getUuid(), packageId)).isFalse();
         } finally {
             MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
         }
@@ -2113,11 +2121,11 @@ class ImportBomActivityTest extends PersistenceCapableTest {
             assertBomProcessedNotification();
 
             final long firmwarePackageId = componentId(target.getUuid(), "busybox");
-            assertThat(embeddingMembers(target.getUuid())).satisfiesExactly(member -> {
-                assertThat(member.markerName()).isEqualTo("mrt.firmware");
-                assertThat(member.sourceProjectUuid()).isEqualTo(firmwareSource.getUuid());
-                assertThat(member.componentId()).isEqualTo(firmwarePackageId);
-            });
+            assertThat(embeddings(target.getUuid(), "mrt.firmware", "2.0.0"))
+                    .extracting(AssessmentEmbeddingDao.Embedding::sourceProjectUuid)
+                    .containsExactly(firmwareSource.getUuid());
+            assertThat(isEmbeddedMember(target.getUuid(), firmwarePackageId)).isTrue();
+            assertThat(embeddings(target.getUuid(), "acme-lib", "1.0.0")).isEmpty();
         } finally {
             MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
         }
@@ -2151,7 +2159,7 @@ class ImportBomActivityTest extends PersistenceCapableTest {
                             null, buildArg(target, storeBomFile(operatingSystemBom()), UUID.randomUUID())))
                     .isInstanceOf(TerminalApplicationFailureException.class);
             assertThat(qm.getAllComponents(target)).isEmpty();
-            assertThat(outboxRows(target.getUuid())).isEmpty();
+            assertThat(recordedChanges(target.getUuid())).isEmpty();
         } finally {
             MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
             useJdbiTransaction(handle -> {
@@ -2228,21 +2236,6 @@ class ImportBomActivityTest extends PersistenceCapableTest {
                 """.getBytes(StandardCharsets.UTF_8);
     }
 
-    private List<OutboxRow> outboxRows(final UUID projectUuid) {
-        return withJdbiHandle(handle -> handle.createQuery("""
-                        SELECT "SCOPE"
-                             , "REASON"
-                             , "LOOKUP_KEYS"::text AS lookup_keys
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
-                         WHERE "PROJECT_UUID" = :projectUuid
-                         ORDER BY "ID"
-                        """)
-                .bind("projectUuid", projectUuid)
-                .map((rs, ctx) ->
-                        new OutboxRow(rs.getString("SCOPE"), rs.getString("REASON"), rs.getString("lookup_keys")))
-                .list());
-    }
-
     private static long componentId(final UUID projectUuid, final String name) {
         return withJdbiHandle(handle -> handle.createQuery("""
                         SELECT component."ID"
@@ -2257,34 +2250,6 @@ class ImportBomActivityTest extends PersistenceCapableTest {
                 .mapTo(Long.class)
                 .one());
     }
-
-    private static List<EmbeddingMember> embeddingMembers(final UUID projectUuid) {
-        return withJdbiHandle(handle -> handle.createQuery("""
-                        SELECT embedding."MARKER_NAME"
-                             , embedding."MARKER_VERSION"
-                             , embedding."SOURCE_PROJECT_UUID"
-                             , member."COMPONENT_ID"
-                          FROM "ASSESSMENT_EMBEDDING" AS embedding
-                         INNER JOIN "PROJECT" AS project
-                            ON project."ID" = embedding."TARGET_PROJECT_ID"
-                          LEFT JOIN "ASSESSMENT_EMBEDDING_MEMBER" AS member
-                            ON member."TARGET_PROJECT_ID" = embedding."TARGET_PROJECT_ID"
-                           AND member."MARKER_COMPONENT_ID" = embedding."MARKER_COMPONENT_ID"
-                         WHERE project."UUID" = :projectUuid
-                         ORDER BY member."COMPONENT_ID"
-                        """)
-                .bind("projectUuid", projectUuid)
-                .map((rs, ctx) -> new EmbeddingMember(
-                        rs.getString("MARKER_NAME"),
-                        rs.getString("MARKER_VERSION"),
-                        rs.getObject("SOURCE_PROJECT_UUID", UUID.class),
-                        rs.getObject("COMPONENT_ID", Long.class)))
-                .list());
-    }
-
-    private record OutboxRow(String scope, String reason, String lookupKeys) {}
-
-    private record EmbeddingMember(String markerName, String markerVersion, UUID sourceProjectUuid, Long componentId) {}
 
     private FileMetadata storeBomFile(final String testFileName) throws Exception {
         final Path bomFilePath =

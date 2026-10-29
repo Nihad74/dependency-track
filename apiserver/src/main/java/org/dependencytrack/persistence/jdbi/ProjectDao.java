@@ -1444,10 +1444,7 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
                 getHandle(),
                 clonedProjectUuid,
                 AssessmentChange.Reason.PROJECT_CLONED,
-                cloned.name(),
-                cloned.version(),
-                cloned.name(),
-                cloned.version());
+                AssessmentChange.LookupKey.listOf(cloned.name(), cloned.version()));
         return clonedProjectUuid;
     }
 

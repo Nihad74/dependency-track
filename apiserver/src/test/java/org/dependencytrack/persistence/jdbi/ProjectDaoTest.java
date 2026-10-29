@@ -18,7 +18,9 @@
  */
 package org.dependencytrack.persistence.jdbi;
 
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.metrics.DependencyMetrics;
 import org.dependencytrack.metrics.MetricsDao;
@@ -63,6 +65,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.openJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
@@ -542,19 +545,13 @@ public class ProjectDaoTest extends PersistenceCapableTest {
             update.setActive(true);
             qm.updateProject(update, false);
 
-            final List<String> lookupKeys = withJdbiHandle(handle -> handle.createQuery("""
-                            SELECT "LOOKUP_KEYS"::text
-                              FROM "ASSESSMENT_SYNC_OUTBOX"
-                             WHERE "PROJECT_UUID" = :projectUuid
-                            """)
-                    .bind("projectUuid", project.getUuid())
-                    .mapTo(String.class)
-                    .list());
-            assertThat(lookupKeys)
-                    .satisfiesExactly(keys -> assertThat(keys)
-                            .contains("old-name")
-                            .contains("new-name")
-                            .contains("1.0.0"));
+            assertThat(recordedChanges(project.getUuid()))
+                    .singleElement()
+                    .extracting(AssessmentChange::lookupKeys)
+                    .asInstanceOf(InstanceOfAssertFactories.list(AssessmentChange.LookupKey.class))
+                    .containsExactlyInAnyOrder(
+                            new AssessmentChange.LookupKey("old-name", "1.0.0"),
+                            new AssessmentChange.LookupKey("new-name", "1.0.0"));
         } finally {
             MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
         }
@@ -579,18 +576,13 @@ public class ProjectDaoTest extends PersistenceCapableTest {
 
             assertThat(projectDao.getProjectId(parent.getUuid())).isNull();
             assertThat(projectDao.getProjectId(child.getUuid())).isNull();
-            final List<String> lookupKeys = withJdbiHandle(handle -> handle.createQuery("""
-                            SELECT "LOOKUP_KEYS"::text
-                              FROM "ASSESSMENT_SYNC_OUTBOX"
-                             WHERE "PROJECT_UUID" IN (:parentUuid, :childUuid)
-                             ORDER BY "PROJECT_UUID"
-                            """)
-                    .bind("parentUuid", parent.getUuid())
-                    .bind("childUuid", child.getUuid())
-                    .mapTo(String.class)
-                    .list());
-            assertThat(lookupKeys).hasSize(2);
-            assertThat(String.join("\n", lookupKeys)).contains("acme-app-parent", "1.0.0", "acme-app-child", "2.0.0");
+            assertThat(recordedChanges())
+                    .filteredOn(change -> change.projectUuid().equals(parent.getUuid())
+                            || change.projectUuid().equals(child.getUuid()))
+                    .flatExtracting(AssessmentChange::lookupKeys)
+                    .containsExactlyInAnyOrder(
+                            new AssessmentChange.LookupKey("acme-app-parent", "1.0.0"),
+                            new AssessmentChange.LookupKey("acme-app-child", "2.0.0"));
         } finally {
             MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
         }
@@ -720,25 +712,12 @@ public class ProjectDaoTest extends PersistenceCapableTest {
     }
 
     private static int outboxCount(final UUID projectUuid) {
-        return withJdbiHandle(handle -> handle.createQuery("""
-                        SELECT COUNT(*)::int
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
-                         WHERE "PROJECT_UUID" = :projectUuid
-                        """)
-                .bind("projectUuid", projectUuid)
-                .mapTo(int.class)
-                .one());
+        return recordedChanges(projectUuid).size();
     }
 
     private static List<String> outboxReasons(final UUID projectUuid) {
-        return withJdbiHandle(handle -> handle.createQuery("""
-                        SELECT "REASON"
-                          FROM "ASSESSMENT_SYNC_OUTBOX"
-                         WHERE "PROJECT_UUID" = :projectUuid
-                         ORDER BY "ID"
-                        """)
-                .bind("projectUuid", projectUuid)
-                .mapTo(String.class)
-                .list());
+        return recordedChanges(projectUuid).stream()
+                .map(change -> change.reason().name())
+                .toList();
     }
 }

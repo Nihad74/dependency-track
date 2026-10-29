@@ -436,10 +436,11 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
                                 handle,
                                 persistentProject.getUuid(),
                                 AssessmentChange.Reason.BOM_IMPORT,
-                                nameBefore,
-                                versionBefore,
-                                persistentProject.getName(),
-                                persistentProject.getVersion()));
+                                AssessmentStructureCapture.keys(
+                                        nameBefore,
+                                        versionBefore,
+                                        persistentProject.getName(),
+                                        persistentProject.getVersion())));
 
                 return new ProcessedBom(
                         persistentProject,

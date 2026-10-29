@@ -202,6 +202,7 @@ stateDiagram-v2
     Local --> Neutral: explicit release
     Neutral --> Policy: local policy applies
     Inherited --> Policy: local policy applies
+    Local --> Policy: local policy changes the decision
     Policy --> Neutral: policy resets or unassigns
 ```
 

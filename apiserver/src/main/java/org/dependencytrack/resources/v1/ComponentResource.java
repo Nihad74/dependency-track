@@ -562,75 +562,75 @@ public class ComponentResource extends AbstractApiResource {
                 validator.validateProperty(jsonComponent, "streebog_512"));
         try (QueryManager qm = new QueryManager(getAlpineRequest())) {
             return qm.callInTransaction(() -> {
-                final Component component = qm.getObjectByUuid(Component.class, jsonComponent.getUuid());
-                if (component != null) {
-                    requireAccess(qm, component.getProject());
-                    // Name cannot be empty or null - prevent it
-                    final String name = StringUtils.trimToNull(jsonComponent.getName());
-                    if (name != null) {
-                        component.setName(name);
-                    }
-                    component.setAuthors(jsonComponent.getAuthors());
-                    component.setPublisher(StringUtils.trimToNull(jsonComponent.getPublisher()));
-                    component.setVersion(StringUtils.trimToNull(jsonComponent.getVersion()));
-                    component.setGroup(StringUtils.trimToNull(jsonComponent.getGroup()));
-                    component.setDescription(StringUtils.trimToNull(jsonComponent.getDescription()));
-                    component.setFilename(StringUtils.trimToNull(jsonComponent.getFilename()));
-                    component.setClassifier(jsonComponent.getClassifier());
-                    component.setPurl(jsonComponent.getPurl());
-                    component.setPurlCoordinates(PurlUtil.silentPurlCoordinatesOnly(component.getPurl()));
-                    component.setInternal(new InternalComponentIdentifier().isInternal(component));
-                    component.setCpe(StringUtils.trimToNull(jsonComponent.getCpe()));
-                    component.setSwidTagId(StringUtils.trimToNull(jsonComponent.getSwidTagId()));
-                    component.setCopyright(StringUtils.trimToNull(jsonComponent.getCopyright()));
-                    component.setMd5(StringUtils.trimToNull(jsonComponent.getMd5()));
-                    component.setSha1(StringUtils.trimToNull(jsonComponent.getSha1()));
-                    component.setSha256(StringUtils.trimToNull(jsonComponent.getSha256()));
-                    component.setSha384(StringUtils.trimToNull(jsonComponent.getSha384()));
-                    component.setSha512(StringUtils.trimToNull(jsonComponent.getSha512()));
-                    component.setSha3_256(StringUtils.trimToNull(jsonComponent.getSha3_256()));
-                    component.setSha3_384(StringUtils.trimToNull(jsonComponent.getSha3_384()));
-                    component.setSha3_512(StringUtils.trimToNull(jsonComponent.getSha3_512()));
-                    component.setBlake2b_256(StringUtils.trimToNull(jsonComponent.getBlake2b_256()));
-                    component.setBlake2b_384(StringUtils.trimToNull(jsonComponent.getBlake2b_384()));
-                    component.setBlake2b_512(StringUtils.trimToNull(jsonComponent.getBlake2b_512()));
-                    component.setBlake3(StringUtils.trimToNull(jsonComponent.getBlake3()));
-                    component.setStreebog_256(StringUtils.trimToNull(jsonComponent.getStreebog_256()));
-                    component.setStreebog_512(StringUtils.trimToNull(jsonComponent.getStreebog_512()));
-                    component.setExternalReferences(jsonComponent.getExternalReferences());
+                final Component updated = qm.updateComponent(
+                        jsonComponent.getUuid(),
+                        component -> {
+                            requireAccess(qm, component.getProject());
+                            // Name cannot be empty or null - prevent it
+                            final String name = StringUtils.trimToNull(jsonComponent.getName());
+                            if (name != null) {
+                                component.setName(name);
+                            }
+                            component.setAuthors(jsonComponent.getAuthors());
+                            component.setPublisher(StringUtils.trimToNull(jsonComponent.getPublisher()));
+                            component.setVersion(StringUtils.trimToNull(jsonComponent.getVersion()));
+                            component.setGroup(StringUtils.trimToNull(jsonComponent.getGroup()));
+                            component.setDescription(StringUtils.trimToNull(jsonComponent.getDescription()));
+                            component.setFilename(StringUtils.trimToNull(jsonComponent.getFilename()));
+                            component.setClassifier(jsonComponent.getClassifier());
+                            component.setPurl(jsonComponent.getPurl());
+                            component.setPurlCoordinates(PurlUtil.silentPurlCoordinatesOnly(component.getPurl()));
+                            component.setInternal(new InternalComponentIdentifier().isInternal(component));
+                            component.setCpe(StringUtils.trimToNull(jsonComponent.getCpe()));
+                            component.setSwidTagId(StringUtils.trimToNull(jsonComponent.getSwidTagId()));
+                            component.setCopyright(StringUtils.trimToNull(jsonComponent.getCopyright()));
+                            component.setMd5(StringUtils.trimToNull(jsonComponent.getMd5()));
+                            component.setSha1(StringUtils.trimToNull(jsonComponent.getSha1()));
+                            component.setSha256(StringUtils.trimToNull(jsonComponent.getSha256()));
+                            component.setSha384(StringUtils.trimToNull(jsonComponent.getSha384()));
+                            component.setSha512(StringUtils.trimToNull(jsonComponent.getSha512()));
+                            component.setSha3_256(StringUtils.trimToNull(jsonComponent.getSha3_256()));
+                            component.setSha3_384(StringUtils.trimToNull(jsonComponent.getSha3_384()));
+                            component.setSha3_512(StringUtils.trimToNull(jsonComponent.getSha3_512()));
+                            component.setBlake2b_256(StringUtils.trimToNull(jsonComponent.getBlake2b_256()));
+                            component.setBlake2b_384(StringUtils.trimToNull(jsonComponent.getBlake2b_384()));
+                            component.setBlake2b_512(StringUtils.trimToNull(jsonComponent.getBlake2b_512()));
+                            component.setBlake3(StringUtils.trimToNull(jsonComponent.getBlake3()));
+                            component.setStreebog_256(StringUtils.trimToNull(jsonComponent.getStreebog_256()));
+                            component.setStreebog_512(StringUtils.trimToNull(jsonComponent.getStreebog_512()));
+                            component.setExternalReferences(jsonComponent.getExternalReferences());
 
-                    final License resolvedLicense = qm.getLicense(jsonComponent.getLicense());
-                    if (resolvedLicense != null) {
-                        component.setLicense(null);
-                        component.setLicenseExpression(null);
-                        component.setLicenseUrl(StringUtils.trimToNull(jsonComponent.getLicenseUrl()));
-                        component.setResolvedLicense(resolvedLicense);
-                    } else if (StringUtils.trimToNull(jsonComponent.getLicense()) != null) {
-                        component.setLicense(StringUtils.trim(jsonComponent.getLicense()));
-                        component.setLicenseExpression(null);
-                        component.setLicenseUrl(StringUtils.trimToNull(jsonComponent.getLicenseUrl()));
-                        component.setResolvedLicense(null);
-                    } else if (StringUtils.trimToNull(jsonComponent.getLicenseExpression()) != null) {
-                        component.setLicense(null);
-                        component.setLicenseExpression(StringUtils.trim(jsonComponent.getLicenseExpression()));
-                        component.setLicenseUrl(null);
-                        component.setResolvedLicense(null);
-                    } else {
-                        component.setLicense(null);
-                        component.setLicenseExpression(null);
-                        component.setLicenseUrl(null);
-                        component.setResolvedLicense(null);
-                    }
-                    component.setNotes(StringUtils.trimToNull(jsonComponent.getNotes()));
-
-                    qm.updateComponent(component, true);
-
-                    return Response.ok(component).build();
-                } else {
+                            final License resolvedLicense = qm.getLicense(jsonComponent.getLicense());
+                            if (resolvedLicense != null) {
+                                component.setLicense(null);
+                                component.setLicenseExpression(null);
+                                component.setLicenseUrl(StringUtils.trimToNull(jsonComponent.getLicenseUrl()));
+                                component.setResolvedLicense(resolvedLicense);
+                            } else if (StringUtils.trimToNull(jsonComponent.getLicense()) != null) {
+                                component.setLicense(StringUtils.trim(jsonComponent.getLicense()));
+                                component.setLicenseExpression(null);
+                                component.setLicenseUrl(StringUtils.trimToNull(jsonComponent.getLicenseUrl()));
+                                component.setResolvedLicense(null);
+                            } else if (StringUtils.trimToNull(jsonComponent.getLicenseExpression()) != null) {
+                                component.setLicense(null);
+                                component.setLicenseExpression(StringUtils.trim(jsonComponent.getLicenseExpression()));
+                                component.setLicenseUrl(null);
+                                component.setResolvedLicense(null);
+                            } else {
+                                component.setLicense(null);
+                                component.setLicenseExpression(null);
+                                component.setLicenseUrl(null);
+                                component.setResolvedLicense(null);
+                            }
+                            component.setNotes(StringUtils.trimToNull(jsonComponent.getNotes()));
+                        },
+                        true);
+                if (updated == null) {
                     return Response.status(Response.Status.NOT_FOUND)
                             .entity("The UUID of the component could not be found.")
                             .build();
                 }
+                return Response.ok(updated).build();
             });
         }
     }
