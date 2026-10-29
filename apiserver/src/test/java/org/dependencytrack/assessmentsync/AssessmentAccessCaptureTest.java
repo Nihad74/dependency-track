@@ -19,6 +19,7 @@
 package org.dependencytrack.assessmentsync;
 
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
@@ -109,7 +110,7 @@ class AssessmentAccessCaptureTest extends PersistenceCapableTest {
                           FROM "ASSESSMENT_SYNC_OUTBOX"
                          WHERE "REASON" = :reason
                         """)
-                .bind("reason", AssessmentStructureCapture.ACCESS_CHANGED)
+                .bind("reason", Reason.ACCESS_CHANGED.name())
                 .mapTo(UUID.class)
                 .list());
     }

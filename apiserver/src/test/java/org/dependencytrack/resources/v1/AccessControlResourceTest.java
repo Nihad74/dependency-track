@@ -23,7 +23,7 @@ import alpine.server.filters.ApiFilter;
 import alpine.server.filters.AuthFeature;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
-import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
+import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.Project;
@@ -224,7 +224,7 @@ public class AccessControlResourceTest extends ResourceTest {
                           FROM "ASSESSMENT_SYNC_OUTBOX"
                          WHERE "REASON" = :reason
                         """)
-                .bind("reason", AssessmentStructureCapture.ACCESS_CHANGED)
+                .bind("reason", Reason.ACCESS_CHANGED.name())
                 .mapTo(UUID.class)
                 .list());
     }

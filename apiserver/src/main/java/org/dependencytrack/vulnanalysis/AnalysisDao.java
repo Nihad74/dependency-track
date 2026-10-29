@@ -558,20 +558,20 @@ public final class AnalysisDao {
                 changes.add(policyChange(
                         finding,
                         owner == AssessmentOwnership.POLICY
-                                ? AssessmentChangeRecorder.POLICY
-                                : AssessmentChangeRecorder.POLICY_UNASSIGNED));
+                                ? AssessmentChange.Reason.POLICY
+                                : AssessmentChange.Reason.POLICY_UNASSIGNED));
             }
         }
         for (final PolicyFinding finding : loadEqualValueTakeovers(ownershipOnly)) {
             writeOwner(dao, finding, AssessmentOwnership.POLICY);
-            changes.add(policyChange(finding, AssessmentChangeRecorder.POLICY));
+            changes.add(policyChange(finding, AssessmentChange.Reason.POLICY));
         }
         new AssessmentChangeRecorder(handle).recordAll(changes);
     }
 
     private static void writeOwner(
             final AssessmentProjectionDao dao, final PolicyFinding finding, final AssessmentOwnership owner) {
-        dao.upsertOrigin(finding.analysisId(), owner, null, true);
+        dao.upsertOrigin(finding.analysisId(), owner, true);
     }
 
     private List<PolicyFinding> loadFindingsByAnalysisId(final long[] ids) {
@@ -665,14 +665,14 @@ public final class AnalysisDao {
                 rs.getObject("vulnerability_uuid", UUID.class));
     }
 
-    private static AssessmentChange policyChange(final PolicyFinding finding, final String reason) {
+    private static AssessmentChange policyChange(final PolicyFinding finding, final AssessmentChange.Reason reason) {
         return new AssessmentChange(
                 AssessmentChange.Scope.FINDING,
                 finding.projectUuid(),
                 finding.componentUuid(),
                 finding.vulnerabilityUuid(),
                 reason,
-                AssessmentChangeRecorder.lookupKeys(finding.projectName(), finding.projectVersion()));
+                AssessmentChange.LookupKey.listOf(finding.projectName(), finding.projectVersion()));
     }
 
     private record PolicyFinding(

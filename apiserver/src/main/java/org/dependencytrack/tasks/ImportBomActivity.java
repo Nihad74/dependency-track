@@ -25,6 +25,7 @@ import org.cyclonedx.parsers.BomParserFactory;
 import org.cyclonedx.parsers.Parser;
 import org.dependencytrack.analysis.AnalyzeProjectWorkflow;
 import org.dependencytrack.analysis.ProjectLastAnalysisDao;
+import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
 import org.dependencytrack.common.Mappers;
@@ -403,7 +404,7 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
             AssessmentStructureCapture.rebuildAndRecord(
                     handle,
                     ctx.project.getUuid(),
-                    AssessmentStructureCapture.BOM_IMPORT,
+                    AssessmentChange.Reason.BOM_IMPORT,
                     name,
                     version,
                     name,

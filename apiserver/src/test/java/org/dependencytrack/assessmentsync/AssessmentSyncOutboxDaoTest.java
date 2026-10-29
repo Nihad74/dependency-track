@@ -20,6 +20,7 @@ package org.dependencytrack.assessmentsync;
 
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentChange.LookupKey;
+import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.dependencytrack.assessmentsync.AssessmentSyncOutboxDao.OutboxEntry;
 import org.dependencytrack.model.Project;
@@ -46,27 +47,50 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
 
         final long mergedId = inJdbiTransaction(handle -> {
             final var dao = new AssessmentSyncOutboxDao(handle);
-            final long first = dao.record(
-                    finding(projectUuid, componentUuid, vulnerabilityUuid, "import", new LookupKey("before", "1")));
-            final long second = dao.record(
-                    finding(projectUuid, componentUuid, vulnerabilityUuid, "rename", new LookupKey("after", "2")));
+            final long first = record(
+                    dao,
+                    finding(
+                            projectUuid,
+                            componentUuid,
+                            vulnerabilityUuid,
+                            Reason.BOM_IMPORT,
+                            new LookupKey("before", "1")));
+            final long second = record(
+                    dao,
+                    finding(
+                            projectUuid,
+                            componentUuid,
+                            vulnerabilityUuid,
+                            Reason.PROJECT_UPDATED,
+                            new LookupKey("after", "2")));
             assertThat(second).isEqualTo(first);
             final List<Long> batched = dao.recordAll(List.of(
-                    finding(projectUuid, componentUuid, vulnerabilityUuid, "extra", new LookupKey("extra", "4")),
-                    finding(projectUuid, componentUuid, vulnerabilityUuid, "repeat", new LookupKey("before", "1"))));
+                    finding(
+                            projectUuid,
+                            componentUuid,
+                            vulnerabilityUuid,
+                            Reason.COMPONENT_CHANGED,
+                            new LookupKey("extra", "4")),
+                    finding(
+                            projectUuid,
+                            componentUuid,
+                            vulnerabilityUuid,
+                            Reason.ATTRIBUTION,
+                            new LookupKey("before", "1"))));
             assertThat(batched).containsExactly(first);
             return first;
         });
 
-        useJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle)
-                .record(finding(projectUuid, componentUuid, vulnerabilityUuid, "later", new LookupKey("later", "3"))));
+        useJdbiTransaction(handle -> record(
+                new AssessmentSyncOutboxDao(handle),
+                finding(projectUuid, componentUuid, vulnerabilityUuid, Reason.POLICY, new LookupKey("later", "3"))));
 
         final List<OutboxEntry> rows = inJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle).pollDue(10));
         assertThat(rows).hasSize(2);
         final OutboxEntry merged =
                 rows.stream().filter(row -> row.id() == mergedId).findFirst().orElseThrow();
         assertThat(merged.schemaVersion()).isEqualTo(1);
-        assertThat(merged.change().reason()).isEqualTo("import");
+        assertThat(merged.change().reason()).isEqualTo(Reason.BOM_IMPORT);
         assertThat(merged.change().scope()).isEqualTo(Scope.FINDING);
         assertThat(merged.change().lookupKeys())
                 .containsExactlyInAnyOrder(
@@ -76,7 +100,7 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
 
         final OutboxEntry separate =
                 rows.stream().filter(row -> row.id() != mergedId).findFirst().orElseThrow();
-        assertThat(separate.change().reason()).isEqualTo("later");
+        assertThat(separate.change().reason()).isEqualTo(Reason.POLICY);
         assertThat(separate.change().lookupKeys()).containsExactly(new LookupKey("later", "3"));
     }
 
@@ -85,12 +109,13 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
         final Handle handle = openJdbiHandle();
         try {
             handle.begin();
-            new AssessmentSyncOutboxDao(handle)
-                    .record(finding(
+            record(
+                    new AssessmentSyncOutboxDao(handle),
+                    finding(
                             UUID.fromString("10000000-0000-4000-8000-000000000011"),
                             UUID.fromString("20000000-0000-4000-8000-000000000012"),
                             UUID.fromString("30000000-0000-4000-8000-000000000013"),
-                            "import",
+                            Reason.BOM_IMPORT,
                             new LookupKey("cmx500", "1.0.0")));
             handle.rollback();
         } finally {
@@ -109,20 +134,22 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
         final Handle fast = openJdbiHandle();
         try {
             slow.begin();
-            final long lowerId = new AssessmentSyncOutboxDao(slow)
-                    .record(finding(
+            final long lowerId = record(
+                    new AssessmentSyncOutboxDao(slow),
+                    finding(
                             UUID.fromString("10000000-0000-4000-8000-000000000021"),
                             UUID.fromString("20000000-0000-4000-8000-000000000022"),
                             UUID.fromString("30000000-0000-4000-8000-000000000023"),
-                            "slow",
+                            Reason.AUTHORED,
                             new LookupKey("slow", "1")));
             fast.begin();
-            final long higherId = new AssessmentSyncOutboxDao(fast)
-                    .record(finding(
+            final long higherId = record(
+                    new AssessmentSyncOutboxDao(fast),
+                    finding(
                             UUID.fromString("10000000-0000-4000-8000-000000000031"),
                             UUID.fromString("20000000-0000-4000-8000-000000000032"),
                             UUID.fromString("30000000-0000-4000-8000-000000000033"),
-                            "fast",
+                            Reason.AUTHORED,
                             new LookupKey("fast", "1")));
             fast.commit();
 
@@ -155,13 +182,14 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
         project.setVersion("1.0.0");
         final Project persisted = qm.persist(project);
 
-        final long id = inJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle)
-                .record(new AssessmentChange(
+        final long id = inJdbiTransaction(handle -> record(
+                new AssessmentSyncOutboxDao(handle),
+                new AssessmentChange(
                         Scope.PROJECT,
                         persisted.getUuid(),
                         null,
                         null,
-                        "project-deleted",
+                        Reason.PROJECT_DELETED,
                         List.of(new LookupKey("cmx500", "1.0.0")))));
         useJdbiTransaction(handle -> handle.attach(ProjectDao.class).deleteProject(persisted.getUuid()));
 
@@ -177,12 +205,13 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
     void shouldUpdateDispatchLockCursorAndDeleteOnlyAfterExpansionFinishes() {
         final UUID cursor = UUID.fromString("00000000-0000-4000-8000-00000000007b");
         final Instant nextDispatchAt = Instant.parse("2030-01-01T00:00:00Z");
-        final long id = inJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle)
-                .record(finding(
+        final long id = inJdbiTransaction(handle -> record(
+                new AssessmentSyncOutboxDao(handle),
+                finding(
                         UUID.fromString("10000000-0000-4000-8000-000000000041"),
                         UUID.fromString("20000000-0000-4000-8000-000000000042"),
                         UUID.fromString("30000000-0000-4000-8000-000000000043"),
-                        "import",
+                        Reason.BOM_IMPORT,
                         new LookupKey("cmx500", "1.0.0"))));
 
         useJdbiTransaction(handle -> {
@@ -220,10 +249,14 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
             final UUID projectUuid,
             final UUID componentUuid,
             final UUID vulnerabilityUuid,
-            final String reason,
+            final Reason reason,
             final LookupKey lookupKey) {
         return new AssessmentChange(
                 Scope.FINDING, projectUuid, componentUuid, vulnerabilityUuid, reason, List.of(lookupKey));
+    }
+
+    private static long record(final AssessmentSyncOutboxDao dao, final AssessmentChange change) {
+        return dao.recordAll(List.of(change)).getFirst();
     }
 
     private static int outboxCount() {

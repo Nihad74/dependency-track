@@ -607,7 +607,7 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
         final Map<Long, UUID> componentUuidById = loadUuids(handle, "COMPONENT", componentIds);
         final Map<Long, UUID> vulnerabilityUuidById = loadUuids(handle, "VULNERABILITY", vulnerabilityIds);
         final List<AssessmentChange.LookupKey> lookupKeys =
-                AssessmentStructureCapture.keys(project.name(), project.version());
+                AssessmentChange.LookupKey.listOf(project.name(), project.version());
         final var changes = new ArrayList<AssessmentChange>();
         for (final FindingDao.CreateAttributionCommand command : createAttributionCommands) {
             addFindingChange(
@@ -664,7 +664,7 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
                 projectUuid,
                 componentUuid,
                 vulnerabilityUuid,
-                AssessmentStructureCapture.ATTRIBUTION,
+                AssessmentChange.Reason.ATTRIBUTION,
                 lookupKeys));
     }
 

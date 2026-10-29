@@ -19,6 +19,7 @@
 package org.dependencytrack.assessmentsync;
 
 import org.dependencytrack.assessmentsync.AssessmentChange.LookupKey;
+import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.junit.jupiter.api.Test;
 
@@ -41,7 +42,7 @@ class AssessmentChangeTest {
                 PROJECT,
                 COMPONENT,
                 VULNERABILITY,
-                "component-added",
+                Reason.COMPONENT_CHANGED,
                 List.of(
                         new LookupKey("mrt.base.linux", "5.14.121"),
                         new LookupKey("mrt.base.linux", "5.14.121"),
@@ -54,7 +55,7 @@ class AssessmentChangeTest {
                 .containsExactly(new LookupKey("mrt.base.linux", "5.14.121"), new LookupKey("cmx500", "1.0.0"));
 
         final AssessmentChange project =
-                new AssessmentChange(Scope.PROJECT, PROJECT, null, null, "graph-changed", List.of());
+                new AssessmentChange(Scope.PROJECT, PROJECT, null, null, Reason.BOM_IMPORT, List.of());
 
         assertThat(project.scopeKey()).isEqualTo("project:11111111-1111-1111-1111-111111111111");
         assertThat(project.componentUuid()).isNull();
@@ -63,12 +64,11 @@ class AssessmentChangeTest {
 
     @Test
     void shouldRejectInvalidEnvelopes() {
-        assertThatThrownBy(
-                        () -> new AssessmentChange(Scope.PROJECT, PROJECT, COMPONENT, null, "graph-changed", List.of()))
+        assertThatThrownBy(() ->
+                        new AssessmentChange(Scope.PROJECT, PROJECT, COMPONENT, null, Reason.BOM_IMPORT, List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AssessmentChange(Scope.FINDING, PROJECT, null, null, "component-added", List.of()))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AssessmentChange(Scope.FINDING, PROJECT, COMPONENT, VULNERABILITY, " ", List.of()))
+        assertThatThrownBy(() ->
+                        new AssessmentChange(Scope.FINDING, PROJECT, null, null, Reason.COMPONENT_CHANGED, List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }
