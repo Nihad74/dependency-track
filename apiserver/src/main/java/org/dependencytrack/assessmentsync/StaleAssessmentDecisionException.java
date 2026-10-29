@@ -20,8 +20,7 @@ package org.dependencytrack.assessmentsync;
 
 /// The caller supplied a decision version that does not match the stored origin.
 ///
-/// A missing origin row does not count as version 0. Sending a version for a
-/// protected row without origin metadata is stale.
+/// A missing origin row, or a missing analysis, is version 0, as the analysis trail reports.
 public final class StaleAssessmentDecisionException extends RuntimeException {
 
     public StaleAssessmentDecisionException() {
