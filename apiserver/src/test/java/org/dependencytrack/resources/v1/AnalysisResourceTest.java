@@ -1480,8 +1480,109 @@ class AnalysisResourceTest extends ResourceTest {
     }
 
     @Test
-    void expectedVersionWithoutOriginReturnsConflict() {
+    void expectedVersionZeroWithoutOriginIsAccepted() {
         initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = findingWithoutOrigin();
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "EXPLOITABLE",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 0
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            final JsonObject body = parseJsonObject(response);
+            assertThat(body.getString("analysisState")).isEqualTo("EXPLOITABLE");
+            assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
+            assertThat(outboxCount()).isEqualTo(1);
+        });
+    }
+
+    @Test
+    void expectedNonZeroVersionWithoutOriginReturnsConflict() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = findingWithoutOrigin();
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "EXPLOITABLE",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 1
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_CONFLICT);
+            assertThat(outboxCount()).isZero();
+            assertThat(analysisState(fixture.analysisId())).isEqualTo("NOT_AFFECTED");
+        });
+    }
+
+    @Test
+    void releaseOfPolicyRowWithoutOriginIsRejected() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = findingOwnedBy("LOCAL");
+        useJdbiHandle(handle -> {
+            final long policyId = handle.createQuery("""
+                            INSERT INTO "VULNERABILITY_POLICY" ("NAME", "ANALYSIS", "CONDITION")
+                            VALUES ('kernel-policy', '{}'::jsonb, 'true')
+                            RETURNING "ID"
+                            """).mapTo(long.class).one();
+            handle.createUpdate("""
+                            UPDATE "ANALYSIS"
+                               SET "VULNERABILITY_POLICY_ID" = :policyId
+                             WHERE "ID" = :analysisId
+                            """)
+                    .bind("policyId", policyId)
+                    .bind("analysisId", fixture.analysisId())
+                    .execute();
+            handle.createUpdate("""
+                            DELETE FROM "ASSESSMENT_ORIGIN"
+                             WHERE "ANALYSIS_ID" = :analysisId
+                            """).bind("analysisId", fixture.analysisId()).execute();
+        });
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "decisionAction": "RELEASE_LOCAL"
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_CONFLICT);
+            assertThat(isSuppressed(fixture.analysisId())).isTrue();
+            assertThat(outboxCount()).isZero();
+        });
+    }
+
+    @Test
+    void legacyCommentWithBlankDetailsOnInheritedRowKeepsInheritance() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = inheritedFinding();
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "comment": "agree with the source",
+                      "analysisState": "NOT_AFFECTED",
+                      "analysisJustification": "CODE_NOT_REACHABLE",
+                      "analysisDetails": " "
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            final JsonObject body = parseJsonObject(response);
+            assertThat(body.getString("decisionOrigin")).isEqualTo("INHERITED");
+            assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(4);
+            assertThat(contributionCount(fixture.analysisId())).isEqualTo(1);
+        });
+    }
+
+    /// An analysis written before assessment synchronization, so it has no origin row.
+    private FindingFixture findingWithoutOrigin() {
         final Project project = qm.createProject("Acme Example", null, "1.0", null, null, null, null, false);
         var component = new Component();
         component.setProject(project);
@@ -1498,22 +1599,18 @@ class AnalysisResourceTest extends ResourceTest {
         analysis.setVulnerability(vulnerability);
         analysis.setAnalysisState(AnalysisState.NOT_AFFECTED);
         qm.persist(analysis);
-        final var fixture = new FindingFixture(project, component, vulnerability, analysis.getId());
-        withCapture(() -> {
-            final Response response = putAnalysis(fixture, """
-                    {
-                      "component": "%s",
-                      "vulnerability": "%s",
-                      "analysisState": "EXPLOITABLE",
-                      "decisionAction": "TAKE_LOCAL",
-                      "expectedDecisionVersion": 0
-                    }
-                    """);
-            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_CONFLICT);
-            assertThat(outboxCount()).isZero();
-            qm.getPersistenceManager().refresh(analysis);
-            assertThat(analysis.getAnalysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
-        });
+        return new FindingFixture(project, component, vulnerability, analysis.getId());
+    }
+
+    private static String analysisState(final long analysisId) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT "STATE"
+                          FROM "ANALYSIS"
+                         WHERE "ID" = :analysisId
+                        """)
+                .bind("analysisId", analysisId)
+                .mapTo(String.class)
+                .one());
     }
 
     private FindingFixture inheritedFinding() {

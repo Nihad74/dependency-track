@@ -21,6 +21,7 @@ package org.dependencytrack.persistence;
 import alpine.model.auth.ApiKeyPrincipal;
 import alpine.model.auth.UserPrincipal;
 import alpine.resources.AlpineRequest;
+import org.apache.commons.lang3.StringUtils;
 import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChangeRecorder;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
@@ -50,6 +51,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
+import static java.util.Objects.requireNonNullElse;
 import static org.dependencytrack.assessmentsync.AssessmentChange.Scope.FINDING;
 import static org.dependencytrack.assessmentsync.AssessmentChangeRecorder.AUTHORED;
 import static org.dependencytrack.notification.api.NotificationFactory.createVulnerabilityAnalysisDecisionChangeNotification;
@@ -110,15 +112,17 @@ public class AnalysisQueryManager extends QueryManager {
             Analysis analysis = getAnalysis(command.component(), command.vulnerability());
             final AssessmentProjectionDao.Origin originBefore =
                     analysis == null ? null : currentOrigin(analysis.getId());
+            final long decisionVersionBefore = originBefore == null ? 0 : originBefore.decisionVersion();
             if (command.expectedDecisionVersion() != null
-                    && (originBefore == null || originBefore.decisionVersion() != command.expectedDecisionVersion())) {
+                    && decisionVersionBefore != command.expectedDecisionVersion()) {
                 throw new StaleAssessmentDecisionException();
             }
-            if (command.decisionAction() == DecisionAction.RELEASE_LOCAL
-                    && (analysis == null
-                            || (originBefore != null && originBefore.owner() != AssessmentOwnership.LOCAL))) {
+            if (command.decisionAction() == DecisionAction.RELEASE_LOCAL && !isReleasable(analysis, originBefore)) {
                 throw new AssessmentNotReleasableException();
             }
+            final boolean inheritedBefore =
+                    originBefore != null && originBefore.owner() == AssessmentOwnership.INHERITED;
+            final MakeAnalysisCommand effective = applyV1Defaults(command, inheritedBefore);
 
             final boolean created = analysis == null;
             if (created) {
@@ -133,59 +137,38 @@ public class AnalysisQueryManager extends QueryManager {
             }
 
             final var auditTrailComments = new ArrayList<String>();
-            final DecisionAction action = command.decisionAction();
+            final DecisionAction action = effective.decisionAction();
             final FieldUpdate update =
                     switch (action) {
                         case COMMENT_ONLY -> {
-                            if (command.comment() == null || command.comment().isBlank()) {
+                            if (effective.comment() == null
+                                    || effective.comment().isBlank()) {
                                 throw new IllegalArgumentException("COMMENT_ONLY requires a comment");
                             }
-                            yield FieldUpdate.none();
+                            yield FieldUpdate.NONE;
                         }
                         case RELEASE_LOCAL -> releaseLocal(analysis, auditTrailComments);
-                        case AUTO, TAKE_LOCAL, VEX -> applySuppliedFields(command, analysis, auditTrailComments);
+                        case AUTO, TAKE_LOCAL -> applySuppliedFields(effective, analysis, auditTrailComments);
                     };
 
-            final List<String> comments = !command.options().contains(MakeAnalysisCommand.Option.OMIT_AUDIT_TRAIL)
+            final List<String> comments = !effective.options().contains(MakeAnalysisCommand.Option.OMIT_AUDIT_TRAIL)
                     ? auditTrailComments
                     : new ArrayList<>();
-            if (command.comment() != null) {
-                comments.add(command.comment());
+            final boolean commentAdded = effective.comment() != null;
+            if (commentAdded) {
+                comments.add(effective.comment());
             }
-            final boolean commentAdded = command.comment() != null;
-            createAnalysisComments(analysis, command.commenter(), comments);
+            createAnalysisComments(analysis, effective.commenter(), comments);
 
-            final boolean machineChanged = update.decisionChanged() || update.detailsChanged();
-            final OriginWrite originWrite =
-                    switch (action) {
-                        case RELEASE_LOCAL -> new OriginWrite(AssessmentOwnership.NEUTRAL, true, true);
-                        case TAKE_LOCAL -> new OriginWrite(AssessmentOwnership.LOCAL, true, true);
-                        case VEX -> new OriginWrite(AssessmentOwnership.LOCAL, true, true);
-                        case COMMENT_ONLY ->
-                            created
-                                    ? new OriginWrite(AssessmentOwnership.NEUTRAL, false, true)
-                                    : OriginWrite.commentOnly();
-                        case AUTO -> {
-                            if (machineChanged) {
-                                final boolean clearCopied =
-                                        originBefore != null && originBefore.owner() == AssessmentOwnership.INHERITED;
-                                yield new OriginWrite(AssessmentOwnership.LOCAL, clearCopied, true);
-                            }
-                            if (created) {
-                                yield new OriginWrite(AssessmentOwnership.NEUTRAL, false, commentAdded);
-                            }
-                            yield commentAdded ? OriginWrite.commentOnly() : OriginWrite.none();
-                        }
-                    };
-
-            if (originWrite.writeOrigin() || originWrite.clearContributions() || originWrite.record()) {
+            final OriginWrite originWrite = originWrite(action, update, created, commentAdded, inheritedBefore);
+            if (originWrite.writesAnything()) {
                 pm.flush();
                 final long analysisId = analysis.getId();
                 final AssessmentChange change = new AssessmentChange(
                         FINDING,
                         project.getUuid(),
-                        command.component().getUuid(),
-                        command.vulnerability().getUuid(),
+                        effective.component().getUuid(),
+                        effective.vulnerability().getUuid(),
                         AUTHORED,
                         AssessmentChangeRecorder.lookupKeys(project.getName(), project.getVersion()));
                 JdbiFactory.useJdbiHandle(this, handle -> {
@@ -193,21 +176,16 @@ public class AnalysisQueryManager extends QueryManager {
                     if (originWrite.clearContributions()) {
                         dao.deleteCopiedContributions(analysisId);
                     }
-                    if (originWrite.writeOrigin()) {
-                        final boolean ownerChanged =
-                                originBefore == null || originBefore.owner() != originWrite.owner();
-                        dao.upsertOrigin(analysisId, originWrite.owner(), null);
-                        if (machineChanged && !ownerChanged) {
-                            dao.bumpDecisionVersion(analysisId);
-                        }
+                    if (originWrite.owner() != null) {
+                        dao.upsertOrigin(analysisId, originWrite.owner(), null, update.machineChanged());
                     }
-                    if (originWrite.record()) {
+                    if (originWrite.recordChange()) {
                         new AssessmentChangeRecorder(handle).record(change);
                     }
                 });
             }
 
-            if (!command.options().contains(MakeAnalysisCommand.Option.OMIT_NOTIFICATION)
+            if (!effective.options().contains(MakeAnalysisCommand.Option.OMIT_NOTIFICATION)
                     && (update.stateChanged() || update.suppressionChanged())) {
                 // NB: KEV is a transient field and must be computed ad-hoc.
                 final boolean isKev = !super.getKev(List.of(VulnerabilityKey.of(analysis.getVulnerability())))
@@ -226,6 +204,57 @@ public class AnalysisQueryManager extends QueryManager {
 
             return analysis.getId();
         });
+    }
+
+    /// A row without an origin is local, unless a vulnerability policy wrote it.
+    private static boolean isReleasable(final Analysis analysis, final AssessmentProjectionDao.Origin origin) {
+        if (analysis == null) {
+            return false;
+        }
+        if (origin == null) {
+            return analysis.getVulnerabilityPolicyId() == null;
+        }
+        return origin.owner() == AssessmentOwnership.LOCAL;
+    }
+
+    /// REST API v1 resets an omitted state, justification, or response to {@code NOT_SET}.
+    /// On an inherited analysis, omitted fields keep the inherited value instead (ADR 044).
+    private static MakeAnalysisCommand applyV1Defaults(
+            final MakeAnalysisCommand command, final boolean inheritedBefore) {
+        if (!command.options().contains(MakeAnalysisCommand.Option.V1_RESET_OMITTED_DECISION) || inheritedBefore) {
+            return command;
+        }
+        return command.withState(requireNonNullElse(command.state(), AnalysisState.NOT_SET))
+                .withJustification(requireNonNullElse(command.justification(), AnalysisJustification.NOT_SET))
+                .withResponse(requireNonNullElse(command.response(), AnalysisResponse.NOT_SET));
+    }
+
+    private static OriginWrite originWrite(
+            final DecisionAction action,
+            final FieldUpdate update,
+            final boolean created,
+            final boolean commentAdded,
+            final boolean inheritedBefore) {
+        return switch (action) {
+            case RELEASE_LOCAL -> OriginWrite.owner(AssessmentOwnership.NEUTRAL, true, true);
+            case TAKE_LOCAL -> OriginWrite.owner(AssessmentOwnership.LOCAL, true, true);
+            case COMMENT_ONLY ->
+                created ? OriginWrite.owner(AssessmentOwnership.NEUTRAL, false, true) : OriginWrite.COMMENT_ONLY;
+            case AUTO -> {
+                if (update.machineChanged()) {
+                    yield OriginWrite.owner(AssessmentOwnership.LOCAL, inheritedBefore, true);
+                }
+                if (created) {
+                    yield OriginWrite.owner(AssessmentOwnership.NEUTRAL, false, commentAdded);
+                }
+                yield commentAdded ? OriginWrite.COMMENT_ONLY : OriginWrite.NONE;
+            }
+        };
+    }
+
+    /// Blank and null details are the same explanation. Clients send either for an empty field.
+    private static boolean sameDetails(final String left, final String right) {
+        return StringUtils.isBlank(left) ? StringUtils.isBlank(right) : left.equals(right);
     }
 
     private AssessmentProjectionDao.Origin currentOrigin(final long analysisId) {
@@ -257,7 +286,7 @@ public class AnalysisQueryManager extends QueryManager {
             analysis.setAnalysisResponse(command.response());
             decisionChanged = true;
         }
-        if (command.details() != null && !command.details().equals(analysis.getAnalysisDetails())) {
+        if (command.details() != null && !sameDetails(command.details(), analysis.getAnalysisDetails())) {
             auditTrailComments.add("Details: %s".formatted(command.details()));
             analysis.setAnalysisDetails(command.details());
             detailsChanged = true;
@@ -289,7 +318,6 @@ public class AnalysisQueryManager extends QueryManager {
         boolean stateChanged = false;
         boolean suppressionChanged = false;
         boolean decisionChanged = false;
-        boolean detailsChanged = false;
 
         if (analysis.getAnalysisState() != AnalysisState.NOT_SET) {
             auditTrailComments.add("Analysis: %s → %s".formatted(analysis.getAnalysisState(), AnalysisState.NOT_SET));
@@ -309,62 +337,62 @@ public class AnalysisQueryManager extends QueryManager {
             analysis.setAnalysisResponse(AnalysisResponse.NOT_SET);
             decisionChanged = true;
         }
-        if (analysis.getAnalysisDetails() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.DETAILS, analysis.getAnalysisDetails(), null));
-            analysis.setAnalysisDetails(null);
-            detailsChanged = true;
-        }
+        final boolean detailsChanged = clearField(
+                auditTrailComments,
+                AnalysisCommentField.DETAILS,
+                analysis.getAnalysisDetails(),
+                () -> analysis.setAnalysisDetails(null));
         if (analysis.isSuppressed()) {
             auditTrailComments.add("Unsuppressed");
             analysis.setSuppressed(false);
             suppressionChanged = true;
             decisionChanged = true;
         }
-        if (analysis.getSeverity() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.SEVERITY, analysis.getSeverity(), null));
-            analysis.setSeverity(null);
-            decisionChanged = true;
-        }
-        if (analysis.getCvssV2Vector() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.CVSSV2_VECTOR, analysis.getCvssV2Vector(), null));
-            analysis.setCvssV2Vector(null);
-            decisionChanged = true;
-        }
-        if (analysis.getCvssV2Score() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.CVSSV2_SCORE, analysis.getCvssV2Score(), null));
-            analysis.setCvssV2Score(null);
-            decisionChanged = true;
-        }
-        if (analysis.getCvssV3Vector() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.CVSSV3_VECTOR, analysis.getCvssV3Vector(), null));
-            analysis.setCvssV3Vector(null);
-            decisionChanged = true;
-        }
-        if (analysis.getCvssV3Score() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.CVSSV3_SCORE, analysis.getCvssV3Score(), null));
-            analysis.setCvssV3Score(null);
-            decisionChanged = true;
-        }
-        if (analysis.getCvssV4Vector() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.CVSSV4_VECTOR, analysis.getCvssV4Vector(), null));
-            analysis.setCvssV4Vector(null);
-            decisionChanged = true;
-        }
-        if (analysis.getCvssV4Score() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.CVSSV4_SCORE, analysis.getCvssV4Score(), null));
-            analysis.setCvssV4Score(null);
-            decisionChanged = true;
-        }
-        if (analysis.getOwaspVector() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.OWASP_VECTOR, analysis.getOwaspVector(), null));
-            analysis.setOwaspVector(null);
-            decisionChanged = true;
-        }
-        if (analysis.getOwaspScore() != null) {
-            auditTrailComments.add(formatComment(AnalysisCommentField.OWASP_SCORE, analysis.getOwaspScore(), null));
-            analysis.setOwaspScore(null);
-            decisionChanged = true;
-        }
+        decisionChanged |= clearField(
+                auditTrailComments,
+                AnalysisCommentField.SEVERITY,
+                analysis.getSeverity(),
+                () -> analysis.setSeverity(null));
+        decisionChanged |= clearField(
+                auditTrailComments,
+                AnalysisCommentField.CVSSV2_VECTOR,
+                analysis.getCvssV2Vector(),
+                () -> analysis.setCvssV2Vector(null));
+        decisionChanged |= clearField(
+                auditTrailComments,
+                AnalysisCommentField.CVSSV2_SCORE,
+                analysis.getCvssV2Score(),
+                () -> analysis.setCvssV2Score(null));
+        decisionChanged |= clearField(
+                auditTrailComments,
+                AnalysisCommentField.CVSSV3_VECTOR,
+                analysis.getCvssV3Vector(),
+                () -> analysis.setCvssV3Vector(null));
+        decisionChanged |= clearField(
+                auditTrailComments,
+                AnalysisCommentField.CVSSV3_SCORE,
+                analysis.getCvssV3Score(),
+                () -> analysis.setCvssV3Score(null));
+        decisionChanged |= clearField(
+                auditTrailComments,
+                AnalysisCommentField.CVSSV4_VECTOR,
+                analysis.getCvssV4Vector(),
+                () -> analysis.setCvssV4Vector(null));
+        decisionChanged |= clearField(
+                auditTrailComments,
+                AnalysisCommentField.CVSSV4_SCORE,
+                analysis.getCvssV4Score(),
+                () -> analysis.setCvssV4Score(null));
+        decisionChanged |= clearField(
+                auditTrailComments,
+                AnalysisCommentField.OWASP_VECTOR,
+                analysis.getOwaspVector(),
+                () -> analysis.setOwaspVector(null));
+        decisionChanged |= clearField(
+                auditTrailComments,
+                AnalysisCommentField.OWASP_SCORE,
+                analysis.getOwaspScore(),
+                () -> analysis.setOwaspScore(null));
         if (analysis.getVulnerabilityPolicyId() != null) {
             analysis.setVulnerabilityPolicyId(null);
             decisionChanged = true;
@@ -372,27 +400,42 @@ public class AnalysisQueryManager extends QueryManager {
         return new FieldUpdate(stateChanged, suppressionChanged, decisionChanged, detailsChanged);
     }
 
+    private static boolean clearField(
+            final List<String> auditTrailComments,
+            final AnalysisCommentField field,
+            final Object currentValue,
+            final Runnable clear) {
+        if (currentValue == null) {
+            return false;
+        }
+        auditTrailComments.add(formatComment(field, currentValue, null));
+        clear.run();
+        return true;
+    }
+
     private record FieldUpdate(
             boolean stateChanged, boolean suppressionChanged, boolean decisionChanged, boolean detailsChanged) {
 
-        private static FieldUpdate none() {
-            return new FieldUpdate(false, false, false, false);
+        private static final FieldUpdate NONE = new FieldUpdate(false, false, false, false);
+
+        private boolean machineChanged() {
+            return decisionChanged || detailsChanged;
         }
     }
 
-    private record OriginWrite(
-            AssessmentOwnership owner, boolean clearContributions, boolean writeOrigin, boolean record) {
+    /// {@code owner} is null when ownership stays as it is.
+    private record OriginWrite(AssessmentOwnership owner, boolean clearContributions, boolean recordChange) {
 
-        private OriginWrite(final AssessmentOwnership owner, final boolean clearContributions, final boolean record) {
-            this(owner, clearContributions, true, record);
+        private static final OriginWrite COMMENT_ONLY = new OriginWrite(null, false, true);
+        private static final OriginWrite NONE = new OriginWrite(null, false, false);
+
+        private static OriginWrite owner(
+                final AssessmentOwnership owner, final boolean clearContributions, final boolean recordChange) {
+            return new OriginWrite(owner, clearContributions, recordChange);
         }
 
-        private static OriginWrite commentOnly() {
-            return new OriginWrite(null, false, false, true);
-        }
-
-        private static OriginWrite none() {
-            return new OriginWrite(null, false, false, false);
+        private boolean writesAnything() {
+            return owner != null || clearContributions || recordChange;
         }
     }
 

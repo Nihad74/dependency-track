@@ -571,11 +571,7 @@ public final class AnalysisDao {
 
     private static void writeOwner(
             final AssessmentProjectionDao dao, final PolicyFinding finding, final AssessmentOwnership owner) {
-        final boolean ownerChanged = finding.owner() == null || finding.owner() != owner;
-        dao.upsertOrigin(finding.analysisId(), owner, null);
-        if (!ownerChanged) {
-            dao.bumpDecisionVersion(finding.analysisId());
-        }
+        dao.upsertOrigin(finding.analysisId(), owner, null, true);
     }
 
     private List<PolicyFinding> loadFindingsByAnalysisId(final long[] ids) {
@@ -588,7 +584,6 @@ public final class AnalysisDao {
                              , p."VERSION" AS project_version
                              , c."UUID" AS component_uuid
                              , v."UUID" AS vulnerability_uuid
-                             , o."OWNER" AS owner
                           FROM "ANALYSIS" AS a
                          INNER JOIN "PROJECT" AS p
                             ON p."ID" = a."PROJECT_ID"
@@ -596,8 +591,6 @@ public final class AnalysisDao {
                             ON c."ID" = a."COMPONENT_ID"
                          INNER JOIN "VULNERABILITY" AS v
                             ON v."ID" = a."VULNERABILITY_ID"
-                          LEFT JOIN "ASSESSMENT_ORIGIN" AS o
-                            ON o."ANALYSIS_ID" = a."ID"
                          WHERE a."ID" = ANY(:ids)
                         """)
                 .bind("ids", ids)
@@ -633,7 +626,6 @@ public final class AnalysisDao {
                              , p."VERSION" AS project_version
                              , c."UUID" AS component_uuid
                              , v."UUID" AS vulnerability_uuid
-                             , o."OWNER" AS owner
                           FROM UNNEST(:projectIds, :componentIds, :vulnerabilityIds, :policyNames)
                             AS t(project_id, component_id, vulnerability_id, policy_name)
                          INNER JOIN "ANALYSIS" AS a
@@ -662,7 +654,6 @@ public final class AnalysisDao {
     }
 
     private PolicyFinding mapPolicyFinding(final ResultSet rs, final StatementContext ctx) throws SQLException {
-        final String owner = rs.getString("owner");
         return new PolicyFinding(
                 rs.getLong("analysis_id"),
                 rs.getLong("component_id"),
@@ -671,8 +662,7 @@ public final class AnalysisDao {
                 rs.getString("project_name"),
                 rs.getString("project_version"),
                 rs.getObject("component_uuid", UUID.class),
-                rs.getObject("vulnerability_uuid", UUID.class),
-                owner == null ? null : AssessmentOwnership.valueOf(owner));
+                rs.getObject("vulnerability_uuid", UUID.class));
     }
 
     private static AssessmentChange policyChange(final PolicyFinding finding, final String reason) {
@@ -693,8 +683,7 @@ public final class AnalysisDao {
             @Nullable String projectName,
             @Nullable String projectVersion,
             UUID componentUuid,
-            UUID vulnerabilityUuid,
-            @Nullable AssessmentOwnership owner) {}
+            UUID vulnerabilityUuid) {}
 
     public record CreateCommentCommand(long analysisId, String commenter, String comment) {}
 

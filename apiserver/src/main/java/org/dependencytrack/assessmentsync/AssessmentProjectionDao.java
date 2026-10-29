@@ -51,6 +51,16 @@ public final class AssessmentProjectionDao {
     /// Inserts origin or updates it. The version moves only when ownership changes.
     public long upsertOrigin(
             final long analysisId, final AssessmentOwnership owner, final @Nullable String lastReason) {
+        return upsertOrigin(analysisId, owner, lastReason, false);
+    }
+
+    /// Inserts origin or updates it. An existing version moves by one when ownership or the decision changes.
+    /// A new origin row starts at version 0.
+    public long upsertOrigin(
+            final long analysisId,
+            final AssessmentOwnership owner,
+            final @Nullable String lastReason,
+            final boolean decisionChanged) {
         requireAnalysisId(analysisId);
         requireNonNull(owner, "owner must not be null");
         requireTransaction();
@@ -61,7 +71,8 @@ public final class AssessmentProjectionDao {
                         SET "OWNER" = EXCLUDED."OWNER"
                           , "LAST_REASON" = EXCLUDED."LAST_REASON"
                           , "DECISION_VERSION" = "ASSESSMENT_ORIGIN"."DECISION_VERSION" + CASE
-                              WHEN "ASSESSMENT_ORIGIN"."OWNER" IS DISTINCT FROM EXCLUDED."OWNER" THEN 1
+                              WHEN :decisionChanged
+                                OR "ASSESSMENT_ORIGIN"."OWNER" IS DISTINCT FROM EXCLUDED."OWNER" THEN 1
                               ELSE 0
                             END
                         RETURNING "DECISION_VERSION"
@@ -69,6 +80,7 @@ public final class AssessmentProjectionDao {
                 .bind("analysisId", analysisId)
                 .bind("owner", owner.name())
                 .bind("lastReason", lastReason)
+                .bind("decisionChanged", decisionChanged)
                 .mapTo(long.class)
                 .one();
     }
@@ -102,21 +114,6 @@ public final class AssessmentProjectionDao {
                         """)
                 .bind("analysisId", analysisId)
                 .execute();
-    }
-
-    /// Increments the origin version by one. The origin row must already exist.
-    public long bumpDecisionVersion(final long analysisId) {
-        requireAnalysisId(analysisId);
-        requireTransaction();
-        return handle.createQuery(/* language=SQL */ """
-                        UPDATE "ASSESSMENT_ORIGIN"
-                           SET "DECISION_VERSION" = "DECISION_VERSION" + 1
-                         WHERE "ANALYSIS_ID" = :analysisId
-                        RETURNING "DECISION_VERSION"
-                        """)
-                .bind("analysisId", analysisId)
-                .mapTo(long.class)
-                .one();
     }
 
     /// Applies a worker projection. Local and policy rows, and stale versions, are left unchanged.

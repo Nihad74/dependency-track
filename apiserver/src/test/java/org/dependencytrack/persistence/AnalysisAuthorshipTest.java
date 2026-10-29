@@ -100,7 +100,7 @@ class AnalysisAuthorshipTest extends PersistenceCapableTest {
         MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
         final MakeAnalysisCommand command = new MakeAnalysisCommand(finding.component(), finding.vulnerability())
                 .withState(AnalysisState.NOT_AFFECTED)
-                .withDecisionAction(MakeAnalysisCommand.DecisionAction.VEX)
+                .withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL)
                 .withOptions(EnumSet.of(MakeAnalysisCommand.Option.OMIT_NOTIFICATION));
 
         qm.makeAnalysis(command);

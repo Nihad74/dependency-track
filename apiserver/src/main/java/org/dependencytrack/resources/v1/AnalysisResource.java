@@ -32,17 +32,11 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.apache.commons.lang3.StringUtils;
-import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentNotReleasableException;
-import org.dependencytrack.assessmentsync.AssessmentOwnership;
-import org.dependencytrack.assessmentsync.AssessmentProjectionDao;
 import org.dependencytrack.assessmentsync.AssessmentTrailAssembler;
 import org.dependencytrack.assessmentsync.StaleAssessmentDecisionException;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.model.Analysis;
-import org.dependencytrack.model.AnalysisJustification;
-import org.dependencytrack.model.AnalysisResponse;
-import org.dependencytrack.model.AnalysisState;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.Vulnerability;
@@ -66,9 +60,8 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.EnumSet;
 import java.util.List;
-
-import static java.util.Objects.requireNonNullElse;
 
 /**
  * JAX-RS resources for processing analysis decisions.
@@ -234,7 +227,7 @@ public class AnalysisResource extends AbstractApiResource {
                                 .build();
                     }
 
-                    final long analysisId = qm.makeAnalysis(commandFor(qm, request, component, vulnerability));
+                    final long analysisId = qm.makeAnalysis(commandFor(request, component, vulnerability));
                     return Response.ok(trail(qm, qm.getObjectById(Analysis.class, analysisId)))
                             .build();
                 });
@@ -272,10 +265,7 @@ public class AnalysisResource extends AbstractApiResource {
     }
 
     private static MakeAnalysisCommand commandFor(
-            final QueryManager qm,
-            final AnalysisRequest request,
-            final Component component,
-            final Vulnerability vulnerability) {
+            final AnalysisRequest request, final Component component, final Vulnerability vulnerability) {
         final MakeAnalysisCommand base = new MakeAnalysisCommand(component, vulnerability)
                 .withComment(request.getComment())
                 .withExpectedDecisionVersion(request.getExpectedDecisionVersion());
@@ -284,40 +274,11 @@ public class AnalysisResource extends AbstractApiResource {
             case RELEASE_LOCAL -> base.withDecisionAction(MakeAnalysisCommand.DecisionAction.RELEASE_LOCAL);
             case TAKE_LOCAL ->
                 applySentFields(base, request).withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL);
-            case AUTO -> {
-                JdbiFactory.useJdbiHandle(
-                        qm,
-                        handle -> AssessmentMutationGuard.lockProject(
-                                handle, component.getProject().getUuid()));
-                final Analysis existing = qm.getAnalysis(component, vulnerability);
-                final var origin = existing == null
-                        ? null
-                        : JdbiFactory.withJdbiHandle(
-                                qm, handle -> new AssessmentProjectionDao(handle).findOrigin(existing.getId()));
-                if (origin == null || origin.owner() != AssessmentOwnership.INHERITED) {
-                    // Unchanged v1 behavior: an omitted state, justification, or response resets to NOT_SET.
-                    yield base.withState(requireNonNullElse(request.getAnalysisState(), AnalysisState.NOT_SET))
-                            .withJustification(requireNonNullElse(
-                                    request.getAnalysisJustification(), AnalysisJustification.NOT_SET))
-                            .withResponse(requireNonNullElse(request.getAnalysisResponse(), AnalysisResponse.NOT_SET))
-                            .withDetails(request.getAnalysisDetails())
-                            .withSuppress(request.isSuppressed())
-                            .withDecisionAction(MakeAnalysisCommand.DecisionAction.AUTO);
-                }
-                final boolean comment = StringUtils.isNotBlank(request.getComment());
-                final boolean decisionPresent = hasDecisionField(request);
-                // A changed decision from a client without decisionAction is an explicit takeover (ADR 044).
-                // The comment travels on the base command, so both are stored. Rejecting this shape
-                // would break existing v1 clients on inherited rows.
-                if (decisionPresent && echoedDecisionDiffers(existing, request)) {
-                    yield applySentFields(base, request)
-                            .withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL);
-                }
-                if (comment) {
-                    yield base.withDecisionAction(MakeAnalysisCommand.DecisionAction.COMMENT_ONLY);
-                }
-                yield base.withDecisionAction(MakeAnalysisCommand.DecisionAction.AUTO);
-            }
+            // On an inherited row, a changed field takes local ownership and the comment is kept (ADR 044).
+            case AUTO ->
+                applySentFields(base, request)
+                        .withOptions(EnumSet.of(MakeAnalysisCommand.Option.V1_RESET_OMITTED_DECISION))
+                        .withDecisionAction(MakeAnalysisCommand.DecisionAction.AUTO);
         };
     }
 
@@ -337,24 +298,6 @@ public class AnalysisResource extends AbstractApiResource {
                 || request.getAnalysisResponse() != null
                 || request.isSuppressed() != null
                 || request.getAnalysisDetails() != null;
-    }
-
-    private static boolean echoedDecisionDiffers(final Analysis analysis, final AnalysisRequest request) {
-        if (request.getAnalysisState() != null && request.getAnalysisState() != analysis.getAnalysisState()) {
-            return true;
-        }
-        if (request.getAnalysisJustification() != null
-                && request.getAnalysisJustification() != analysis.getAnalysisJustification()) {
-            return true;
-        }
-        if (request.getAnalysisResponse() != null && request.getAnalysisResponse() != analysis.getAnalysisResponse()) {
-            return true;
-        }
-        if (request.isSuppressed() != null && request.isSuppressed() != analysis.isSuppressed()) {
-            return true;
-        }
-        return request.getAnalysisDetails() != null
-                && !request.getAnalysisDetails().equals(analysis.getAnalysisDetails());
     }
 
     private static AnalysisTrailResponse trail(final QueryManager qm, final Analysis analysis) {
