@@ -20,7 +20,6 @@ package org.dependencytrack.parser.cyclonedx.util;
 
 import alpine.config.AlpineConfigKeys;
 import alpine.model.IConfigProperty;
-import alpine.model.auth.Principal;
 import com.github.packageurl.MalformedPackageURLException;
 import com.github.packageurl.PackageURL;
 import org.apache.commons.lang3.StringUtils;
@@ -1525,10 +1524,8 @@ public class ModelConverter {
         if (ids.isEmpty()) {
             return Map.of();
         }
-        final Principal principal =
-                qm.getAlpineRequest() == null ? null : qm.getAlpineRequest().getPrincipal();
-        final List<Trail> trails = JdbiFactory.withJdbiHandle(
-                qm, handle -> new AssessmentTrailAssembler().assemble(handle, principal, ids));
+        final List<Trail> trails =
+                JdbiFactory.withJdbiHandle(qm, handle -> new AssessmentTrailAssembler().assemble(handle, ids));
         final var byId = new LinkedHashMap<Long, Trail>();
         for (final Trail trail : trails) {
             byId.put(trail.analysisId(), trail);
