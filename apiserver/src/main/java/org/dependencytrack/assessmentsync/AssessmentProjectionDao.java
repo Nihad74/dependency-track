@@ -270,7 +270,7 @@ public final class AssessmentProjectionDao {
     /// Resets worker-owned inherited projections on one project to neutral.
     ///
     /// Local, policy, and neutral rows are not updated. Comments in {@code ANALYSISCOMMENT} stay.
-    /// Copied source trails for the withdrawn rows are removed.
+    /// Every copied source trail on the project is removed, including provenance kept on local rows.
     public int withdrawInherited(final UUID projectUuid) {
         requireNonNull(projectUuid, "projectUuid must not be null");
         requireTransaction();
@@ -318,9 +318,13 @@ public final class AssessmentProjectionDao {
                                   RETURNING o."ANALYSIS_ID"
                                 ),
                                 dropped AS (
-                                  DELETE FROM "ASSESSMENT_SOURCE_CONTRIBUTION"
-                                   WHERE "TARGET_ANALYSIS_ID" IN (SELECT "ANALYSIS_ID" FROM relabeled)
-                                  RETURNING "TARGET_ANALYSIS_ID"
+                                  DELETE FROM "ASSESSMENT_SOURCE_CONTRIBUTION" AS c
+                                   USING "ANALYSIS" AS a
+                                       , "PROJECT" AS p
+                                   WHERE a."ID" = c."TARGET_ANALYSIS_ID"
+                                     AND p."ID" = a."PROJECT_ID"
+                                     AND p."UUID" = :projectUuid
+                                  RETURNING c."TARGET_ANALYSIS_ID"
                                 )
                                 SELECT COUNT(*)::int
                                   FROM relabeled
