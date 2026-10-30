@@ -26,6 +26,7 @@ import org.apache.http.HttpStatus;
 import org.dependencytrack.JerseyTestExtension;
 import org.dependencytrack.ResourceTest;
 import org.dependencytrack.assessmentsync.AssessmentChange;
+import org.dependencytrack.assessmentsync.AssessmentReason;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.Analysis;
@@ -452,7 +453,9 @@ class AnalysisResourceTest extends ResourceTest {
                 AnalysisResponse.WILL_NOT_FIX,
                 "Analysis details here",
                 "Analysis comment here",
-                true);
+                true,
+                AnalysisRequest.DecisionAction.AUTO,
+                null);
 
         final Response response = jersey.target(V1_ANALYSIS)
                 .request()
@@ -549,7 +552,9 @@ class AnalysisResourceTest extends ResourceTest {
                 AnalysisResponse.WILL_NOT_FIX,
                 "Analysis details here",
                 "Analysis comment here",
-                true);
+                true,
+                AnalysisRequest.DecisionAction.AUTO,
+                null);
 
         final Response response = jersey.target(V1_ANALYSIS)
                 .request()
@@ -624,6 +629,8 @@ class AnalysisResourceTest extends ResourceTest {
                 null,
                 null,
                 null,
+                null,
+                AnalysisRequest.DecisionAction.AUTO,
                 null);
 
         final Response response = jersey.target(V1_ANALYSIS)
@@ -686,7 +693,9 @@ class AnalysisResourceTest extends ResourceTest {
                 AnalysisResponse.UPDATE,
                 "New analysis details here",
                 "New analysis comment here",
-                false);
+                false,
+                AnalysisRequest.DecisionAction.AUTO,
+                null);
 
         final Response response = jersey.target(V1_ANALYSIS)
                 .request()
@@ -776,7 +785,9 @@ class AnalysisResourceTest extends ResourceTest {
                 AnalysisResponse.WILL_NOT_FIX,
                 "Analysis details here",
                 null,
-                true);
+                true,
+                AnalysisRequest.DecisionAction.AUTO,
+                null);
 
         final Response response = jersey.target(V1_ANALYSIS)
                 .request()
@@ -843,6 +854,8 @@ class AnalysisResourceTest extends ResourceTest {
                 null,
                 null,
                 null,
+                null,
+                AnalysisRequest.DecisionAction.AUTO,
                 null);
 
         final Response response = jersey.target(V1_ANALYSIS)
@@ -912,7 +925,9 @@ class AnalysisResourceTest extends ResourceTest {
                 AnalysisResponse.WILL_NOT_FIX,
                 "Analysis details here",
                 "Analysis comment here",
-                true);
+                true,
+                AnalysisRequest.DecisionAction.AUTO,
+                null);
 
         final Response response = jersey.target(V1_ANALYSIS)
                 .request()
@@ -951,7 +966,9 @@ class AnalysisResourceTest extends ResourceTest {
                 AnalysisResponse.WILL_NOT_FIX,
                 "Analysis details here",
                 "Analysis comment here",
-                true);
+                true,
+                AnalysisRequest.DecisionAction.AUTO,
+                null);
 
         final Response response = jersey.target(V1_ANALYSIS)
                 .request()
@@ -1001,7 +1018,9 @@ class AnalysisResourceTest extends ResourceTest {
                 AnalysisResponse.UPDATE,
                 "New analysis details here",
                 "New analysis comment here",
-                false);
+                false,
+                AnalysisRequest.DecisionAction.AUTO,
+                null);
 
         final Response response = jersey.target(V1_ANALYSIS)
                 .request()
@@ -1059,7 +1078,9 @@ class AnalysisResourceTest extends ResourceTest {
                 AnalysisResponse.UPDATE,
                 "Analysis details here",
                 "Analysis comment here",
-                false);
+                false,
+                AnalysisRequest.DecisionAction.AUTO,
+                null);
 
         final Response response = jersey.target(V1_ANALYSIS)
                 .request()
@@ -1202,7 +1223,7 @@ class AnalysisResourceTest extends ResourceTest {
             assertThat(body.getString("analysisState")).isEqualTo("NOT_AFFECTED");
             assertThat(body.getString("decisionOrigin")).isEqualTo("INHERITED");
             assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(4);
-            assertThat(body.getString("inheritanceStatus")).isEqualTo("SOURCE_CONFLICT");
+            assertThat(body.containsKey("inheritanceStatus")).isFalse();
             assertThat(body.getJsonArray("analysisComments"))
                     .extracting(value -> ((JsonObject) value).getString("comment"))
                     .contains("local note", "local only");
@@ -1271,6 +1292,36 @@ class AnalysisResourceTest extends ResourceTest {
                       "analysisState": "EXPLOITABLE",
                       "decisionAction": "TAKE_LOCAL",
                       "expectedDecisionVersion": 4
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+
+            final JsonObject body = getAnalysis(fixture);
+            assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
+            assertThat(body.containsKey("sourceAssessments")).isFalse();
+        });
+    }
+
+    @Test
+    void changingAKeptTrailDecisionFromAnOldClientDropsTheSourceTrail() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS, Permissions.VIEW_VULNERABILITY);
+        final var fixture = inheritedFromALiveSource();
+        withCapture(() -> {
+            assertThat(putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 4
+                    }
+                    """).getStatus()).isEqualTo(HttpStatus.SC_OK);
+            assertThat(getAnalysis(fixture).getJsonArray("sourceAssessments")).hasSize(1);
+
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "EXPLOITABLE"
                     }
                     """);
             assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
@@ -1636,28 +1687,59 @@ class AnalysisResourceTest extends ResourceTest {
     }
 
     @Test
+    void takingOverAPolicyRowWithoutOriginMovesTheVersion() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS, Permissions.VIEW_VULNERABILITY);
+        final var fixture = policyRowWithoutOrigin();
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 0
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            final JsonObject body = parseJsonObject(response);
+            assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
+            assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(1);
+
+            final Response stale = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "EXPLOITABLE",
+                      "expectedDecisionVersion": 0
+                    }
+                    """);
+            assertThat(stale.getStatus()).isEqualTo(HttpStatus.SC_CONFLICT);
+        });
+    }
+
+    @Test
+    void staleCommentOnlyWithoutOriginReturnsConflict() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS, Permissions.VIEW_VULNERABILITY);
+        final var fixture = findingWithoutOrigin();
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "comment": "late note",
+                      "decisionAction": "COMMENT_ONLY",
+                      "expectedDecisionVersion": 1
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_CONFLICT);
+            assertThat(getAnalysis(fixture).toString()).doesNotContain("late note");
+            assertThat(recordedChanges()).isEmpty();
+        });
+    }
+
+    @Test
     void releaseOfPolicyRowWithoutOriginIsRejected() {
         initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS, Permissions.VIEW_VULNERABILITY);
-        final var fixture = findingOwnedBy("LOCAL");
-        useJdbiHandle(handle -> {
-            final long policyId = handle.createQuery("""
-                            INSERT INTO "VULNERABILITY_POLICY" ("NAME", "ANALYSIS", "CONDITION")
-                            VALUES ('kernel-policy', '{}'::jsonb, 'true')
-                            RETURNING "ID"
-                            """).mapTo(long.class).one();
-            handle.createUpdate("""
-                            UPDATE "ANALYSIS"
-                               SET "VULNERABILITY_POLICY_ID" = :policyId
-                             WHERE "ID" = :analysisId
-                            """)
-                    .bind("policyId", policyId)
-                    .bind("analysisId", fixture.analysisId())
-                    .execute();
-            handle.createUpdate("""
-                            DELETE FROM "ASSESSMENT_ORIGIN"
-                             WHERE "ANALYSIS_ID" = :analysisId
-                            """).bind("analysisId", fixture.analysisId()).execute();
-        });
+        final var fixture = policyRowWithoutOrigin();
         withCapture(() -> {
             final Response response = putAnalysis(fixture, """
                     {
@@ -1935,6 +2017,31 @@ class AnalysisResourceTest extends ResourceTest {
         return new FindingFixture(project, component, vulnerability, analysis.getId());
     }
 
+    /// A finding a vulnerability policy wrote before assessment synchronization, so it has no origin row.
+    private FindingFixture policyRowWithoutOrigin() {
+        final var fixture = findingOwnedBy("LOCAL");
+        useJdbiHandle(handle -> {
+            final long policyId = handle.createQuery("""
+                            INSERT INTO "VULNERABILITY_POLICY" ("NAME", "ANALYSIS", "CONDITION")
+                            VALUES ('kernel-policy', '{}'::jsonb, 'true')
+                            RETURNING "ID"
+                            """).mapTo(long.class).one();
+            handle.createUpdate("""
+                            UPDATE "ANALYSIS"
+                               SET "VULNERABILITY_POLICY_ID" = :policyId
+                             WHERE "ID" = :analysisId
+                            """)
+                    .bind("policyId", policyId)
+                    .bind("analysisId", fixture.analysisId())
+                    .execute();
+            handle.createUpdate("""
+                            DELETE FROM "ASSESSMENT_ORIGIN"
+                             WHERE "ANALYSIS_ID" = :analysisId
+                            """).bind("analysisId", fixture.analysisId()).execute();
+        });
+        return fixture;
+    }
+
     private FindingFixture inheritedFinding() {
         return findingOwnedBy("INHERITED");
     }
@@ -1969,7 +2076,7 @@ class AnalysisResourceTest extends ResourceTest {
                          WHERE "ANALYSIS_ID" = :analysisId
                         """)
                 .bind("owner", owner)
-                .bind("lastReason", inherited ? "SOURCE_CONFLICT" : null)
+                .bind("lastReason", inherited ? AssessmentReason.SOURCE_CONFLICT.name() : null)
                 .bind("analysisId", analysisId)
                 .execute());
         assertThat(updated).isEqualTo(1);

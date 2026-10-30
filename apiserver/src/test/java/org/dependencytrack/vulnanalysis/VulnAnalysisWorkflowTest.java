@@ -1522,6 +1522,36 @@ class VulnAnalysisWorkflowTest extends PersistenceCapableTest {
     }
 
     @Test
+    void policyWithEqualValuesTakesOverAnInheritedRowAndDropsItsTrail() {
+        final PolicyFixture fixture = vulnerableFinding();
+        analyze(fixture.project());
+        inheritWithTrail(fixture, AnalysisState.NOT_AFFECTED, AnalysisJustification.CODE_NOT_REACHABLE);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        createPolicy("testPolicy", "testAuthor", "true", notAffectedPolicyAnalysis(), List.of());
+
+        analyze(fixture.project());
+
+        assertThat(origin(fixture)).isEqualTo(AssessmentOwnership.POLICY);
+        assertThat(qm.getAnalysis(fixture.component(), fixture.vulnerability()).getVulnerabilityPolicyId())
+                .isNotNull();
+        assertThat(trailCount(fixture)).isZero();
+    }
+
+    @Test
+    void policyWithDifferentValuesTakesOverAnInheritedRowAndDropsItsTrail() {
+        final PolicyFixture fixture = vulnerableFinding();
+        analyze(fixture.project());
+        inheritWithTrail(fixture, AnalysisState.EXPLOITABLE, AnalysisJustification.NOT_SET);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        createPolicy("testPolicy", "testAuthor", "true", notAffectedPolicyAnalysis(), List.of());
+
+        analyze(fixture.project());
+
+        assertThat(origin(fixture)).isEqualTo(AssessmentOwnership.POLICY);
+        assertThat(trailCount(fixture)).isZero();
+    }
+
+    @Test
     void policyMatchingAHandWrittenDecisionLeavesItLocal() {
         final PolicyFixture fixture = vulnerableFinding();
         analyze(fixture.project());
@@ -1580,6 +1610,47 @@ class VulnAnalysisWorkflowTest extends PersistenceCapableTest {
                         fixture.vulnerability().getUuid(),
                         AssessmentChange.Reason.ATTRIBUTION,
                         List.of(new AssessmentChange.LookupKey("acme-app", "1.0.0"))));
+    }
+
+    /// Turns the finding into an inherited row with one copied source contribution.
+    private void inheritWithTrail(
+            final PolicyFixture fixture, final AnalysisState state, final AnalysisJustification justification) {
+        final long analysisId = qm.makeAnalysis(new MakeAnalysisCommand(fixture.component(), fixture.vulnerability())
+                .withState(state)
+                .withJustification(justification)
+                .withOptions(Set.of(MakeAnalysisCommand.Option.OMIT_NOTIFICATION)));
+        withJdbiHandle(handle -> {
+            handle.createUpdate("""
+                            UPDATE "ASSESSMENT_ORIGIN"
+                               SET "OWNER" = 'INHERITED'
+                             WHERE "ANALYSIS_ID" = :analysisId
+                            """).bind("analysisId", analysisId).execute();
+            return handle.createUpdate("""
+                            INSERT INTO "ASSESSMENT_SOURCE_CONTRIBUTION" (
+                              "TARGET_ANALYSIS_ID"
+                            , "SOURCE_PROJECT_UUID"
+                            , "SOURCE_COMPONENT_UUID"
+                            , "SOURCE_VULNERABILITY_UUID"
+                            , "SOURCE_ANALYSIS_ID"
+                            , "SOURCE_DETAILS"
+                            )
+                            VALUES (:analysisId, gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 42, 'copied')
+                            """).bind("analysisId", analysisId).execute();
+        });
+        qm.getPersistenceManager().evictAll();
+    }
+
+    private int trailCount(final PolicyFixture fixture) {
+        final long analysisId =
+                qm.getAnalysis(fixture.component(), fixture.vulnerability()).getId();
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT COUNT(*)::int
+                          FROM "ASSESSMENT_SOURCE_CONTRIBUTION"
+                         WHERE "TARGET_ANALYSIS_ID" = :analysisId
+                        """)
+                .bind("analysisId", analysisId)
+                .mapTo(int.class)
+                .one());
     }
 
     /// A row from before assessment synchronization has no origin record.

@@ -97,30 +97,6 @@ public class AnalysisRequest {
         RELEASE_LOCAL
     }
 
-    public AnalysisRequest(
-            String project,
-            String component,
-            String vulnerability,
-            AnalysisState analysisState,
-            AnalysisJustification analysisJustification,
-            AnalysisResponse analysisResponse,
-            String analysisDetails,
-            String comment,
-            Boolean suppressed) {
-        this(
-                project,
-                component,
-                vulnerability,
-                analysisState,
-                analysisJustification,
-                analysisResponse,
-                analysisDetails,
-                comment,
-                suppressed,
-                DecisionAction.AUTO,
-                null);
-    }
-
     @JsonCreator
     public AnalysisRequest(
             @JsonProperty(value = "project") String project,

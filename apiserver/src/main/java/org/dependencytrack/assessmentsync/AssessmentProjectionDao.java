@@ -31,7 +31,6 @@ import org.jspecify.annotations.Nullable;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +38,11 @@ import java.util.Objects;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.assessmentsync.AssessmentOriginDao.readOrigin;
+import static org.dependencytrack.assessmentsync.DaoSupport.nullableLong;
+import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
+import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
+import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
 /// Worker projections: machine fields and copied source trails on target analyses. Ownership records
 /// written by authored writers live in {@link AssessmentOriginDao}. Uses the caller's transaction.
@@ -53,7 +57,7 @@ public final class AssessmentProjectionDao {
     /// Applies a worker projection. Local and policy rows, and stale versions, are left unchanged.
     public WorkerWriteResult applyWorkerWrite(final WorkerWrite write) {
         requireNonNull(write, "write must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final LockedAnalysis locked = lockAnalysis(write.analysisId());
         if (locked == null || locked.owner() == null) {
             return new WorkerWriteResult(WorkerWriteStatus.MISSING, 0);
@@ -84,7 +88,9 @@ public final class AssessmentProjectionDao {
                         """)
                 .bind("analysisId", write.analysisId())
                 .bind("owner", write.owner().name())
-                .bind("lastReason", write.lastReason())
+                .bind(
+                        "lastReason",
+                        write.lastReason() == null ? null : write.lastReason().name())
                 .bind("versionIncrement", versionBump ? 1 : 0)
                 .bind("expectedDecisionVersion", write.expectedDecisionVersion())
                 .mapTo(long.class)
@@ -96,7 +102,7 @@ public final class AssessmentProjectionDao {
     }
 
     public @Nullable StoredProjection load(final long analysisId) {
-        requireAnalysisId(analysisId);
+        requirePositive(analysisId, "analysisId");
         final StoredProjection header = handle.createQuery(/* language=SQL */ """
                         SELECT a."ID"
                              , a."STATE"
@@ -150,7 +156,7 @@ public final class AssessmentProjectionDao {
     /// Every copied source trail on the project is removed, including provenance kept on local rows.
     public int withdrawInherited(final UUID projectUuid) {
         requireNonNull(projectUuid, "projectUuid must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final AssessmentDecision neutral = AssessmentDecision.neutral();
         final String details = null;
         final Long policyId = null;
@@ -188,7 +194,7 @@ public final class AssessmentProjectionDao {
                                 relabeled AS (
                                   UPDATE "ASSESSMENT_ORIGIN" AS o
                                      SET "OWNER" = 'NEUTRAL'
-                                       , "LAST_REASON" = 'WITHDRAW'
+                                       , "LAST_REASON" = 'WITHDRAWN'
                                        , "DECISION_VERSION" = "DECISION_VERSION" + 1
                                    WHERE o."ANALYSIS_ID" IN (SELECT "ID" FROM cleared)
                                      AND o."OWNER" = 'INHERITED'
@@ -508,61 +514,37 @@ public final class AssessmentProjectionDao {
                 .toList();
     }
 
+    /// Locks the analysis row. The origin is not locked: every origin writer holds the project lock, as the
+    /// worker does, and the origin update still checks the version it read.
     private @Nullable LockedAnalysis lockAnalysis(final long analysisId) {
-        final MachineRow machine = handle.createQuery(/* language=SQL */ """
-                        SELECT "ID"
-                             , "STATE"
-                             , "JUSTIFICATION"
-                             , "RESPONSE"
-                             , "SUPPRESSED"
-                             , "SEVERITY"::text AS "SEVERITY"
-                             , "CVSSV2VECTOR"
-                             , "CVSSV2SCORE"
-                             , "CVSSV3VECTOR"
-                             , "CVSSV3SCORE"
-                             , "CVSSV4VECTOR"
-                             , "CVSSV4SCORE"
-                             , "OWASPVECTOR"
-                             , "OWASPSCORE"
-                             , "DETAILS"
-                             , "VULNERABILITY_POLICY_ID"
-                          FROM "ANALYSIS"
-                         WHERE "ID" = :analysisId
-                           FOR UPDATE
+        return handle.createQuery(/* language=SQL */ """
+                        SELECT a."STATE"
+                             , a."JUSTIFICATION"
+                             , a."RESPONSE"
+                             , a."SUPPRESSED"
+                             , a."SEVERITY"::text AS "SEVERITY"
+                             , a."CVSSV2VECTOR"
+                             , a."CVSSV2SCORE"
+                             , a."CVSSV3VECTOR"
+                             , a."CVSSV3SCORE"
+                             , a."CVSSV4VECTOR"
+                             , a."CVSSV4SCORE"
+                             , a."OWASPVECTOR"
+                             , a."OWASPSCORE"
+                             , a."DETAILS"
+                             , o."OWNER"
+                             , o."DECISION_VERSION"
+                             , o."LAST_REASON"
+                          FROM "ANALYSIS" AS a
+                          LEFT JOIN "ASSESSMENT_ORIGIN" AS o
+                            ON o."ANALYSIS_ID" = a."ID"
+                         WHERE a."ID" = :analysisId
+                           FOR UPDATE OF a
                         """)
                 .bind("analysisId", analysisId)
-                .map((rs, ctx) -> new MachineRow(
-                        readDecision(rs), rs.getString("DETAILS"), nullableLong(rs, "VULNERABILITY_POLICY_ID")))
+                .map((rs, ctx) -> new LockedAnalysis(readOrigin(rs), readDecision(rs), rs.getString("DETAILS")))
                 .findOne()
                 .orElse(null);
-        if (machine == null) {
-            return null;
-        }
-        final Origin origin = handle.createQuery(/* language=SQL */ """
-                        SELECT "OWNER"
-                             , "DECISION_VERSION"
-                             , "LAST_REASON"
-                          FROM "ASSESSMENT_ORIGIN"
-                         WHERE "ANALYSIS_ID" = :analysisId
-                           FOR UPDATE
-                        """)
-                .bind("analysisId", analysisId)
-                .map((rs, ctx) -> new Origin(
-                        AssessmentOwnership.valueOf(rs.getString("OWNER")),
-                        rs.getLong("DECISION_VERSION"),
-                        rs.getString("LAST_REASON")))
-                .findOne()
-                .orElse(null);
-        if (origin == null) {
-            return new LockedAnalysis(null, 0, null, machine.decision(), machine.details(), machine.policyId());
-        }
-        return new LockedAnalysis(
-                origin.owner(),
-                origin.decisionVersion(),
-                origin.lastReason(),
-                machine.decision(),
-                machine.details(),
-                machine.policyId());
     }
 
     private static <S extends SqlStatement<S>> S bindDecision(final S statement, final AssessmentDecision decision) {
@@ -602,37 +584,6 @@ public final class AssessmentProjectionDao {
                 rs.getBigDecimal("CVSSV4SCORE"),
                 rs.getString("OWASPVECTOR"),
                 rs.getBigDecimal("OWASPSCORE"));
-    }
-
-    private static @Nullable Origin readOrigin(final ResultSet rs) throws SQLException {
-        final String owner = rs.getString("OWNER");
-        if (owner == null) {
-            return null;
-        }
-        return new Origin(
-                AssessmentOwnership.valueOf(owner), rs.getLong("DECISION_VERSION"), rs.getString("LAST_REASON"));
-    }
-
-    private static @Nullable Long nullableLong(final ResultSet rs, final String column) throws SQLException {
-        final long value = rs.getLong(column);
-        return rs.wasNull() ? null : value;
-    }
-
-    private static Instant readInstant(final ResultSet rs, final String column) throws SQLException {
-        final OffsetDateTime value = rs.getObject(column, OffsetDateTime.class);
-        return requireNonNull(value, column).toInstant();
-    }
-
-    private void requireTransaction() {
-        if (!handle.isInTransaction()) {
-            throw new IllegalStateException("Assessment projection writes require an active transaction");
-        }
-    }
-
-    private static void requireAnalysisId(final long analysisId) {
-        if (analysisId <= 0) {
-            throw new IllegalArgumentException("analysisId must be positive");
-        }
     }
 
     /// Why a worker write did not change the target row.
@@ -696,7 +647,7 @@ public final class AssessmentProjectionDao {
             AssessmentDecision decision,
             @Nullable String details,
             @Nullable Long policyId,
-            @Nullable String lastReason,
+            @Nullable AssessmentReason lastReason,
             long expectedDecisionVersion,
             List<SourceContributionWrite> contributions) {
 
@@ -756,17 +707,18 @@ public final class AssessmentProjectionDao {
     }
 
     private record LockedAnalysis(
-            @Nullable AssessmentOwnership owner,
-            long decisionVersion,
-            @Nullable String lastReason,
+            @Nullable Origin origin,
             AssessmentDecision decision,
-            @Nullable String details,
-            @Nullable Long policyId) {}
+            @Nullable String details) {
 
-    private record MachineRow(
-            AssessmentDecision decision,
-            @Nullable String details,
-            @Nullable Long policyId) {}
+        private @Nullable AssessmentOwnership owner() {
+            return origin == null ? null : origin.owner();
+        }
+
+        private long decisionVersion() {
+            return origin == null ? 0 : origin.decisionVersion();
+        }
+    }
 
     private record ContributionKey(UUID sourceProjectUuid, long sourceAnalysisId) {}
 

@@ -1575,7 +1575,7 @@ public class ModelConverter {
             return Map.of();
         }
         final List<Trail> trails =
-                JdbiFactory.withJdbiHandle(qm, handle -> new AssessmentTrailAssembler().assemble(handle, ids));
+                JdbiFactory.withJdbiHandle(qm, handle -> AssessmentTrailAssembler.assemble(handle, ids));
         final var byId = new LinkedHashMap<Long, Trail>();
         for (final Trail trail : trails) {
             byId.put(trail.analysisId(), trail);

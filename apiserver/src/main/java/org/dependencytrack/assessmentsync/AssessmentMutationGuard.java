@@ -24,6 +24,7 @@ import java.util.Collection;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
 /// Transaction-scoped advisory guard for one target project.
 ///
@@ -50,13 +51,6 @@ public final class AssessmentMutationGuard {
                 .distinct()
                 .sorted()
                 .forEach(canonical -> lockCanonical(handle, canonical));
-    }
-
-    private static void requireTransaction(final Handle handle) {
-        requireNonNull(handle, "handle must not be null");
-        if (!handle.isInTransaction()) {
-            throw new IllegalStateException("Project guard requires an active transaction");
-        }
     }
 
     private static void lockCanonical(final Handle handle, final String projectUuid) {
