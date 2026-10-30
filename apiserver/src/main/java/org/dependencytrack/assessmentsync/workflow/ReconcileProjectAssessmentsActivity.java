@@ -88,7 +88,7 @@ public final class ReconcileProjectAssessmentsActivity
 
     private ReconcileProjectAssessmentsRes deferInactive(final Handle handle, final UUID targetUuid) {
         new AssessmentSyncWorkDao(handle)
-                .scheduleDispatch(targetUuid, Instant.now().plus(inactiveBackoff), null);
+                .scheduleDispatch(targetUuid, Instant.now().plus(inactiveBackoff));
         return ReconcileProjectAssessmentsRes.newBuilder()
                 .setHasMore(false)
                 .setRefreshRevision(0)
