@@ -26,8 +26,8 @@ import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChangeRecorder;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentNotReleasableException;
+import org.dependencytrack.assessmentsync.AssessmentOriginDao;
 import org.dependencytrack.assessmentsync.AssessmentOwnership;
-import org.dependencytrack.assessmentsync.AssessmentProjectionDao;
 import org.dependencytrack.assessmentsync.StaleAssessmentDecisionException;
 import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisComment;
@@ -109,8 +109,7 @@ public class AnalysisQueryManager extends QueryManager {
             JdbiFactory.useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
 
             Analysis analysis = getAnalysis(command.component(), command.vulnerability());
-            final AssessmentProjectionDao.Origin originBefore =
-                    analysis == null ? null : currentOrigin(analysis.getId());
+            final AssessmentOriginDao.Origin originBefore = analysis == null ? null : currentOrigin(analysis.getId());
             final long decisionVersionBefore = originBefore == null ? 0 : originBefore.decisionVersion();
             if (command.expectedDecisionVersion() != null
                     && decisionVersionBefore != command.expectedDecisionVersion()) {
@@ -171,7 +170,7 @@ public class AnalysisQueryManager extends QueryManager {
                         AssessmentChange.Reason.AUTHORED,
                         AssessmentChange.LookupKey.listOf(project.getName(), project.getVersion()));
                 JdbiFactory.useJdbiHandle(this, handle -> {
-                    final var dao = new AssessmentProjectionDao(handle);
+                    final var dao = new AssessmentOriginDao(handle);
                     if (originWrite.clearContributions()) {
                         dao.deleteCopiedContributions(analysisId);
                     }
@@ -206,7 +205,7 @@ public class AnalysisQueryManager extends QueryManager {
     }
 
     /// A row without an origin is local, unless a vulnerability policy wrote it.
-    private static boolean isReleasable(final Analysis analysis, final AssessmentProjectionDao.Origin origin) {
+    private static boolean isReleasable(final Analysis analysis, final AssessmentOriginDao.Origin origin) {
         if (analysis == null) {
             return false;
         }
@@ -258,8 +257,8 @@ public class AnalysisQueryManager extends QueryManager {
         return StringUtils.isBlank(left) ? StringUtils.isBlank(right) : left.equals(right);
     }
 
-    private AssessmentProjectionDao.Origin currentOrigin(final long analysisId) {
-        return JdbiFactory.withJdbiHandle(this, handle -> new AssessmentProjectionDao(handle).findOrigin(analysisId));
+    private AssessmentOriginDao.Origin currentOrigin(final long analysisId) {
+        return JdbiFactory.withJdbiHandle(this, handle -> new AssessmentOriginDao(handle).findOrigin(analysisId));
     }
 
     private static FieldUpdate applySuppliedFields(

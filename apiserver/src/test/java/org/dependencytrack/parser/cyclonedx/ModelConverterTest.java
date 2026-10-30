@@ -27,6 +27,7 @@ import org.cyclonedx.model.Hash;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentConsensus.Contributor;
 import org.dependencytrack.assessmentsync.AssessmentDecision;
+import org.dependencytrack.assessmentsync.AssessmentOriginDao;
 import org.dependencytrack.assessmentsync.AssessmentOwnership;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.SourceCommentWrite;
@@ -216,7 +217,7 @@ class ModelConverterTest extends PersistenceCapableTest {
         final long hiddenAnalysisId = exportSourceAnalysis(hiddenComponent);
         inJdbiTransaction(handle -> {
             final var dao = new AssessmentProjectionDao(handle);
-            final var origin = dao.findOrigin(analysisId);
+            final var origin = new AssessmentOriginDao(handle).findOrigin(analysisId);
             return dao.applyWorkerWrite(new WorkerWrite(
                     analysisId,
                     AssessmentOwnership.INHERITED,

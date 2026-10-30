@@ -47,8 +47,8 @@ public final class AssessmentSyncTestSupport {
 
     /// Null when the analysis has no origin record, as before the feature.
     public static AssessmentOwnership owner(final long analysisId) {
-        final AssessmentProjectionDao.Origin origin =
-                withJdbiHandle(handle -> new AssessmentProjectionDao(handle).findOrigin(analysisId));
+        final AssessmentOriginDao.Origin origin =
+                withJdbiHandle(handle -> new AssessmentOriginDao(handle).findOrigin(analysisId));
         return origin == null ? null : origin.owner();
     }
 
