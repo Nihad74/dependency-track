@@ -350,6 +350,35 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
     }
 
     @Test
+    void workWithOnlyARefreshPendingIsDispatched() throws Exception {
+        startEngine(false);
+        final UUID targetUuid = UUID.randomUUID();
+        useJdbiTransaction(handle -> new AssessmentSyncWorkDao(handle).requestRefresh(targetUuid));
+
+        relay.executeCycle();
+
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(targetUuid)))
+                .containsExactly("CREATED");
+    }
+
+    @Test
+    void finishedWorkIsNotDispatched() throws Exception {
+        startEngine(false);
+        final UUID targetUuid = UUID.randomUUID();
+        useJdbiTransaction(handle -> {
+            final var workDao = new AssessmentSyncWorkDao(handle);
+            workDao.requestFull(targetUuid);
+            workDao.requestRefresh(targetUuid);
+            workDao.acknowledgeCancellation(targetUuid);
+        });
+
+        relay.executeCycle();
+
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(targetUuid)))
+                .isEmpty();
+    }
+
+    @Test
     void targetWhoseRunsKeepEndingWithoutProgressIsDispatchedLessOften() throws Exception {
         startEngine(true);
         final UUID targetUuid = UUID.randomUUID();
