@@ -18,6 +18,7 @@
  */
 package org.dependencytrack.assessmentsync.workflow;
 
+import org.dependencytrack.assessmentsync.AssessmentSyncMode;
 import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao;
 import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.dex.api.Activity;
@@ -63,7 +64,10 @@ public final class ReadAssessmentSyncPendingActivity
                 return AssessmentSyncPendingRes.getDefaultInstance();
             }
             return AssessmentSyncPendingRes.newBuilder()
-                    .setReconciliationPending(row.completedRevision() < row.requestedRevision())
+                    // Deferred reconciliation is not pending for this run; the relay redispatches it once
+                    // the mode applies assessments again.
+                    .setReconciliationPending(AssessmentSyncMode.current().appliesAssessments()
+                            && row.completedRevision() < row.requestedRevision())
                     .setRefreshPending(row.refreshCompleted() < row.refreshRequested())
                     .setRefreshRequested(row.refreshRequested())
                     .setTargetDeleted(false)

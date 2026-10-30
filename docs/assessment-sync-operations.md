@@ -14,6 +14,19 @@ The maintenance scan cursor is the last finished project UUID. Dex stores it in 
 4. Leave the outbox in place. Events recorded during the scan are still pending after the scan.
 5. Set `ACTIVE`. Let expansion and target work drain.
 
+## Dispatch
+
+The relay polls the outbox and target work on one instance at a time. In `ACTIVE` it dispatches both. In `WITHDRAW` it dispatches only targets with a refresh pending, so policy results and metrics catch up with withdrawn rows. In `CAPTURE` and `OFF` it dispatches nothing. A target whose run is deferred by the mode keeps its reconciliation pending and is dispatched again in `ACTIVE`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `dt.assessment-sync.relay.poll-interval-ms` | `1000` | Delay between relay polls, and the first backoff step. |
+| `dt.assessment-sync.relay.batch-size` | `50` | Outbox rows and target rows taken per poll. |
+| `dt.assessment-sync.relay.max-backoff-ms` | `60000` | Longest delay before a row whose runs keep ending without progress is dispatched again. |
+| `dt.assessment-sync.fanout.batch-size` | `100` | Targets listed per expansion page. |
+| `dt.assessment-sync.reconcile.batch-size` | `200` | Findings reconciled per transaction. |
+| `dt.assessment-sync.workflow.max-batches` | `50` | Batches per workflow run before it continues as new. |
+
 ## Replay
 
 Pending outbox rows and target work rows are the replay record. A Dex run that fails does not delete them. The relay submits them again. Do not close replay by sequence id or by timestamp.
@@ -35,7 +48,9 @@ Turning `access-management` / `acl.enabled` on or off queues a full pass for eve
 
 ## Repair
 
-Verification runs on `dt.assessment-sync.verify.cron` (default `0 3 * * *`, UTC). It rebuilds each project's embedding index, compares findings with the same match, consensus, and diff as reconciliation, and enqueues a full target pass when the stored projection differs. It does not promote a row to `INHERITED` and it does not reset local ownership. An analysis with no origin stays protected.
+The maintenance task runs on `dt.assessment-sync.verify.cron` (default `0 3 * * *`, UTC). What it does depends on the mode: `CAPTURE` runs backfill, `ACTIVE` runs verification, and `WITHDRAW` runs withdrawal. Nothing starts when the mode changes; the next scheduled run picks up the new mode.
+
+Verification rebuilds each project's embedding index, compares findings with the same match, consensus, and diff as reconciliation, and enqueues a full target pass when the stored projection differs. It does not promote a row to `INHERITED` and it does not reset local ownership. An analysis with no origin stays protected.
 
 Source events are the normal update path. Drift that appears on every verification means a writer is not recording changes. Fix that writer.
 
@@ -43,8 +58,8 @@ Run verification again after a replay, an algorithm change, or recovery.
 
 ## Withdrawal
 
-1. Set `WITHDRAW`. New inheritance stops. Reconciliation must not create inherited rows in this mode.
-2. Maintenance selects analyses whose origin is `INHERITED` and resets those machine fields to neutral. `LOCAL`, `POLICY`, and `NEUTRAL` rows are not selected. Comments in `ANALYSISCOMMENT` stay. Copied source trails for the withdrawn rows are removed. Affected projects get a refresh request.
+1. Set `WITHDRAW`. New inheritance stops. Reconciliation must not create inherited rows in this mode. Withdrawal itself starts with the next scheduled maintenance run.
+2. Maintenance selects analyses whose origin is `INHERITED` and resets those machine fields to neutral. `LOCAL`, `POLICY`, and `NEUTRAL` rows are not selected. Comments in `ANALYSISCOMMENT` stay. Every copied source trail on the project is removed, including source text kept as provenance on `LOCAL` rows. Affected projects get a refresh request, which the relay dispatches in this mode.
 3. Read `dt.assessment_sync.inherited` and `dt.assessment_sync.rollback.incomplete`.
 4. Set `OFF` only after inherited rows are gone and verification has been reviewed.
 5. Turning the feature back on after a period with no capture requires backfill and verification again. `CAPTURE` pauses application. It is not withdrawal.

@@ -20,6 +20,7 @@ package org.dependencytrack.assessmentsync.workflow;
 
 import io.github.resilience4j.core.IntervalFunction;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao;
 import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.datasource.DataSourceRegistry;
@@ -55,6 +56,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.protoConverter;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.voidConverter;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 class SynchronizeProjectAssessmentsWorkflowTest extends PersistenceCapableTest {
@@ -221,6 +223,40 @@ class SynchronizeProjectAssessmentsWorkflowTest extends PersistenceCapableTest {
         assertThat(work).isNotNull();
         assertThat(work.completedRevision()).isEqualTo(1);
         assertThat(work.requestedRevision()).isEqualTo(1);
+    }
+
+    @Test
+    void captureModeEndsTheRunAndLeavesReconciliationPending() throws Exception {
+        start(50);
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        final List<CreateWorkflowRunResponse> created =
+                workflowTest.getEngine().createRuns(List.of(run(fixture.target.getUuid())));
+        workflowTest.awaitRunStatus(created.getFirst().runId(), WorkflowRunStatus.COMPLETED);
+
+        assertThat(ReconcileFixture.work(fixture.target.getUuid()).completedRevision())
+                .isZero();
+        assertThat(ReconcileFixture.owner(fixture.library().getId(), fixture.vulnerability.getId()))
+                .isNotEqualTo("INHERITED");
+    }
+
+    @Test
+    void withdrawalRunsTheRequestedRefreshAndLeavesReconciliationPending() throws Exception {
+        start(50);
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        final UUID targetUuid = fixture.target.getUuid();
+        ReconcileFixture.requestFull(targetUuid);
+        useJdbiTransaction(handle -> new AssessmentSyncWorkDao(handle).requestRefresh(targetUuid));
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "WITHDRAW");
+
+        final List<CreateWorkflowRunResponse> created = workflowTest.getEngine().createRuns(List.of(run(targetUuid)));
+        workflowTest.awaitRunStatus(created.getFirst().runId(), WorkflowRunStatus.COMPLETED);
+
+        final var work = ReconcileFixture.work(targetUuid);
+        assertThat(work.refreshCompleted()).isEqualTo(work.refreshRequested());
+        assertThat(work.completedRevision()).isZero();
     }
 
     private void start(final int reconcileBatchSize) {

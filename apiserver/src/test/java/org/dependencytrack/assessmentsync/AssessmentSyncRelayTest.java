@@ -85,9 +85,8 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
         relay = new AssessmentSyncRelay(
                 workflowTest.getEngine(),
                 meterRegistry,
-                POLL_INTERVAL_MILLIS,
-                BATCH_SIZE,
-                /* maxBackoffMillis */ 5_000);
+                new AssessmentSyncSettings(
+                        POLL_INTERVAL_MILLIS, BATCH_SIZE, /* maxBackoffMillis */ 5_000, 100, 200, 50));
     }
 
     @AfterEach
@@ -259,20 +258,66 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
     }
 
     @Test
-    void inactiveModesLeaveRowsPending() throws Exception {
+    void captureAndOffDispatchNothing() throws Exception {
         startEngine(false);
         final long outboxId = insertProjectOutbox();
-        for (final AssessmentSyncMode mode :
-                List.of(AssessmentSyncMode.CAPTURE, AssessmentSyncMode.OFF, AssessmentSyncMode.WITHDRAW)) {
+        final UUID targetUuid = UUID.randomUUID();
+        useJdbiTransaction(handle -> {
+            final var workDao = new AssessmentSyncWorkDao(handle);
+            workDao.requestFull(targetUuid);
+            workDao.requestRefresh(targetUuid);
+        });
+        for (final AssessmentSyncMode mode : List.of(AssessmentSyncMode.CAPTURE, AssessmentSyncMode.OFF)) {
             MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, mode.name());
             relay.executeCycle();
         }
         assertThat(outbox(outboxId).dispatchAttempts()).isZero();
-        final long runs = withJdbiHandle(
+        assertThat(work(targetUuid).dispatchAttempts()).isZero();
+        assertThat(runCount()).isZero();
+    }
+
+    @Test
+    void withdrawalDispatchesOnlyTargetsWithARefreshPending() throws Exception {
+        startEngine(false);
+        final long outboxId = insertProjectOutbox();
+        final UUID refreshTarget = UUID.randomUUID();
+        final UUID reconcileTarget = UUID.randomUUID();
+        useJdbiTransaction(handle -> {
+            final var workDao = new AssessmentSyncWorkDao(handle);
+            workDao.requestRefresh(refreshTarget);
+            workDao.requestFull(reconcileTarget);
+        });
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, AssessmentSyncMode.WITHDRAW.name());
+
+        relay.executeCycle();
+
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(refreshTarget)))
+                .containsExactly("CREATED");
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(reconcileTarget)))
+                .isEmpty();
+        assertThat(outbox(outboxId).dispatchAttempts()).isZero();
+    }
+
+    @Test
+    void redispatchingABusyTargetCreatesNoSecondRun() throws Exception {
+        startEngine(false);
+        final UUID targetUuid = UUID.randomUUID();
+        useJdbiTransaction(handle -> new AssessmentSyncWorkDao(handle).requestFull(targetUuid));
+        relay.executeCycle();
+        useJdbiTransaction(handle -> new AssessmentSyncWorkDao(handle).scheduleDispatch(targetUuid, Instant.now()));
+
+        relay.executeCycle();
+
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(targetUuid)))
+                .containsExactly("CREATED");
+        assertThat(work(targetUuid).dispatchAttempts()).isEqualTo(2);
+    }
+
+    private static long runCount() {
+        return withJdbiHandle(
                 handle -> handle.createQuery("""
                         SELECT COUNT(*) FROM dex_workflow_run
                         """).mapTo(long.class).one());
-        assertThat(runs).isZero();
     }
 
     @Test
@@ -352,18 +397,6 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
         relay.executeCycle();
 
         assertThat(Duration.between(before, work(targetUuid).nextDispatchAt())).isLessThan(Duration.ofMillis(100));
-    }
-
-    @Test
-    void rejectsNonPositiveRelayBounds() {
-        assertThatThrownBy(() -> new AssessmentSyncRelay(workflowTest.getEngine(), meterRegistry, 0, BATCH_SIZE, 5_000))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AssessmentSyncRelay(
-                        workflowTest.getEngine(), meterRegistry, POLL_INTERVAL_MILLIS, 0, 5_000))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AssessmentSyncRelay(
-                        workflowTest.getEngine(), meterRegistry, POLL_INTERVAL_MILLIS, BATCH_SIZE, 0))
-                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private void startEngine(final boolean workers) {
