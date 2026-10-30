@@ -21,7 +21,6 @@ package org.dependencytrack.assessmentsync;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.ComponentIdentity;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.HashAlgorithm;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.MatchResult;
-import org.dependencytrack.assessmentsync.AssessmentMatcher.SourceCandidate;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.VulnerabilityIdentity;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.VulnerabilityMatch;
 import org.dependencytrack.model.Classifier;
@@ -54,38 +53,33 @@ class AssessmentMatcherTest {
     void shouldMatchCanonicalPurlWithNamespaceVersionQualifiersAndSubpath() {
         assertThat(FULL_PURL).isNotEqualTo(FULL_PURL_REORDERED);
         final ComponentIdentity target = component(TARGET_ID, "libc6", "2.36", FULL_PURL, null);
-        final SourceCandidate source =
-                candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL_REORDERED, null, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL_REORDERED, null);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
         assertThat(result)
                 .isInstanceOfSatisfying(
                         MatchResult.Matched.class,
-                        matched -> assertThat(matched.candidate().component().uuid())
-                                .isEqualTo(SOURCE_ID));
+                        matched -> assertThat(matched.component().uuid()).isEqualTo(SOURCE_ID));
     }
 
     @Test
     void shouldMatchIdenticalVersionedPurlWithoutQualifiers() {
         final ComponentIdentity target = component(TARGET_ID, "libc6", "2.36", COORDINATES_PURL, null);
-        final SourceCandidate source =
-                candidate(SOURCE_ID, "libc6", "2.36", COORDINATES_PURL, null, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(SOURCE_ID, "libc6", "2.36", COORDINATES_PURL, null);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
         assertThat(result)
                 .isInstanceOfSatisfying(
                         MatchResult.Matched.class,
-                        matched -> assertThat(matched.candidate().component().uuid())
-                                .isEqualTo(SOURCE_ID));
+                        matched -> assertThat(matched.component().uuid()).isEqualTo(SOURCE_ID));
     }
 
     @Test
     void shouldNotMatchCoordinatesOnlyPurl() {
         final ComponentIdentity target = component(TARGET_ID, "libc6", "2.36", FULL_PURL, null);
-        final SourceCandidate coordinates =
-                candidate(SOURCE_ID, "libc6", "2.36", COORDINATES_PURL, null, AssessmentOwnership.LOCAL);
+        final ComponentIdentity coordinates = candidate(SOURCE_ID, "libc6", "2.36", COORDINATES_PURL, null);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(coordinates));
 
@@ -98,7 +92,7 @@ class AssessmentMatcherTest {
     @Test
     void shouldNotMatchNameAndVersionAlone() {
         final ComponentIdentity target = component(TARGET_ID, "libc6", "2.36", FULL_PURL, null);
-        final SourceCandidate named = candidate(SOURCE_ID, "libc6", "2.36", null, null, AssessmentOwnership.LOCAL);
+        final ComponentIdentity named = candidate(SOURCE_ID, "libc6", "2.36", null, null);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(named));
 
@@ -111,8 +105,7 @@ class AssessmentMatcherTest {
     @Test
     void shouldNotMatchVersionlessPurl() {
         final ComponentIdentity target = component(TARGET_ID, "libc6", null, VERSIONLESS_PURL, null);
-        final SourceCandidate source =
-                candidate(SOURCE_ID, "libc6", null, VERSIONLESS_PURL, null, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(SOURCE_ID, "libc6", null, VERSIONLESS_PURL, null);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
@@ -126,29 +119,21 @@ class AssessmentMatcherTest {
     void shouldMatchConcreteVersionSpecificCpeWhenPurlIsAbsent() {
         final ComponentIdentity target =
                 component(TARGET_ID, "linux_kernel", "5.14.121", null, CONCRETE_CPE, Classifier.OPERATING_SYSTEM);
-        final SourceCandidate source = candidate(
-                SOURCE_ID,
-                "linux_kernel",
-                "5.14.121",
-                null,
-                CONCRETE_CPE,
-                Classifier.OPERATING_SYSTEM,
-                AssessmentOwnership.LOCAL);
+        final ComponentIdentity source =
+                candidate(SOURCE_ID, "linux_kernel", "5.14.121", null, CONCRETE_CPE, Classifier.OPERATING_SYSTEM);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
         assertThat(result)
                 .isInstanceOfSatisfying(
                         MatchResult.Matched.class,
-                        matched -> assertThat(matched.candidate().component().uuid())
-                                .isEqualTo(SOURCE_ID));
+                        matched -> assertThat(matched.component().uuid()).isEqualTo(SOURCE_ID));
     }
 
     @Test
     void shouldRejectWildcardCpe() {
         final ComponentIdentity target = component(TARGET_ID, "product", null, null, WILDCARD_CPE);
-        final SourceCandidate source =
-                candidate(SOURCE_ID, "product", null, null, WILDCARD_CPE, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(SOURCE_ID, "product", null, null, WILDCARD_CPE);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
@@ -161,8 +146,7 @@ class AssessmentMatcherTest {
     @Test
     void shouldRejectPartialWildcardCpeVersion() {
         final ComponentIdentity target = component(TARGET_ID, "product", null, null, PARTIAL_WILDCARD_CPE);
-        final SourceCandidate source =
-                candidate(SOURCE_ID, "product", null, null, PARTIAL_WILDCARD_CPE, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(SOURCE_ID, "product", null, null, PARTIAL_WILDCARD_CPE);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
@@ -175,8 +159,7 @@ class AssessmentMatcherTest {
     @Test
     void shouldRejectUnspecifiedCpeVersion() {
         final ComponentIdentity target = component(TARGET_ID, "product", null, null, UNSPECIFIED_CPE);
-        final SourceCandidate source =
-                candidate(SOURCE_ID, "product", null, null, UNSPECIFIED_CPE, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(SOURCE_ID, "product", null, null, UNSPECIFIED_CPE);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
@@ -189,8 +172,7 @@ class AssessmentMatcherTest {
     @Test
     void shouldRejectInvalidCpe() {
         final ComponentIdentity target = component(TARGET_ID, "product", null, null, INVALID_CPE);
-        final SourceCandidate source =
-                candidate(SOURCE_ID, "product", null, null, INVALID_CPE, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(SOURCE_ID, "product", null, null, INVALID_CPE);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
@@ -203,8 +185,7 @@ class AssessmentMatcherTest {
     @Test
     void shouldConflictWhenCandidatePurlContradictsCpe() {
         final ComponentIdentity target = component(TARGET_ID, "linux_kernel", "5.14.121", null, CONCRETE_CPE);
-        final SourceCandidate source =
-                candidate(SOURCE_ID, "linux_kernel", "5.14.121", FULL_PURL, CONCRETE_CPE, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(SOURCE_ID, "linux_kernel", "5.14.121", FULL_PURL, CONCRETE_CPE);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
@@ -218,14 +199,8 @@ class AssessmentMatcherTest {
     void shouldConflictWhenSharedHashDiffers() {
         final ComponentIdentity target = component(
                 TARGET_ID, "libc6", "2.36", FULL_PURL, null, Map.of(HashAlgorithm.SHA256, "aaaaaaaaaaaaaaaa"));
-        final SourceCandidate source = candidate(
-                SOURCE_ID,
-                "libc6",
-                "2.36",
-                FULL_PURL,
-                null,
-                Map.of(HashAlgorithm.SHA256, "bbbbbbbbbbbbbbbb"),
-                AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(
+                SOURCE_ID, "libc6", "2.36", FULL_PURL, null, Map.of(HashAlgorithm.SHA256, "bbbbbbbbbbbbbbbb"));
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
@@ -239,45 +214,36 @@ class AssessmentMatcherTest {
     void shouldNotConflictWhenHashIsMissing() {
         final ComponentIdentity target = component(
                 TARGET_ID, "libc6", "2.36", FULL_PURL, null, Map.of(HashAlgorithm.SHA256, "aaaaaaaaaaaaaaaa"));
-        final SourceCandidate source = candidate(
-                SOURCE_ID,
-                "libc6",
-                "2.36",
-                FULL_PURL,
-                null,
-                Map.of(HashAlgorithm.SHA1, "bbbbbbbbbbbbbbbb"),
-                AssessmentOwnership.LOCAL);
+        final ComponentIdentity source =
+                candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null, Map.of(HashAlgorithm.SHA1, "bbbbbbbbbbbbbbbb"));
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
         assertThat(result)
                 .isInstanceOfSatisfying(
                         MatchResult.Matched.class,
-                        matched -> assertThat(matched.candidate().component().uuid())
-                                .isEqualTo(SOURCE_ID));
+                        matched -> assertThat(matched.component().uuid()).isEqualTo(SOURCE_ID));
     }
 
     @Test
     void shouldMatchFullPurlWhenComponentNameAndClassifierDiffer() {
         final ComponentIdentity target =
                 component(TARGET_ID, "GNU C Library", "2.36", FULL_PURL, null, Classifier.LIBRARY);
-        final SourceCandidate source = candidate(
-                SOURCE_ID, "libc6", "2.36-2", FULL_PURL, null, Classifier.APPLICATION, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source =
+                candidate(SOURCE_ID, "libc6", "2.36-2", FULL_PURL, null, Classifier.APPLICATION);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
         assertThat(result)
                 .isInstanceOfSatisfying(
                         MatchResult.Matched.class,
-                        matched -> assertThat(matched.candidate().component().uuid())
-                                .isEqualTo(SOURCE_ID));
+                        matched -> assertThat(matched.component().uuid()).isEqualTo(SOURCE_ID));
     }
 
     @Test
     void shouldConflictWhenCpeAgreesButComponentNameDiffers() {
         final ComponentIdentity target = component(TARGET_ID, "linux_kernel", "5.14.121", null, CONCRETE_CPE);
-        final SourceCandidate source =
-                candidate(SOURCE_ID, "other-kernel", "5.14.121", null, CONCRETE_CPE, AssessmentOwnership.LOCAL);
+        final ComponentIdentity source = candidate(SOURCE_ID, "other-kernel", "5.14.121", null, CONCRETE_CPE);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(source));
 
@@ -290,9 +256,8 @@ class AssessmentMatcherTest {
     @Test
     void shouldReturnAmbiguousComponentForDuplicateIdentity() {
         final ComponentIdentity target = component(TARGET_ID, "libc6", "2.36", FULL_PURL, null);
-        final SourceCandidate first = candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null, AssessmentOwnership.LOCAL);
-        final SourceCandidate second =
-                candidate(OTHER_ID, "libc6", "2.36", FULL_PURL_REORDERED, null, AssessmentOwnership.POLICY);
+        final ComponentIdentity first = candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null);
+        final ComponentIdentity second = candidate(OTHER_ID, "libc6", "2.36", FULL_PURL_REORDERED, null);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(first, second));
 
@@ -307,17 +272,15 @@ class AssessmentMatcherTest {
     @Test
     void shouldNotTreatDistinctIdentitiesAsAmbiguous() {
         final ComponentIdentity target = component(TARGET_ID, "libc6", "2.36", FULL_PURL, null);
-        final SourceCandidate match = candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null, AssessmentOwnership.LOCAL);
-        final SourceCandidate other =
-                candidate(OTHER_ID, "openssl", "3.0.11", COORDINATES_PURL, null, AssessmentOwnership.LOCAL);
+        final ComponentIdentity match = candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null);
+        final ComponentIdentity other = candidate(OTHER_ID, "openssl", "3.0.11", COORDINATES_PURL, null);
 
         final MatchResult result = AssessmentMatcher.match(target, List.of(other, match));
 
         assertThat(result)
                 .isInstanceOfSatisfying(
                         MatchResult.Matched.class,
-                        matched -> assertThat(matched.candidate().component().uuid())
-                                .isEqualTo(SOURCE_ID));
+                        matched -> assertThat(matched.component().uuid()).isEqualTo(SOURCE_ID));
     }
 
     @Test
@@ -360,52 +323,11 @@ class AssessmentMatcherTest {
     }
 
     @Test
-    void shouldExcludeInheritedSource() {
-        final ComponentIdentity target = component(TARGET_ID, "libc6", "2.36", FULL_PURL, null);
-        final SourceCandidate inherited =
-                candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null, AssessmentOwnership.INHERITED);
-
-        final MatchResult result = AssessmentMatcher.match(target, List.of(inherited));
-
-        assertThat(result)
-                .isInstanceOfSatisfying(
-                        MatchResult.Unavailable.class,
-                        unavailable -> assertThat(unavailable.reason()).isEqualTo(AssessmentReason.NO_AUTHORED_SOURCE));
-    }
-
-    @Test
-    void shouldIncludeLegacyNullOrigin() {
-        final ComponentIdentity target = component(TARGET_ID, "libc6", "2.36", FULL_PURL, null);
-        final SourceCandidate legacy = candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null, null);
-
-        final MatchResult result = AssessmentMatcher.match(target, List.of(legacy));
-
-        assertThat(result).isInstanceOfSatisfying(MatchResult.Matched.class, matched -> {
-            assertThat(matched.candidate().component().uuid()).isEqualTo(SOURCE_ID);
-            assertThat(matched.candidate().origin()).isNull();
-        });
-    }
-
-    @Test
-    void shouldIncludePolicyOrigin() {
-        final ComponentIdentity target = component(TARGET_ID, "libc6", "2.36", FULL_PURL, null);
-        final SourceCandidate policy =
-                candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null, AssessmentOwnership.POLICY);
-
-        final MatchResult result = AssessmentMatcher.match(target, List.of(policy));
-
-        assertThat(result)
-                .isInstanceOfSatisfying(
-                        MatchResult.Matched.class,
-                        matched -> assertThat(matched.candidate().origin()).isEqualTo(AssessmentOwnership.POLICY));
-    }
-
-    @Test
     void shouldNotMatchMarkerToADescendantPackage() {
         final ComponentIdentity marker =
                 component(TARGET_ID, "mrt.base.linux", "5.14.121", null, CONCRETE_CPE, Classifier.OPERATING_SYSTEM);
-        final SourceCandidate descendant = candidate(
-                SOURCE_ID, "libc6", "2.36", FULL_PURL, PACKAGE_CPE, Classifier.LIBRARY, AssessmentOwnership.LOCAL);
+        final ComponentIdentity descendant =
+                candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, PACKAGE_CPE, Classifier.LIBRARY);
 
         final MatchResult result = AssessmentMatcher.match(marker, List.of(descendant));
 
@@ -452,35 +374,28 @@ class AssessmentMatcherTest {
         return new ComponentIdentity(uuid, classifier, name, version, purl, cpe, hashes);
     }
 
-    private static SourceCandidate candidate(
-            final UUID uuid,
-            final String name,
-            final String version,
-            final String purl,
-            final String cpe,
-            final AssessmentOwnership origin) {
-        return new SourceCandidate(component(uuid, name, version, purl, cpe), origin);
+    private static ComponentIdentity candidate(
+            final UUID uuid, final String name, final String version, final String purl, final String cpe) {
+        return component(uuid, name, version, purl, cpe);
     }
 
-    private static SourceCandidate candidate(
+    private static ComponentIdentity candidate(
             final UUID uuid,
             final String name,
             final String version,
             final String purl,
             final String cpe,
-            final Classifier classifier,
-            final AssessmentOwnership origin) {
-        return new SourceCandidate(component(uuid, name, version, purl, cpe, classifier), origin);
+            final Classifier classifier) {
+        return component(uuid, name, version, purl, cpe, classifier);
     }
 
-    private static SourceCandidate candidate(
+    private static ComponentIdentity candidate(
             final UUID uuid,
             final String name,
             final String version,
             final String purl,
             final String cpe,
-            final Map<HashAlgorithm, String> hashes,
-            final AssessmentOwnership origin) {
-        return new SourceCandidate(component(uuid, name, version, purl, cpe, hashes), origin);
+            final Map<HashAlgorithm, String> hashes) {
+        return component(uuid, name, version, purl, cpe, hashes);
     }
 }

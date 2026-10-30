@@ -45,7 +45,7 @@ public final class AssessmentConsensus {
             Objects.requireNonNull(assessment, "source assessment must not be null");
             if (assessment.decision() == null
                     || NEUTRAL.equals(assessment.decision())
-                    || !eligible(assessment.origin())) {
+                    || !AssessmentOwnership.authored(assessment.origin())) {
                 continue;
             }
             final AssessmentDecision existing = decisions.putIfAbsent(assessment.contributor(), assessment.decision());
@@ -62,11 +62,6 @@ public final class AssessmentConsensus {
             return new Conflict(contributors);
         }
         return new Agreed(agreed, contributors);
-    }
-
-    /// {@code null} origin is a legacy row and is treated as authored.
-    static boolean eligible(final @Nullable AssessmentOwnership origin) {
-        return origin == null || origin == AssessmentOwnership.LOCAL || origin == AssessmentOwnership.POLICY;
     }
 
     private static @Nullable AssessmentDecision soleDecision(final Collection<AssessmentDecision> decisions) {
