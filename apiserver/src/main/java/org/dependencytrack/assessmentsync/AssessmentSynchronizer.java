@@ -23,7 +23,6 @@ import org.dependencytrack.assessmentsync.AssessmentConsensus.Result;
 import org.dependencytrack.assessmentsync.AssessmentConsensus.SourceAssessment;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.ComponentIdentity;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.HashAlgorithm;
-import org.dependencytrack.assessmentsync.AssessmentMatcher.SourceCandidate;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.VulnerabilityIdentity;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.SourceCommentWrite;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.SourceContributionWrite;
@@ -132,9 +131,8 @@ public final class AssessmentSynchronizer {
                     contributors(trails),
                     prepared.localComment());
             final Change change = AssessmentProjectionDiff.diff(current, consensus);
-            if (change.origin() == null
-                    || change.origin() == AssessmentOwnership.LOCAL
-                    || change.origin() == AssessmentOwnership.POLICY) {
+            final AssessmentOwnership origin = change.origin();
+            if (origin == null || AssessmentOwnership.authored(origin)) {
                 skipped++;
                 continue;
             }
@@ -145,7 +143,7 @@ public final class AssessmentSynchronizer {
             }
             final var write = new WorkerWrite(
                     prepared.analysisId(),
-                    change.origin(),
+                    origin,
                     change.decision(),
                     null,
                     null,
@@ -157,7 +155,7 @@ public final class AssessmentSynchronizer {
                 skipped++;
                 continue;
             }
-            if (change.origin() == AssessmentOwnership.NEUTRAL) {
+            if (origin == AssessmentOwnership.NEUTRAL) {
                 withdrawn++;
             } else {
                 applied++;
@@ -234,9 +232,7 @@ public final class AssessmentSynchronizer {
                             contributors(trails),
                             target.localComment()),
                     decision.consensus());
-            if (change.origin() == null
-                    || change.origin() == AssessmentOwnership.LOCAL
-                    || change.origin() == AssessmentOwnership.POLICY) {
+            if (AssessmentOwnership.authored(change.origin())) {
                 continue;
             }
             if (change.machineChanged()
@@ -264,9 +260,9 @@ public final class AssessmentSynchronizer {
         final var writesByContributor = new LinkedHashMap<Contributor, SourceContributionWrite>();
         for (final UUID sourceProjectUuid : sourcesByComponent.getOrDefault(target.componentId(), List.of())) {
             final Map<UUID, SourceComponent> components = componentsBySource.getOrDefault(sourceProjectUuid, Map.of());
-            final var candidates = new ArrayList<SourceCandidate>(components.size());
+            final var candidates = new ArrayList<ComponentIdentity>(components.size());
             for (final SourceComponent component : components.values()) {
-                candidates.add(new SourceCandidate(component.identity(), null));
+                candidates.add(component.identity());
             }
             switch (AssessmentMatcher.match(target.identity(), candidates)) {
                 case AssessmentMatcher.MatchResult.Unavailable unavailable -> {
@@ -276,7 +272,7 @@ public final class AssessmentSynchronizer {
                     }
                 }
                 case AssessmentMatcher.MatchResult.Matched matched ->
-                    addVoter(voters, writesByContributor, sourceProjectUuid, target, components, matched.candidate());
+                    addVoter(voters, writesByContributor, sourceProjectUuid, target, components, matched.component());
             }
         }
         final Result consensus = AssessmentConsensus.resolve(voters);
@@ -301,8 +297,8 @@ public final class AssessmentSynchronizer {
             final UUID sourceProjectUuid,
             final TargetRow target,
             final Map<UUID, SourceComponent> components,
-            final SourceCandidate matched) {
-        final SourceComponent component = components.get(matched.component().uuid());
+            final ComponentIdentity matched) {
+        final SourceComponent component = components.get(matched.uuid());
         if (component == null) {
             return;
         }
@@ -315,19 +311,16 @@ public final class AssessmentSynchronizer {
                 analysis.vulnerabilityUuid(), analysis.vulnerabilityId(), analysis.attributionActive());
         switch (AssessmentMatcher.matchVulnerability(target.vulnerability(), sourceVulnerability)) {
             case AssessmentMatcher.VulnerabilityMatch.Same ignored -> {
-                if (AssessmentConsensus.eligible(analysis.owner())) {
-                    final var contributor = new Contributor(
-                            sourceProjectUuid,
-                            component.identity().uuid(),
-                            analysis.vulnerabilityUuid(),
-                            analysis.analysisId());
-                    voters.add(new SourceAssessment(
-                            contributor, analysis.owner(), analysis.decision(), analysis.details()));
-                    writesByContributor.putIfAbsent(
-                            contributor,
-                            new SourceContributionWrite(
-                                    contributor, analysis.details(), List.copyOf(analysis.comments())));
-                }
+                final var contributor = new Contributor(
+                        sourceProjectUuid,
+                        component.identity().uuid(),
+                        analysis.vulnerabilityUuid(),
+                        analysis.analysisId());
+                voters.add(
+                        new SourceAssessment(contributor, analysis.owner(), analysis.decision(), analysis.details()));
+                writesByContributor.putIfAbsent(
+                        contributor,
+                        new SourceContributionWrite(contributor, analysis.details(), List.copyOf(analysis.comments())));
             }
             case AssessmentMatcher.VulnerabilityMatch.Different ignored -> {
                 // A different vulnerability row does not vote.
@@ -447,7 +440,7 @@ public final class AssessmentSynchronizer {
                         return null;
                     }
                     final AssessmentOwnership ownership = AssessmentOwnership.valueOf(owner);
-                    if (ownership == AssessmentOwnership.LOCAL || ownership == AssessmentOwnership.POLICY) {
+                    if (AssessmentOwnership.authored(ownership)) {
                         return null;
                     }
                     return new PreparedTarget(

@@ -115,7 +115,7 @@ public final class AssessmentProjectionDao {
         if (locked == null || locked.owner() == null) {
             return new WorkerWriteResult(WorkerWriteStatus.MISSING, 0);
         }
-        if (locked.owner() == AssessmentOwnership.LOCAL || locked.owner() == AssessmentOwnership.POLICY) {
+        if (AssessmentOwnership.authored(locked.owner())) {
             return new WorkerWriteResult(WorkerWriteStatus.REJECTED_OWNERSHIP, locked.decisionVersion());
         }
         if (locked.decisionVersion() != write.expectedDecisionVersion()) {
@@ -840,7 +840,7 @@ public final class AssessmentProjectionDao {
             if (expectedDecisionVersion < 0) {
                 throw new IllegalArgumentException("expectedDecisionVersion must not be negative");
             }
-            if (owner == AssessmentOwnership.LOCAL || owner == AssessmentOwnership.POLICY) {
+            if (AssessmentOwnership.authored(owner)) {
                 throw new IllegalArgumentException("Worker writes cannot assign " + owner);
             }
             requireNonNull(contributions, "contributions must not be null");

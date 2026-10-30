@@ -18,10 +18,18 @@
  */
 package org.dependencytrack.assessmentsync;
 
+import org.jspecify.annotations.Nullable;
+
 /// Who owns the structured decision stored on an analysis.
 public enum AssessmentOwnership {
     LOCAL,
     POLICY,
     INHERITED,
-    NEUTRAL
+    NEUTRAL;
+
+    /// Written by a person or a policy. A row without an origin record is legacy and counts as authored.
+    /// Synchronization never overwrites an authored row, and only authored source rows vote.
+    public static boolean authored(final @Nullable AssessmentOwnership owner) {
+        return owner == null || owner == LOCAL || owner == POLICY;
+    }
 }
