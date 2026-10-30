@@ -48,12 +48,7 @@ public final class AssessmentSyncInitializer implements ServletContextListener {
         requireNonNull(dexEngine, "dexEngine has not been initialized");
 
         LOGGER.info("Starting assessment sync relay");
-        relay = new AssessmentSyncRelay(
-                dexEngine,
-                Metrics.globalRegistry,
-                settings.pollIntervalMillis(),
-                settings.relayBatchSize(),
-                settings.maxBackoffMillis());
+        relay = new AssessmentSyncRelay(dexEngine, Metrics.globalRegistry, settings);
         AssessmentSyncMetrics.bind(Metrics.globalRegistry);
         relay.start();
     }

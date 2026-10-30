@@ -27,6 +27,8 @@ import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -111,6 +113,34 @@ class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
         assertThat(pendingSince(targetUuid)).isNotNull().isAfterOrEqualTo(firstPending);
     }
 
+    @Test
+    void finishingWithWorkStillPendingMakesTheTargetDueAgain() {
+        final UUID targetUuid = UUID.fromString("40000000-0000-4000-8000-00000000000a");
+        final Instant later = Instant.now().plus(Duration.ofHours(1));
+        useJdbiTransaction(handle -> {
+            final var dao = new AssessmentSyncWorkDao(handle);
+            dao.requestFull(targetUuid);
+            final Pass pass = requireNonNull(dao.beginOrResumePass(targetUuid));
+            dao.requestFull(targetUuid);
+            dao.requestRefresh(targetUuid);
+            dao.recordDispatchAttempt(targetUuid, later);
+            assertThat(dao.completePass(targetUuid, pass.activeRevision())).isTrue();
+        });
+        assertThat(nextDispatchAt(targetUuid)).isBeforeOrEqualTo(Instant.now());
+
+        useJdbiTransaction(handle -> {
+            final var dao = new AssessmentSyncWorkDao(handle);
+            dao.recordDispatchAttempt(targetUuid, later);
+            dao.acknowledgeRefresh(targetUuid, 0);
+        });
+        assertThat(nextDispatchAt(targetUuid)).isBeforeOrEqualTo(Instant.now());
+    }
+
+    private static Instant nextDispatchAt(final UUID targetUuid) {
+        return requireNonNull(withJdbiHandle(handle -> new AssessmentSyncWorkDao(handle).find(targetUuid)))
+                .nextDispatchAt();
+    }
+
     private static @Nullable OffsetDateTime pendingSince(final UUID targetUuid) {
         return withJdbiHandle(handle -> handle.createQuery("""
                         SELECT "PENDING_SINCE"
@@ -167,7 +197,7 @@ class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
             final WorkRow work = dao.find(targetUuid);
             assertThat(work.completedRevision()).isEqualTo(1);
             assertThat(work.requestedRevision()).isEqualTo(2);
-            assertThat(dao.pollDue(10)).extracting(WorkRow::targetUuid).containsExactly(targetUuid);
+            assertThat(dao.pollDue(10, true)).extracting(WorkRow::targetUuid).containsExactly(targetUuid);
         });
     }
 
@@ -179,7 +209,7 @@ class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
             assertThat(dao.requestFull(targetUuid)).isEqualTo(1);
             assertThat(dao.beginOrResumePass(targetUuid).activeRevision()).isEqualTo(1);
             assertThat(dao.completePass(targetUuid, 1)).isTrue();
-            assertThat(dao.pollDue(10)).isEmpty();
+            assertThat(dao.pollDue(10, true)).isEmpty();
 
             assertThat(dao.requestFull(targetUuid)).isEqualTo(2);
             final WorkRow work = dao.find(targetUuid);
@@ -187,7 +217,7 @@ class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
             assertThat(work.requestedRevision()).isEqualTo(2);
             assertThat(work.fullRevision()).isEqualTo(2);
             assertThat(work.activeRevision()).isNull();
-            assertThat(dao.pollDue(10)).extracting(WorkRow::targetUuid).containsExactly(targetUuid);
+            assertThat(dao.pollDue(10, true)).extracting(WorkRow::targetUuid).containsExactly(targetUuid);
 
             final Pass next = dao.beginOrResumePass(targetUuid);
             assertThat(next.activeRevision()).isEqualTo(2);

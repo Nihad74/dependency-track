@@ -37,6 +37,19 @@ class AssessmentSyncSettingsTest {
                 .hasMessageContaining("ACTIV");
     }
 
+    @Test
+    void rejectsNonPositiveRelayBounds() {
+        assertThatThrownBy(() -> new AssessmentSyncSettings(0, 50, 5_000, 100, 200, 50))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AssessmentSyncSettings(1_000, 0, 5_000, 100, 200, 50))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AssessmentSyncSettings(1_000, 50, 0, 100, 200, 50))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AssessmentSyncSettings(1_000, 50, 500, 100, 200, 50))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(ConfigKeys.ASSESSMENT_SYNC_RELAY_MAX_BACKOFF_MS);
+    }
+
     private static Config configWithMode(final String mode) {
         return new SmallRyeConfigBuilder()
                 .withDefaultValue(ConfigKeys.ASSESSMENT_SYNC_MODE, mode)

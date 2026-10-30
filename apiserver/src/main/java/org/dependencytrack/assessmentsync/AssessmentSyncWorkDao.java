@@ -27,12 +27,12 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.assessmentsync.DaoSupport.nullableLong;
 import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
-import static org.dependencytrack.assessmentsync.DaoSupport.readNullableInstant;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
 /// Durable per-target reconciliation and refresh revisions. Mutators lock the work row first.
@@ -53,8 +53,7 @@ public final class AssessmentSyncWorkDao {
             rs.getLong("REFRESH_REQUESTED"),
             rs.getLong("REFRESH_COMPLETED"),
             readInstant(rs, "NEXT_DISPATCH_AT"),
-            rs.getInt("DISPATCH_ATTEMPTS"),
-            readNullableInstant(rs, "LAST_SUCCESS_AT"));
+            rs.getInt("DISPATCH_ATTEMPTS"));
 
     private final Handle handle;
 
@@ -252,8 +251,13 @@ public final class AssessmentSyncWorkDao {
                              , "ACTIVE_FULL" = FALSE
                              , "CURSOR_COMPONENT_ID" = NULL
                              , "CURSOR_VULNERABILITY_ID" = NULL
-                             , "LAST_SUCCESS_AT" = now()
                              , "DISPATCH_ATTEMPTS" = 0
+                             , "NEXT_DISPATCH_AT" = CASE
+                                 WHEN "REQUESTED_REVISION" = :activeRevision
+                                  AND "REFRESH_COMPLETED" = "REFRESH_REQUESTED"
+                                 THEN "NEXT_DISPATCH_AT"
+                                 ELSE LEAST("NEXT_DISPATCH_AT", date_trunc('milliseconds', clock_timestamp()))
+                               END
                              , "PENDING_SINCE" = CASE
                                  WHEN "REQUESTED_REVISION" = :activeRevision
                                   AND "REFRESH_COMPLETED" = "REFRESH_REQUESTED"
@@ -293,7 +297,6 @@ public final class AssessmentSyncWorkDao {
                              , "ACTIVE_FULL" = FALSE
                              , "CURSOR_COMPONENT_ID" = NULL
                              , "CURSOR_VULNERABILITY_ID" = NULL
-                             , "LAST_SUCCESS_AT" = now()
                              , "DISPATCH_ATTEMPTS" = 0
                              , "PENDING_SINCE" = NULL
                          WHERE "TARGET_UUID" = :targetUuid
@@ -346,6 +349,15 @@ public final class AssessmentSyncWorkDao {
         return handle.createQuery(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_WORK"
                            SET "DISPATCH_ATTEMPTS" = 0
+                             , "NEXT_DISPATCH_AT" = CASE
+                                 WHEN "COMPLETED_REVISION" = "REQUESTED_REVISION"
+                                  AND LEAST(
+                                        "REFRESH_REQUESTED"
+                                      , GREATEST("REFRESH_COMPLETED", :capturedRefresh)
+                                      ) = "REFRESH_REQUESTED"
+                                 THEN "NEXT_DISPATCH_AT"
+                                 ELSE LEAST("NEXT_DISPATCH_AT", date_trunc('milliseconds', clock_timestamp()))
+                               END
                              , "REFRESH_COMPLETED" = LEAST(
                                  "REFRESH_REQUESTED"
                                , GREATEST("REFRESH_COMPLETED", :capturedRefresh)
@@ -368,8 +380,9 @@ public final class AssessmentSyncWorkDao {
                 .one();
     }
 
-    /// Locks due rows whose reconciliation or refresh is unfinished.
-    public List<WorkRow> pollDue(final int limit) {
+    /// Locks due rows whose reconciliation or refresh is unfinished. Without {@code includeReconciliation},
+    /// only rows with a refresh pending are returned.
+    public List<WorkRow> pollDue(final int limit, final boolean includeReconciliation) {
         requireTransaction(handle);
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be positive");
@@ -377,7 +390,7 @@ public final class AssessmentSyncWorkDao {
         return handle.createQuery(selectWorkSql() + /* language=SQL */ """
                          WHERE "NEXT_DISPATCH_AT" <= clock_timestamp()
                            AND (
-                             "COMPLETED_REVISION" < "REQUESTED_REVISION"
+                             (:includeReconciliation AND "COMPLETED_REVISION" < "REQUESTED_REVISION")
                              OR "REFRESH_COMPLETED" < "REFRESH_REQUESTED"
                            )
                          ORDER BY "NEXT_DISPATCH_AT", "TARGET_UUID"
@@ -385,27 +398,39 @@ public final class AssessmentSyncWorkDao {
                            FOR UPDATE SKIP LOCKED
                         """)
                 .bind("limit", limit)
+                .bind("includeReconciliation", includeReconciliation)
                 .map(WORK_ROW)
                 .list();
     }
 
     /// Pushes the next dispatch back. Attempts reset when a pass or refresh makes progress.
     public boolean recordDispatchAttempt(final UUID targetUuid, final Instant nextDispatchAt) {
-        requireNonNull(targetUuid, "targetUuid must not be null");
-        requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
-        requireTransaction(handle);
-        final int updated = handle.createUpdate(/* language=SQL */ """
-                        UPDATE "ASSESSMENT_SYNC_WORK"
-                           SET "NEXT_DISPATCH_AT" = :nextDispatchAt
-                             , "DISPATCH_ATTEMPTS" = "DISPATCH_ATTEMPTS" + 1
-                         WHERE "TARGET_UUID" = :targetUuid
-                        """)
-                .bind("targetUuid", targetUuid)
-                .bind("nextDispatchAt", nextDispatchAt)
-                .execute();
-        return updated == 1;
+        return recordDispatchAttempts(Map.of(targetUuid, nextDispatchAt)) == 1;
     }
 
+    /// Records one dispatch attempt per target in one statement.
+    public int recordDispatchAttempts(final Map<UUID, Instant> nextDispatchAtByTarget) {
+        requireTransaction(handle);
+        if (nextDispatchAtByTarget.isEmpty()) {
+            return 0;
+        }
+        final UUID[] targetUuids = nextDispatchAtByTarget.keySet().toArray(UUID[]::new);
+        final long[] nextDispatchAtMillis = nextDispatchAtByTarget.values().stream()
+                .mapToLong(Instant::toEpochMilli)
+                .toArray();
+        return handle.createUpdate(/* language=SQL */ """
+                        UPDATE "ASSESSMENT_SYNC_WORK" AS w
+                           SET "NEXT_DISPATCH_AT" = to_timestamp(t.next_dispatch_at_ms / 1000.0)
+                             , "DISPATCH_ATTEMPTS" = w."DISPATCH_ATTEMPTS" + 1
+                          FROM UNNEST(:targetUuids, :nextDispatchAtMillis) AS t(target_uuid, next_dispatch_at_ms)
+                         WHERE w."TARGET_UUID" = t.target_uuid
+                        """)
+                .bind("targetUuids", targetUuids)
+                .bind("nextDispatchAtMillis", nextDispatchAtMillis)
+                .execute();
+    }
+
+    /// Moves the next dispatch without counting an attempt, for work deferred on purpose.
     public boolean scheduleDispatch(final UUID targetUuid, final Instant nextDispatchAt) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
@@ -473,7 +498,6 @@ public final class AssessmentSyncWorkDao {
                      , "REFRESH_COMPLETED"
                      , "NEXT_DISPATCH_AT"
                      , "DISPATCH_ATTEMPTS"
-                     , "LAST_SUCCESS_AT"
                   FROM "ASSESSMENT_SYNC_WORK"
                 """;
     }
@@ -500,8 +524,7 @@ public final class AssessmentSyncWorkDao {
             long refreshRequested,
             long refreshCompleted,
             Instant nextDispatchAt,
-            int dispatchAttempts,
-            @Nullable Instant lastSuccessAt) {
+            int dispatchAttempts) {
 
         public WorkRow {
             requireNonNull(targetUuid, "targetUuid must not be null");

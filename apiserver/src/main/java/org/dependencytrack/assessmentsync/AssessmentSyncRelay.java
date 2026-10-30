@@ -44,6 +44,7 @@ import java.io.Closeable;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -53,7 +54,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static io.github.resilience4j.core.IntervalFunction.ofExponentialRandomBackoff;
-import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 
 /// Dispatches due outbox rows and unfinished target work. Rows stay until activities finish them.
@@ -63,6 +63,9 @@ final class AssessmentSyncRelay implements Closeable {
     private static final String EXECUTOR_NAME = "AssessmentSyncRelay";
     private static final String OUTCOME_TAG = "outcome";
     private static final String SCOPE_TAG = "scope";
+
+    /// Distinct from the notification relay lock.
+    private static final long RELAY_ADVISORY_LOCK_ID = 418263950172846531L;
 
     private final DexEngine dexEngine;
     private final MeterRegistry meterRegistry;
@@ -75,28 +78,13 @@ final class AssessmentSyncRelay implements Closeable {
     private @Nullable ScheduledExecutorService executorService;
 
     AssessmentSyncRelay(
-            final DexEngine dexEngine,
-            final MeterRegistry meterRegistry,
-            final long pollIntervalMillis,
-            final int batchSize,
-            final long maxBackoffMillis) {
-        this.dexEngine = requireNonNull(dexEngine, "dexEngine must not be null");
-        this.meterRegistry = requireNonNull(meterRegistry, "meterRegistry must not be null");
-        if (pollIntervalMillis <= 0) {
-            throw new IllegalArgumentException("pollIntervalMillis must be positive");
-        }
-        if (batchSize <= 0) {
-            throw new IllegalArgumentException("batchSize must be positive");
-        }
-        if (maxBackoffMillis <= 0) {
-            throw new IllegalArgumentException("maxBackoffMillis must be positive");
-        }
-        if (maxBackoffMillis < pollIntervalMillis) {
-            throw new IllegalArgumentException("maxBackoffMillis must be greater than or equal to pollIntervalMillis");
-        }
-        this.pollIntervalMillis = pollIntervalMillis;
-        this.batchSize = batchSize;
-        this.backoffIntervalFunction = ofExponentialRandomBackoff(pollIntervalMillis, 1.5, maxBackoffMillis);
+            final DexEngine dexEngine, final MeterRegistry meterRegistry, final AssessmentSyncSettings settings) {
+        this.dexEngine = dexEngine;
+        this.meterRegistry = meterRegistry;
+        this.pollIntervalMillis = settings.pollIntervalMillis();
+        this.batchSize = settings.relayBatchSize();
+        this.backoffIntervalFunction =
+                ofExponentialRandomBackoff(settings.pollIntervalMillis(), 1.5, settings.maxBackoffMillis());
         this.cycleLatencyTimer = Timer.builder("dt.assessment_sync.relay.cycle.latency")
                 .description("Latency of an assessment sync relay cycle")
                 .withRegistry(meterRegistry);
@@ -134,7 +122,7 @@ final class AssessmentSyncRelay implements Closeable {
         final Timer.Sample cycleLatencySample = Timer.start();
         final CycleOutcome outcome;
         try {
-            outcome = dispatchBoth();
+            outcome = dispatchDue();
         } catch (InterruptedException e) {
             cycleLatencySample.stop(cycleLatencyTimer.withTag(OUTCOME_TAG, CycleOutcome.SKIPPED.name()));
             throw e;
@@ -172,16 +160,20 @@ final class AssessmentSyncRelay implements Closeable {
         }
     }
 
-    private CycleOutcome dispatchBoth() throws InterruptedException {
+    /// Active mode dispatches outbox rows and all target work. Withdrawal dispatches only targets with a
+    /// refresh pending, so policy and metrics catch up with withdrawn rows. Other modes dispatch nothing.
+    private CycleOutcome dispatchDue() throws InterruptedException {
         throwIfInterrupted();
-        if (!AssessmentSyncMode.current().appliesAssessments()) {
-            LOGGER.debug("Assessment sync relay skipped because mode is {}", AssessmentSyncMode.current());
+        final AssessmentSyncMode mode = AssessmentSyncMode.current();
+        final boolean active = mode.appliesAssessments();
+        if (!active && mode != AssessmentSyncMode.WITHDRAW) {
+            LOGGER.debug("Assessment sync relay skipped because mode is {}", mode);
             return CycleOutcome.SKIPPED;
         }
-        final Scan outbox = dispatchOutbox();
+        final DispatchResult outbox = active ? dispatchOutbox() : DispatchResult.skipped();
         recordDispatches(DispatchScope.OUTBOX, outbox);
         throwIfInterrupted();
-        final Scan work = dispatchWork();
+        final DispatchResult work = dispatchWork(active);
         recordDispatches(DispatchScope.WORK, work);
         if (outbox.skippedLock() && work.skippedLock()) {
             return CycleOutcome.SKIPPED;
@@ -194,16 +186,16 @@ final class AssessmentSyncRelay implements Closeable {
         cycleLatencySample.stop(cycleLatencyTimer.withTag(OUTCOME_TAG, outcome.name()));
     }
 
-    private Scan dispatchOutbox() {
+    private DispatchResult dispatchOutbox() {
         return inJdbiTransaction(handle -> {
-            if (!AdvisoryLocks.tryAcquire(handle, AssessmentSyncSettings.RELAY_ADVISORY_LOCK_ID)) {
+            if (!AdvisoryLocks.tryAcquire(handle, RELAY_ADVISORY_LOCK_ID)) {
                 LOGGER.debug("Assessment sync relay lock is already held");
-                return Scan.skipped();
+                return DispatchResult.skipped();
             }
             final var outboxDao = new AssessmentSyncOutboxDao(handle);
             final List<OutboxEntry> due = outboxDao.pollDue(batchSize);
             final var requests = new ArrayList<CreateWorkflowRunRequest<?>>(due.size());
-            final var pending = new ArrayList<OutboxDispatch>(due.size());
+            final var pending = new ArrayList<Dispatch<Long>>(due.size());
             for (final OutboxEntry entry : due) {
                 final String instanceId = ExpandAssessmentChangesWorkflow.instanceId(entry.id());
                 final var request = new CreateWorkflowRunRequest<>(ExpandAssessmentChangesWorkflow.class)
@@ -213,33 +205,32 @@ final class AssessmentSyncRelay implements Closeable {
                                 .setOutboxId(entry.id())
                                 .build());
                 requests.add(request);
-                pending.add(new OutboxDispatch(entry.id(), entry.dispatchAttempts(), request.requestId()));
+                pending.add(new Dispatch<>(entry.id(), entry.dispatchAttempts(), request.requestId()));
             }
             final Set<UUID> createdRequestIds = createdRequestIds(requests);
+            final var nextDispatchAts = new LinkedHashMap<Long, Instant>(pending.size());
             var created = 0;
-            var active = 0;
-            for (final OutboxDispatch dispatch : pending) {
-                outboxDao.recordDispatchAttempt(dispatch.id(), nextDispatchAt(dispatch.attempts()));
+            for (final Dispatch<Long> dispatch : pending) {
+                nextDispatchAts.put(dispatch.key(), nextDispatchAt(dispatch.attempts()));
                 if (createdRequestIds.contains(dispatch.requestId())) {
                     created++;
-                } else {
-                    active++;
                 }
             }
-            return Scan.completed(created, active);
+            outboxDao.recordDispatchAttempts(nextDispatchAts);
+            return DispatchResult.completed(created, pending.size() - created);
         });
     }
 
-    private Scan dispatchWork() {
+    private DispatchResult dispatchWork(final boolean includeReconciliation) {
         return inJdbiTransaction(handle -> {
-            if (!AdvisoryLocks.tryAcquire(handle, AssessmentSyncSettings.RELAY_ADVISORY_LOCK_ID)) {
+            if (!AdvisoryLocks.tryAcquire(handle, RELAY_ADVISORY_LOCK_ID)) {
                 LOGGER.debug("Assessment sync relay lock is already held");
-                return Scan.skipped();
+                return DispatchResult.skipped();
             }
             final var workDao = new AssessmentSyncWorkDao(handle);
-            final List<WorkRow> due = workDao.pollDue(batchSize);
+            final List<WorkRow> due = workDao.pollDue(batchSize, includeReconciliation);
             final var requests = new ArrayList<CreateWorkflowRunRequest<?>>(due.size());
-            final var pending = new ArrayList<WorkDispatch>(due.size());
+            final var pending = new ArrayList<Dispatch<UUID>>(due.size());
             for (final WorkRow row : due) {
                 final String instanceId = SynchronizeProjectAssessmentsWorkflow.instanceId(row.targetUuid());
                 final var request = new CreateWorkflowRunRequest<>(SynchronizeProjectAssessmentsWorkflow.class)
@@ -249,21 +240,20 @@ final class AssessmentSyncRelay implements Closeable {
                                 .setProjectUuid(row.targetUuid().toString())
                                 .build());
                 requests.add(request);
-                pending.add(new WorkDispatch(row.targetUuid(), row.dispatchAttempts(), request.requestId()));
+                pending.add(new Dispatch<>(row.targetUuid(), row.dispatchAttempts(), request.requestId()));
             }
             final Set<UUID> createdRequestIds = createdRequestIds(requests);
+            final var nextDispatchAts = new LinkedHashMap<UUID, Instant>(pending.size());
             var created = 0;
-            var active = 0;
-            for (final WorkDispatch dispatch : pending) {
-                // The run being accepted is not acknowledgement. Reconciliation completes the work row.
-                workDao.recordDispatchAttempt(dispatch.targetUuid(), nextDispatchAt(dispatch.attempts()));
+            for (final Dispatch<UUID> dispatch : pending) {
+                nextDispatchAts.put(dispatch.key(), nextDispatchAt(dispatch.attempts()));
                 if (createdRequestIds.contains(dispatch.requestId())) {
                     created++;
-                } else {
-                    active++;
                 }
             }
-            return Scan.completed(created, active);
+            // The run being accepted is not acknowledgement. Reconciliation completes the work row.
+            workDao.recordDispatchAttempts(nextDispatchAts);
+            return DispatchResult.completed(created, pending.size() - created);
         });
     }
 
@@ -283,7 +273,7 @@ final class AssessmentSyncRelay implements Closeable {
         return Instant.now().plusMillis(backoffIntervalFunction.apply(attemptsSoFar + 1));
     }
 
-    private void recordDispatches(final DispatchScope scope, final Scan scan) {
+    private void recordDispatches(final DispatchScope scope, final DispatchResult scan) {
         increment(DispatchOutcome.CREATED, scope, scan.created());
         increment(DispatchOutcome.ACTIVE, scope, scan.active());
     }
@@ -319,18 +309,17 @@ final class AssessmentSyncRelay implements Closeable {
         WORK
     }
 
-    private record Scan(boolean skippedLock, int created, int active) {
+    private record DispatchResult(boolean skippedLock, int created, int active) {
 
-        private static Scan skipped() {
-            return new Scan(true, 0, 0);
+        private static DispatchResult skipped() {
+            return new DispatchResult(true, 0, 0);
         }
 
-        private static Scan completed(final int created, final int active) {
-            return new Scan(false, created, active);
+        private static DispatchResult completed(final int created, final int active) {
+            return new DispatchResult(false, created, active);
         }
     }
 
-    private record OutboxDispatch(long id, int attempts, UUID requestId) {}
-
-    private record WorkDispatch(UUID targetUuid, int attempts, UUID requestId) {}
+    /// One submitted run. {@code key} is the outbox id or the target UUID.
+    private record Dispatch<K>(K key, int attempts, UUID requestId) {}
 }

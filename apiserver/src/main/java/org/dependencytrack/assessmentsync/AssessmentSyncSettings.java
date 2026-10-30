@@ -30,9 +30,6 @@ public record AssessmentSyncSettings(
         int reconcileBatchSize,
         int maxBatches) {
 
-    /// Distinct from the notification relay lock.
-    public static final long RELAY_ADVISORY_LOCK_ID = 418263950172846531L;
-
     public AssessmentSyncSettings {
         requirePositive(pollIntervalMillis, ConfigKeys.ASSESSMENT_SYNC_RELAY_POLL_INTERVAL_MS);
         requirePositive(relayBatchSize, ConfigKeys.ASSESSMENT_SYNC_RELAY_BATCH_SIZE);
@@ -50,22 +47,16 @@ public record AssessmentSyncSettings(
     public static AssessmentSyncSettings read(final Config config) {
         AssessmentSyncMode.from(config);
         return new AssessmentSyncSettings(
-                positiveLong(config, ConfigKeys.ASSESSMENT_SYNC_RELAY_POLL_INTERVAL_MS),
-                positiveInt(config, ConfigKeys.ASSESSMENT_SYNC_RELAY_BATCH_SIZE),
-                positiveLong(config, ConfigKeys.ASSESSMENT_SYNC_RELAY_MAX_BACKOFF_MS),
-                positiveInt(config, ConfigKeys.ASSESSMENT_SYNC_FANOUT_BATCH_SIZE),
-                positiveInt(config, ConfigKeys.ASSESSMENT_SYNC_RECONCILE_BATCH_SIZE),
-                positiveInt(config, ConfigKeys.ASSESSMENT_SYNC_WORKFLOW_MAX_BATCHES));
+                config.getValue(ConfigKeys.ASSESSMENT_SYNC_RELAY_POLL_INTERVAL_MS, long.class),
+                config.getValue(ConfigKeys.ASSESSMENT_SYNC_RELAY_BATCH_SIZE, int.class),
+                config.getValue(ConfigKeys.ASSESSMENT_SYNC_RELAY_MAX_BACKOFF_MS, long.class),
+                config.getValue(ConfigKeys.ASSESSMENT_SYNC_FANOUT_BATCH_SIZE, int.class),
+                config.getValue(ConfigKeys.ASSESSMENT_SYNC_RECONCILE_BATCH_SIZE, int.class),
+                config.getValue(ConfigKeys.ASSESSMENT_SYNC_WORKFLOW_MAX_BATCHES, int.class));
     }
 
     public static int positiveInt(final Config config, final String key) {
         final int value = config.getValue(key, int.class);
-        requirePositive(value, key);
-        return value;
-    }
-
-    private static long positiveLong(final Config config, final String key) {
-        final long value = config.getValue(key, long.class);
         requirePositive(value, key);
         return value;
     }
