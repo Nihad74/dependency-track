@@ -20,19 +20,14 @@ package org.dependencytrack.assessmentsync;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.dependencytrack.assessmentsync.AssessmentEmbeddingDao.MarkerMembership;
-import org.dependencytrack.assessmentsync.AssessmentGraph.Edge;
-import org.dependencytrack.assessmentsync.AssessmentGraph.Graph;
-import org.dependencytrack.assessmentsync.AssessmentGraph.Node;
 import org.dependencytrack.assessmentsync.AssessmentSourceResolver.Identity;
 import org.dependencytrack.common.Mappers;
 import org.dependencytrack.model.Classifier;
 import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.Nullable;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -95,12 +90,54 @@ public final class AssessmentEmbeddingIndexer {
     }
 
     private @Nullable LoadedGraph loadGraph(final UUID projectUuid) {
-        requireNonNull(projectUuid, "projectUuid must not be null");
         if (!handle.isInTransaction()) {
             throw new IllegalStateException("Embedding rebuild requires an active transaction");
         }
+        final ProjectRow project = loadProject(projectUuid);
+        if (project == null) {
+            return null;
+        }
+        final List<ComponentRow> components = loadComponents(project.id());
 
-        final ProjectRow project = handle.createQuery(/* language=SQL */ """
+        final var idByUuid = new HashMap<UUID, Long>(components.size());
+        for (final ComponentRow component : components) {
+            idByUuid.put(component.uuid(), component.id());
+        }
+        final var childrenById = new HashMap<Long, List<Long>>(components.size());
+        for (final ComponentRow component : components) {
+            childrenById.put(component.id(), componentIds(component.directDependencies(), idByUuid));
+        }
+        final var graph = new AssessmentGraph(childrenById);
+        final Set<Long> reachable = graph.reachableFrom(componentIds(project.directDependencies(), idByUuid));
+
+        final var markers = new ArrayList<ComponentRow>();
+        for (final ComponentRow component : components) {
+            if (reachable.contains(component.id()) && isMarker(component)) {
+                markers.add(component);
+            }
+        }
+        if (markers.isEmpty()) {
+            return new LoadedGraph(project.id(), List.of());
+        }
+
+        final Map<Identity, UUID> sourceByIdentity = resolveSources(project.uuid(), markers);
+        final var membership = new ArrayList<MarkerMembership>(markers.size());
+        for (final ComponentRow marker : markers) {
+            final String markerName = requireNonNull(marker.name());
+            final String markerVersion = requireNonNull(marker.version());
+            // No source when the identity is ambiguous, unknown, or blocked by the access gate.
+            membership.add(new MarkerMembership(
+                    marker.id(),
+                    markerName,
+                    markerVersion,
+                    sourceByIdentity.get(new Identity(markerName, markerVersion)),
+                    List.copyOf(graph.descendants(marker.id()))));
+        }
+        return new LoadedGraph(project.id(), membership);
+    }
+
+    private @Nullable ProjectRow loadProject(final UUID projectUuid) {
+        return handle.createQuery(/* language=SQL */ """
                         SELECT "ID"
                              , "UUID"
                              , "DIRECT_DEPENDENCIES"
@@ -112,11 +149,10 @@ public final class AssessmentEmbeddingIndexer {
                         rs.getLong("ID"), rs.getObject("UUID", UUID.class), rs.getString("DIRECT_DEPENDENCIES")))
                 .findOne()
                 .orElse(null);
-        if (project == null || project.uuid() == null) {
-            return null;
-        }
+    }
 
-        final List<ComponentRow> components = handle.createQuery(/* language=SQL */ """
+    private List<ComponentRow> loadComponents(final long projectId) {
+        return handle.createQuery(/* language=SQL */ """
                         SELECT "ID"
                              , "UUID"
                              , "NAME"
@@ -127,7 +163,7 @@ public final class AssessmentEmbeddingIndexer {
                          WHERE "PROJECT_ID" = :projectId
                          ORDER BY "ID"
                         """)
-                .bind("projectId", project.id())
+                .bind("projectId", projectId)
                 .map((rs, ctx) -> new ComponentRow(
                         rs.getLong("ID"),
                         rs.getObject("UUID", UUID.class),
@@ -136,58 +172,18 @@ public final class AssessmentEmbeddingIndexer {
                         rs.getString("CLASSIFIER"),
                         rs.getString("DIRECT_DEPENDENCIES")))
                 .list();
+    }
 
-        final var nodes = new LinkedHashMap<Long, ComponentRow>();
-        final var idByUuid = new HashMap<UUID, Long>();
-        for (final ComponentRow component : components) {
-            if (component.uuid() == null || component.id() <= 0) {
-                continue;
-            }
-            nodes.put(component.id(), component);
-            idByUuid.put(component.uuid(), component.id());
-        }
-
-        final var graphNodes = new HashMap<Long, Node>(nodes.size());
-        final var edges = new ArrayList<Edge>();
-        for (final ComponentRow component : nodes.values()) {
-            graphNodes.put(component.id(), new Node(component.id(), project.uuid(), false));
-            for (final UUID dependencyUuid : dependencyUuids(component.directDependencies())) {
-                final Long childId = idByUuid.get(dependencyUuid);
-                if (childId != null) {
-                    edges.add(new Edge(project.uuid(), component.id(), childId));
-                }
+    /// Component ids named by a {@code DIRECT_DEPENDENCIES} document. UUIDs of other projects are dropped.
+    private static List<Long> componentIds(final @Nullable String directDependencies, final Map<UUID, Long> idByUuid) {
+        final var ids = new ArrayList<Long>();
+        for (final UUID uuid : dependencyUuids(directDependencies)) {
+            final Long id = idByUuid.get(uuid);
+            if (id != null) {
+                ids.add(id);
             }
         }
-        final var graph = new Graph(project.uuid(), graphNodes, edges);
-
-        final Set<Long> reachable = reachableComponentIds(project, idByUuid, nodes);
-        final var markers = new ArrayList<ComponentRow>();
-        for (final long componentId : reachable) {
-            final ComponentRow component = nodes.get(componentId);
-            if (component != null && isMarker(component)) {
-                markers.add(component);
-            }
-        }
-
-        if (markers.isEmpty()) {
-            return new LoadedGraph(project.id(), List.of());
-        }
-
-        final Map<Identity, UUID> sourceByIdentity = resolveSources(project.uuid(), markers);
-        final var membership = new ArrayList<MarkerMembership>(markers.size());
-        for (final ComponentRow marker : markers) {
-            final String markerName = requireNonNull(marker.name());
-            final String markerVersion = requireNonNull(marker.version());
-            final Set<Long> descendants = AssessmentGraph.descendants(graph, marker.id());
-            // No source when the identity is ambiguous, unknown, or blocked by the access gate.
-            membership.add(new MarkerMembership(
-                    marker.id(),
-                    markerName,
-                    markerVersion,
-                    sourceByIdentity.get(new Identity(markerName, markerVersion)),
-                    List.copyOf(descendants)));
-        }
-        return new LoadedGraph(project.id(), membership);
+        return ids;
     }
 
     private Set<Long> indexedMarkerIds(final long projectId) {
@@ -209,32 +205,6 @@ public final class AssessmentEmbeddingIndexer {
                 && component.version() != null
                 && !component.name().isBlank()
                 && !component.version().isBlank();
-    }
-
-    private static Set<Long> reachableComponentIds(
-            final ProjectRow project, final Map<UUID, Long> idByUuid, final Map<Long, ComponentRow> nodes) {
-        final var reachable = new LinkedHashSet<Long>();
-        final var pending = new ArrayDeque<Long>();
-        for (final UUID rootUuid : dependencyUuids(project.directDependencies())) {
-            final Long rootId = idByUuid.get(rootUuid);
-            if (rootId != null && reachable.add(rootId)) {
-                pending.add(rootId);
-            }
-        }
-        while (!pending.isEmpty()) {
-            final long current = pending.removeFirst();
-            final ComponentRow component = nodes.get(current);
-            if (component == null) {
-                continue;
-            }
-            for (final UUID dependencyUuid : dependencyUuids(component.directDependencies())) {
-                final Long childId = idByUuid.get(dependencyUuid);
-                if (childId != null && reachable.add(childId)) {
-                    pending.add(childId);
-                }
-            }
-        }
-        return reachable;
     }
 
     private Map<Identity, UUID> resolveSources(final UUID targetUuid, final List<ComponentRow> markers) {
@@ -275,12 +245,11 @@ public final class AssessmentEmbeddingIndexer {
 
     private record LoadedGraph(long projectId, List<MarkerMembership> membership) {}
 
-    private record ProjectRow(
-            long id, @Nullable UUID uuid, @Nullable String directDependencies) {}
+    private record ProjectRow(long id, UUID uuid, @Nullable String directDependencies) {}
 
     private record ComponentRow(
             long id,
-            @Nullable UUID uuid,
+            UUID uuid,
             @Nullable String name,
             @Nullable String version,
             @Nullable String classifier,

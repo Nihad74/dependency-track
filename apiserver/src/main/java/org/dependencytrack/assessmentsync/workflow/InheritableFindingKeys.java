@@ -20,6 +20,7 @@ package org.dependencytrack.assessmentsync.workflow;
 
 import org.dependencytrack.model.FindingKey;
 import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.statement.Query;
 import org.jspecify.annotations.Nullable;
 
 import java.util.List;
@@ -30,14 +31,26 @@ final class InheritableFindingKeys {
 
     private InheritableFindingKeys() {}
 
+    /// Keyset predicate "after the cursor" over the given columns. Bind it with {@link #bindCursor}.
+    static String afterCursor(final String componentColumn, final String vulnerabilityColumn) {
+        return """
+                (:hasCursor = FALSE
+                 OR %1$s > :cursorComponentId
+                 OR (%1$s = :cursorComponentId AND %2$s > :cursorVulnerabilityId))\
+                """.formatted(componentColumn, vulnerabilityColumn);
+    }
+
+    static Query bindCursor(final Query query, final @Nullable FindingKey cursor) {
+        return query.bind("hasCursor", cursor != null)
+                .bind("cursorComponentId", cursor == null ? 0L : cursor.componentId())
+                .bind("cursorVulnerabilityId", cursor == null ? 0L : cursor.vulnDbId());
+    }
+
     static List<FindingKey> page(
-            final Handle handle,
-            final long projectId,
-            final @Nullable Long cursorComponentId,
-            final @Nullable Long cursorVulnerabilityId,
-            final int limit) {
-        final boolean hasCursor = cursorComponentId != null && cursorVulnerabilityId != null;
-        return handle.createQuery(/* language=SQL */ """
+            final Handle handle, final long projectId, final @Nullable FindingKey cursor, final int limit) {
+        return bindCursor(
+                        handle.createQuery(
+                                /* language=SQL */ """
                         SELECT component_id
                              , vulnerability_id
                           FROM (
@@ -64,19 +77,12 @@ final class InheritableFindingKeys {
                                    AND o."OWNER" = 'INHERITED'
                                    AND a."COMPONENT_ID" IS NOT NULL
                                ) AS keys
-                         WHERE :hasCursor = FALSE
-                            OR component_id > :cursorComponentId
-                            OR (
-                              component_id = :cursorComponentId
-                              AND vulnerability_id > :cursorVulnerabilityId
-                            )
+                         WHERE %s
                          ORDER BY component_id, vulnerability_id
                          LIMIT :limit
-                        """)
+                        """.formatted(afterCursor("component_id", "vulnerability_id"))),
+                        cursor)
                 .bind("projectId", projectId)
-                .bind("hasCursor", hasCursor)
-                .bind("cursorComponentId", cursorComponentId == null ? 0L : cursorComponentId)
-                .bind("cursorVulnerabilityId", cursorVulnerabilityId == null ? 0L : cursorVulnerabilityId)
                 .bind("limit", limit)
                 .map((rs, ctx) -> new FindingKey(rs.getLong("component_id"), rs.getLong("vulnerability_id")))
                 .list();
