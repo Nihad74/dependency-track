@@ -49,6 +49,7 @@ import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.persistence.jdbi.FindingDao;
 import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.dependencytrack.resources.v1.vo.AnalysisTrailResponse;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -171,7 +172,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
 
         final Principal plain = userPrincipal(outsider);
         final List<Trail> unrestricted =
-                ProjectAccess.unrestricted(() -> assemble(request(plain, true), plain, projects.targetAnalysisId()));
+                ProjectAccess.unrestricted(() -> assemble(request(plain, true), projects.targetAnalysisId()));
         assertThat(unrestricted.getFirst().sourceAssessments())
                 .singleElement()
                 .extracting(AssessmentTrailAssembler.SourceAssessment::sourceDetails)
@@ -300,19 +301,18 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
     }
 
     @Test
-    void nullPrincipalAndUnboundHandleAreNotSourceAuthorization() {
+    void requestWithoutPrincipalAndUnboundHandleAreNotSourceAuthorization() {
         final OwnedProjects projects = inheritedProjects();
-        final Principal viewer = memberOf(projects.visibleSource().project());
-        final AlpineRequest openRequest = request(viewer, false);
+        final AlpineRequest anonymous = request(null, false);
 
         final List<Trail> withoutPrincipal = withJdbiHandle(
-                openRequest,
-                handle -> new AssessmentTrailAssembler().assemble(handle, null, List.of(projects.targetAnalysisId())));
+                anonymous,
+                handle -> new AssessmentTrailAssembler().assemble(handle, List.of(projects.targetAnalysisId())));
         assertThat(withoutPrincipal.getFirst().sourceAssessments()).isEmpty();
         assertThat(withoutPrincipal.getFirst().decisionOrigin()).isEqualTo(AssessmentOwnership.INHERITED);
 
-        final List<Trail> unboundHandle = withJdbiHandle(handle ->
-                new AssessmentTrailAssembler().assemble(handle, viewer, List.of(projects.targetAnalysisId())));
+        final List<Trail> unboundHandle = withJdbiHandle(
+                handle -> new AssessmentTrailAssembler().assemble(handle, List.of(projects.targetAnalysisId())));
         assertThat(unboundHandle.getFirst().sourceAssessments()).isEmpty();
         assertThat(unboundHandle.getFirst().inheritanceStatus()).isEqualTo("SOURCE_CONFLICT");
     }
@@ -424,14 +424,12 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
 
     private AnalysisTrailResponse response(final long analysisId, final Principal principal, final boolean pac) {
         qm.getPersistenceManager().evictAll();
-        final Trail trail =
-                assemble(request(principal, pac), principal, analysisId).getFirst();
+        final Trail trail = assemble(request(principal, pac), analysisId).getFirst();
         return AnalysisTrailResponse.of(qm.getObjectById(Analysis.class, analysisId), trail);
     }
 
-    private static List<Trail> assemble(final AlpineRequest request, final Principal principal, final long analysisId) {
-        return withJdbiHandle(
-                request, handle -> new AssessmentTrailAssembler().assemble(handle, principal, List.of(analysisId)));
+    private static List<Trail> assemble(final AlpineRequest request, final long analysisId) {
+        return withJdbiHandle(request, handle -> new AssessmentTrailAssembler().assemble(handle, List.of(analysisId)));
     }
 
     private Principal memberOf(final Project... projects) {
@@ -493,7 +491,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
         return qm.createVulnerability(vulnerability);
     }
 
-    private static AlpineRequest request(final Principal principal, final boolean portfolioAcl) {
+    private static AlpineRequest request(final @Nullable Principal principal, final boolean portfolioAcl) {
         return new AlpineRequest(principal, null, null, null, null, portfolioAcl);
     }
 
