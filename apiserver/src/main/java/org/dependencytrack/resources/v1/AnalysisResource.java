@@ -302,7 +302,7 @@ public class AnalysisResource extends AbstractApiResource {
     private static AnalysisTrailResponse trail(final QueryManager qm, final Analysis analysis) {
         final long analysisId = analysis.getId();
         final var trails = JdbiFactory.withJdbiHandle(
-                qm, handle -> new AssessmentTrailAssembler().assemble(handle, List.of(analysisId)));
-        return AnalysisTrailResponse.of(analysis, trails.isEmpty() ? null : trails.getFirst());
+                qm, handle -> AssessmentTrailAssembler.assemble(handle, List.of(analysisId)));
+        return AnalysisTrailResponse.of(analysis, trails.getFirst());
     }
 }

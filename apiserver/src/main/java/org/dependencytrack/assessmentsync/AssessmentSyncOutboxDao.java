@@ -28,10 +28,7 @@ import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.jackson2.Jackson2Config;
 import org.jspecify.annotations.Nullable;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -39,6 +36,9 @@ import java.util.List;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
+import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
+import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
 /// Transactional outbox for assessment invalidations. Uses the caller's handle and transaction.
 public final class AssessmentSyncOutboxDao {
@@ -70,7 +70,7 @@ public final class AssessmentSyncOutboxDao {
     /// and gains the new lookup keys.
     public List<Long> recordAll(final Collection<AssessmentChange> changes) {
         requireNonNull(changes, "changes must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final List<AssessmentChange> coalesced = coalesce(changes);
         if (coalesced.isEmpty()) {
             return List.of();
@@ -160,8 +160,8 @@ public final class AssessmentSyncOutboxDao {
 
     /// Locks due rows without deleting them. A lower id committed later is still eligible.
     public List<OutboxEntry> pollDue(final int limit) {
-        requireTransaction();
-        requireLimit(limit);
+        requireTransaction(handle);
+        requirePositive(limit, "limit");
         return handle.createQuery(SELECT_ENTRY + /* language=SQL */ """
                          WHERE "NEXT_DISPATCH_AT" <= clock_timestamp()
                          ORDER BY "NEXT_DISPATCH_AT", "ID"
@@ -175,7 +175,7 @@ public final class AssessmentSyncOutboxDao {
 
     /// Locks one row so the caller can advance its expansion cursor. Null means it was deleted.
     public @Nullable OutboxEntry lock(final long id) {
-        requireTransaction();
+        requireTransaction(handle);
         return handle.createQuery(SELECT_ENTRY + /* language=SQL */ """
                          WHERE "ID" = :id
                            FOR UPDATE
@@ -188,7 +188,7 @@ public final class AssessmentSyncOutboxDao {
 
     public boolean updateFanoutCursor(final long id, final UUID fanoutCursor) {
         requireNonNull(fanoutCursor, "fanoutCursor must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final int updated = handle.createUpdate(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_OUTBOX"
                            SET "FANOUT_CURSOR" = :fanoutCursor
@@ -203,7 +203,7 @@ public final class AssessmentSyncOutboxDao {
     /// Records a dispatch attempt. False means expansion already deleted the row.
     public boolean recordDispatchAttempt(final long id, final Instant nextDispatchAt) {
         requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final int updated = handle.createUpdate(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_OUTBOX"
                            SET "NEXT_DISPATCH_AT" = :nextDispatchAt
@@ -218,7 +218,7 @@ public final class AssessmentSyncOutboxDao {
 
     /// Deletes the row after the caller has finished expansion.
     public boolean deleteFinished(final long id) {
-        requireTransaction();
+        requireTransaction(handle);
         final int deleted =
                 handle.createUpdate(/* language=SQL */ """
                         DELETE FROM "ASSESSMENT_SYNC_OUTBOX"
@@ -283,23 +283,6 @@ public final class AssessmentSyncOutboxDao {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Could not read lookup keys", e);
         }
-    }
-
-    private void requireTransaction() {
-        if (!handle.isInTransaction()) {
-            throw new IllegalStateException("Assessment outbox writes require an active transaction");
-        }
-    }
-
-    private static void requireLimit(final int limit) {
-        if (limit <= 0) {
-            throw new IllegalArgumentException("limit must be positive");
-        }
-    }
-
-    private static Instant readInstant(final ResultSet rs, final String column) throws SQLException {
-        final OffsetDateTime value = rs.getObject(column, OffsetDateTime.class);
-        return requireNonNull(value, column).toInstant();
     }
 
     /// One durable outbox row. {@code change} is the stored invalidation.

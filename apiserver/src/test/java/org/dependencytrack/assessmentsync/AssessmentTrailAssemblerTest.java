@@ -83,9 +83,8 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
         final AnalysisTrailResponse response = response(projects.targetAnalysisId(), viewer, true);
 
         assertThat(response.analysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
-        assertThat(response.decisionOrigin()).isEqualTo(AssessmentOwnership.INHERITED);
+        assertThat(response.decisionOrigin()).isEqualTo(AnalysisTrailResponse.DecisionOrigin.INHERITED);
         assertThat(response.decisionVersion()).isPositive();
-        assertThat(response.inheritanceStatus()).isEqualTo("SOURCE_CONFLICT");
         assertThat(response.analysisDetails()).isNull();
         assertThat(response.analysisComments())
                 .extracting(AnalysisTrailResponse.Comment::comment)
@@ -115,7 +114,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
                 .singleElement()
                 .extracting(AnalysisTrailResponse.SourceAssessment::sourceDetails)
                 .isEqualTo(VISIBLE_TEXT);
-        assertThat(response.decisionOrigin()).isEqualTo(AssessmentOwnership.INHERITED);
+        assertThat(response.decisionOrigin()).isEqualTo(AnalysisTrailResponse.DecisionOrigin.INHERITED);
     }
 
     @Test
@@ -126,8 +125,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
         final AnalysisTrailResponse response = response(projects.targetAnalysisId(), viewer, true);
 
         assertThat(response.analysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
-        assertThat(response.decisionOrigin()).isEqualTo(AssessmentOwnership.INHERITED);
-        assertThat(response.inheritanceStatus()).isEqualTo("SOURCE_CONFLICT");
+        assertThat(response.decisionOrigin()).isEqualTo(AnalysisTrailResponse.DecisionOrigin.INHERITED);
         assertThat(response.sourceAssessments()).isEmpty();
         assertHidden(response, HIDDEN_TEXT, VISIBLE_TEXT, HIDDEN_AUTHOR, "visible-kernel");
     }
@@ -141,7 +139,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
 
         assertThat(response.analysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
         assertThat(response.isSuppressed()).isFalse();
-        assertThat(response.decisionOrigin()).isEqualTo(AssessmentOwnership.INHERITED);
+        assertThat(response.decisionOrigin()).isEqualTo(AnalysisTrailResponse.DecisionOrigin.INHERITED);
         assertThat(response.sourceAssessments()).isEmpty();
         assertHidden(response, VISIBLE_TEXT, HIDDEN_TEXT, VISIBLE_AUTHOR);
     }
@@ -194,7 +192,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
                 .isEqualTo(VISIBLE_TEXT);
         final AnalysisTrailResponse hidden = response(projects.targetAnalysisId(), apiKeyPrincipal(deniedKey), true);
         assertThat(hidden.sourceAssessments()).isEmpty();
-        assertThat(hidden.decisionOrigin()).isEqualTo(AssessmentOwnership.INHERITED);
+        assertThat(hidden.decisionOrigin()).isEqualTo(AnalysisTrailResponse.DecisionOrigin.INHERITED);
         assertHidden(hidden, VISIBLE_TEXT, VISIBLE_AUTHOR, "visible-kernel");
     }
 
@@ -210,7 +208,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
 
         final AnalysisTrailResponse afterDelete = response(deleted.targetAnalysisId(), viewer, true);
         assertThat(afterDelete.analysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
-        assertThat(afterDelete.decisionOrigin()).isEqualTo(AssessmentOwnership.INHERITED);
+        assertThat(afterDelete.decisionOrigin()).isEqualTo(AnalysisTrailResponse.DecisionOrigin.INHERITED);
         assertThat(afterDelete.sourceAssessments()).isEmpty();
         assertThat(contributionCount(deleted.targetAnalysisId())).isEqualTo(1);
         assertHidden(afterDelete, VISIBLE_TEXT, VISIBLE_COMMENT, VISIBLE_AUTHOR, "visible-kernel");
@@ -247,7 +245,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
         final SourceProject hidden = sourceProject("hidden-kernel");
         inherit(
                 targetAnalysisId,
-                "SOURCE_CONFLICT",
+                AssessmentReason.SOURCE_CONFLICT,
                 contribution(visible, VISIBLE_TEXT, 1, VISIBLE_COMMENT, VISIBLE_AUTHOR, LATER),
                 contribution(hidden, HIDDEN_TEXT, 2, HIDDEN_COMMENT, HIDDEN_AUTHOR, LATER));
         final Principal viewer = memberOf(visible.project());
@@ -258,7 +256,6 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
             assertThat(group.project().uuid()).isEqualTo(visible.project().getUuid());
             assertThat(group.sourceDetails()).isEqualTo(VISIBLE_TEXT);
         });
-        assertThat(response.inheritanceStatus()).isEqualTo("SOURCE_CONFLICT");
         assertHidden(
                 response,
                 HIDDEN_TEXT,
@@ -270,16 +267,9 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
     }
 
     @Test
-    void unsafeReasonTextAndPoisonedDetailsStayOutOfTheResponse() {
+    void poisonedDetailsOnAnInheritedRowStayOutOfTheResponse() {
         final OwnedProjects projects = inheritedProjects();
         final Principal viewer = memberOf(projects.visibleSource().project());
-        withJdbiHandle(handle -> handle.createUpdate("""
-                        UPDATE "ASSESSMENT_ORIGIN"
-                           SET "LAST_REASON" = 'hidden-kernel'
-                         WHERE "ANALYSIS_ID" = :analysisId
-                        """)
-                .bind("analysisId", projects.targetAnalysisId())
-                .execute());
         withJdbiHandle(handle -> handle.createUpdate("""
                         UPDATE "ANALYSIS"
                            SET "DETAILS" = 'poison-column-text'
@@ -289,8 +279,6 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
                 .execute());
 
         final AnalysisTrailResponse response = response(projects.targetAnalysisId(), viewer, true);
-
-        assertThat(response.inheritanceStatus()).isNull();
         assertThat(response.analysisDetails()).isNull();
         assertThat(response.sourceAssessments())
                 .singleElement()
@@ -306,15 +294,13 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
         final AlpineRequest anonymous = request(null, false);
 
         final List<Trail> withoutPrincipal = withJdbiHandle(
-                anonymous,
-                handle -> new AssessmentTrailAssembler().assemble(handle, List.of(projects.targetAnalysisId())));
+                anonymous, handle -> AssessmentTrailAssembler.assemble(handle, List.of(projects.targetAnalysisId())));
         assertThat(withoutPrincipal.getFirst().sourceAssessments()).isEmpty();
         assertThat(withoutPrincipal.getFirst().decisionOrigin()).isEqualTo(AssessmentOwnership.INHERITED);
 
         final List<Trail> unboundHandle = withJdbiHandle(
-                handle -> new AssessmentTrailAssembler().assemble(handle, List.of(projects.targetAnalysisId())));
+                handle -> AssessmentTrailAssembler.assemble(handle, List.of(projects.targetAnalysisId())));
         assertThat(unboundHandle.getFirst().sourceAssessments()).isEmpty();
-        assertThat(unboundHandle.getFirst().inheritanceStatus()).isEqualTo("SOURCE_CONFLICT");
     }
 
     @Test
@@ -331,7 +317,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
         final SourceProject visible = sourceProject("visible-kernel");
         inherit(
                 targetAnalysisId,
-                "SOURCE_CONFLICT",
+                AssessmentReason.SOURCE_CONFLICT,
                 contribution(visible, VISIBLE_TEXT, 1, VISIBLE_COMMENT, VISIBLE_AUTHOR, LATER));
 
         final List<Finding> after =
@@ -362,7 +348,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
         final SourceProject visible = sourceProject(sourceName);
         inherit(
                 targetAnalysisId,
-                "SOURCE_CONFLICT",
+                AssessmentReason.SOURCE_CONFLICT,
                 new SourceContributionWrite(
                         contributor(visible),
                         VISIBLE_TEXT,
@@ -373,7 +359,9 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
     }
 
     private void inherit(
-            final long targetAnalysisId, final String reason, final SourceContributionWrite... contributions) {
+            final long targetAnalysisId,
+            final AssessmentReason reason,
+            final SourceContributionWrite... contributions) {
         final var written = inJdbiTransaction(handle -> {
             final var dao = new AssessmentProjectionDao(handle);
             final var origin = new AssessmentOriginDao(handle).findOrigin(targetAnalysisId);
@@ -429,7 +417,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
     }
 
     private static List<Trail> assemble(final AlpineRequest request, final long analysisId) {
-        return withJdbiHandle(request, handle -> new AssessmentTrailAssembler().assemble(handle, List.of(analysisId)));
+        return withJdbiHandle(request, handle -> AssessmentTrailAssembler.assemble(handle, List.of(analysisId)));
     }
 
     private Principal memberOf(final Project... projects) {
