@@ -173,6 +173,31 @@ class ModelConverterTest extends PersistenceCapableTest {
     }
 
     @Test
+    void shouldOmitSourceTextWhenAnAuthorizedSourceHasNone() {
+        final ExportedFinding exported = inheritedFinding();
+        withJdbiHandle(handle -> handle.createUpdate("""
+                        UPDATE "ASSESSMENT_SOURCE_CONTRIBUTION"
+                           SET "SOURCE_DETAILS" = NULL
+                         WHERE "TARGET_ANALYSIS_ID" = :analysisId
+                           AND "SOURCE_DETAILS" = :hiddenText
+                        """)
+                .bind("analysisId", exported.analysisId())
+                .bind("hiddenText", HIDDEN_SOURCE_TEXT)
+                .execute());
+        final List<Finding> findings = withJdbiHandle(handle ->
+                handle.attach(FindingDao.class).getFindings(exported.target().getId(), true));
+
+        try (QueryManager bothSources = new QueryManager(requestFor(exported.bothUser()))) {
+            final var result =
+                    ModelConverter.generateVulnerabilities(bothSources, CycloneDXExporter.Variant.VEX, findings);
+            assertThat(result).singleElement().satisfies(vulnerability -> {
+                assertThat(vulnerability.getAnalysis().getDetail()).isNull();
+                assertThat(vulnerability.getProperties()).isNullOrEmpty();
+            });
+        }
+    }
+
+    @Test
     void shouldKeepTargetLocalDetailsAheadOfCopiedSourceText() {
         final ExportedFinding exported = inheritedFinding();
         withJdbiHandle(handle -> handle.createUpdate("""

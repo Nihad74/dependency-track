@@ -128,22 +128,27 @@ public final class AssessmentSyncMetrics {
                 """);
     }
 
+    /// Rollback is done once no row is inherited and no copied source text is left, including text kept as
+    /// provenance on local rows.
     private static double rollbackIncomplete() {
         if (AssessmentSyncMode.current() != AssessmentSyncMode.OFF) {
             return 0d;
         }
-        final double inherited = inheritedRows();
-        if (Double.isNaN(inherited)) {
-            return Double.NaN;
-        }
-        return inherited > 0d ? 1d : 0d;
+        return query(/* language=SQL */ """
+                SELECT CASE
+                         WHEN EXISTS (SELECT 1 FROM "ASSESSMENT_ORIGIN" WHERE "OWNER" = 'INHERITED')
+                           OR EXISTS (SELECT 1 FROM "ASSESSMENT_SOURCE_CONTRIBUTION")
+                         THEN 1
+                         ELSE 0
+                       END::float8
+                """);
     }
 
     private static double query(final String sql) {
         try {
             final Double value = withJdbiHandle(
                     handle -> handle.createQuery(sql).mapTo(Double.class).one());
-            return value == null ? 0d : value;
+            return value == null ? Double.NaN : value;
         } catch (RuntimeException e) {
             LOGGER.warn("Assessment sync metric query failed", e);
             return Double.NaN;
