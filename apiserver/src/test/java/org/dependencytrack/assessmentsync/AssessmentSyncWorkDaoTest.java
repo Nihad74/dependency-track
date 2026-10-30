@@ -233,16 +233,14 @@ class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
             final var dao = new AssessmentSyncWorkDao(handle);
             assertThat(dao.requestFull(targetUuid)).isEqualTo(1);
             final Pass started = dao.beginOrResumePass(targetUuid);
-            assertThat(started.cursorComponentId()).isNull();
-            assertThat(started.cursorVulnerabilityId()).isNull();
-            assertThat(dao.advancePass(targetUuid, 1, 40L, 50L)).isTrue();
-            assertThat(dao.advancePass(targetUuid, 99, 1L, 2L)).isFalse();
+            assertThat(started.cursor()).isNull();
+            assertThat(dao.advancePass(targetUuid, 1, new FindingKey(40, 50))).isTrue();
+            assertThat(dao.advancePass(targetUuid, 99, new FindingKey(1, 2))).isFalse();
 
             final Pass resumed = dao.beginOrResumePass(targetUuid);
             assertThat(resumed.resumed()).isTrue();
             assertThat(resumed.activeRevision()).isEqualTo(1);
-            assertThat(resumed.cursorComponentId()).isEqualTo(40L);
-            assertThat(resumed.cursorVulnerabilityId()).isEqualTo(50L);
+            assertThat(resumed.cursor()).isEqualTo(new FindingKey(40, 50));
 
             assertThat(dao.requestRefresh(targetUuid)).isEqualTo(1);
             assertThat(dao.requestRefresh(targetUuid)).isEqualTo(2);

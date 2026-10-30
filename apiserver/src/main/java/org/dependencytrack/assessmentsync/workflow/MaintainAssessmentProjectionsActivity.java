@@ -187,14 +187,12 @@ public final class MaintainAssessmentProjectionsActivity
             throws InterruptedException {
         final var synchronizer = new AssessmentSynchronizer();
         var drift = 0;
-        Long cursorComponentId = null;
-        Long cursorVulnerabilityId = null;
+        FindingKey cursor = null;
         while (true) {
             if (Thread.interrupted()) {
                 throw new InterruptedException("Interrupted during assessment verification");
             }
-            final List<FindingKey> page = InheritableFindingKeys.page(
-                    handle, projectId, cursorComponentId, cursorVulnerabilityId, findingBatchSize);
+            final List<FindingKey> page = InheritableFindingKeys.page(handle, projectId, cursor, findingBatchSize);
             if (page.isEmpty()) {
                 return drift;
             }
@@ -202,9 +200,7 @@ public final class MaintainAssessmentProjectionsActivity
             if (page.size() < findingBatchSize) {
                 return drift;
             }
-            final FindingKey last = page.getLast();
-            cursorComponentId = last.componentId();
-            cursorVulnerabilityId = last.vulnDbId();
+            cursor = page.getLast();
         }
     }
 
