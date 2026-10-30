@@ -19,8 +19,6 @@
 package org.dependencytrack.assessmentsync.workflow;
 
 import org.dependencytrack.analysis.AnalyzeProjectWorkflow;
-import org.dependencytrack.assessmentsync.AssessmentSyncSettings;
-import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.api.ActivityCallOptions;
 import org.dependencytrack.dex.api.ContinueAsNewOptions;
 import org.dependencytrack.dex.api.RetryPolicy;
@@ -33,14 +31,10 @@ import org.dependencytrack.proto.internal.workflow.v1.AssessmentSyncPendingRes;
 import org.dependencytrack.proto.internal.workflow.v1.ReconcileProjectAssessmentsRes;
 import org.dependencytrack.proto.internal.workflow.v1.RefreshSynchronizedAssessmentsArg;
 import org.dependencytrack.proto.internal.workflow.v1.SynchronizeProjectAssessmentsArg;
-import org.eclipse.microprofile.config.ConfigProvider;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.util.UUID;
-
-import static java.util.Objects.requireNonNull;
-import static org.dependencytrack.dex.api.payload.PayloadConverters.stringConverter;
 
 /// Reconciles one target project. Each activity call is its own transaction.
 @WorkflowSpec(name = SynchronizeProjectAssessmentsWorkflow.NAME)
@@ -53,9 +47,6 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
 
     /// Instance id and concurrency key for one target project.
     public static String instanceId(final UUID targetUuid) {
-        if (targetUuid == null) {
-            throw new IllegalArgumentException("targetUuid must not be null");
-        }
         return "assessment-sync:" + targetUuid;
     }
 
@@ -65,14 +56,7 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
             final @Nullable SynchronizeProjectAssessmentsArg arg) {
         final SynchronizeProjectAssessmentsArg argument = AssessmentSyncArguments.require(arg);
         final UUID projectUuid = AssessmentSyncArguments.projectUuid(argument.getProjectUuid());
-        final int maxBatches = Integer.parseInt(requireNonNull(
-                ctx.executeSideEffect(
-                                "max-batches",
-                                stringConverter(),
-                                () -> Integer.toString(AssessmentSyncSettings.positiveInt(
-                                        ConfigProvider.getConfig(), ConfigKeys.ASSESSMENT_SYNC_WORKFLOW_MAX_BATCHES)))
-                        .await(),
-                "max-batches"));
+        final int maxBatches = AssessmentSyncArguments.maxBatches(ctx);
 
         var completedBatches = 0;
         var highestRefresh = 0L;

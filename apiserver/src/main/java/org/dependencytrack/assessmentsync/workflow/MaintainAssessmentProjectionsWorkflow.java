@@ -19,8 +19,6 @@
 package org.dependencytrack.assessmentsync.workflow;
 
 import org.dependencytrack.assessmentsync.AssessmentSyncMode;
-import org.dependencytrack.assessmentsync.AssessmentSyncSettings;
-import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.api.ActivityCallOptions;
 import org.dependencytrack.dex.api.ContinueAsNewOptions;
 import org.dependencytrack.dex.api.RetryPolicy;
@@ -32,13 +30,11 @@ import org.dependencytrack.dex.engine.api.request.CreateWorkflowRunRequest;
 import org.dependencytrack.proto.internal.workflow.v1.AssessmentMaintenanceOperation;
 import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjectionsArg;
 import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjectionsRes;
-import org.eclipse.microprofile.config.ConfigProvider;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 
 import static java.util.Objects.requireNonNull;
-import static org.dependencytrack.dex.api.payload.PayloadConverters.stringConverter;
 
 /// Scans projects by UUID. The continue-as-new argument is the only scan cursor.
 @WorkflowSpec(name = MaintainAssessmentProjectionsWorkflow.NAME)
@@ -91,14 +87,7 @@ public final class MaintainAssessmentProjectionsWorkflow implements Workflow<Mai
             final @Nullable MaintainAssessmentProjectionsArg argument) {
         requireOperation(argument);
         final MaintainAssessmentProjectionsArg initial = requireNonNull(argument);
-        final int maxBatches = Integer.parseInt(requireNonNull(
-                ctx.executeSideEffect(
-                                "max-batches",
-                                stringConverter(),
-                                () -> Integer.toString(AssessmentSyncSettings.positiveInt(
-                                        ConfigProvider.getConfig(), ConfigKeys.ASSESSMENT_SYNC_WORKFLOW_MAX_BATCHES)))
-                        .await(),
-                "max-batches"));
+        final int maxBatches = AssessmentSyncArguments.maxBatches(ctx);
 
         var current = initial;
         var completedBatches = 0;
