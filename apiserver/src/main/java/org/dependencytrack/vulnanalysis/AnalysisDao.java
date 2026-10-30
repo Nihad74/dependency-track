@@ -21,8 +21,8 @@ package org.dependencytrack.vulnanalysis;
 import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChangeRecorder;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentOriginDao;
 import org.dependencytrack.assessmentsync.AssessmentOwnership;
-import org.dependencytrack.assessmentsync.AssessmentProjectionDao;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
 import org.dependencytrack.model.AnalysisState;
@@ -541,7 +541,7 @@ public final class AnalysisDao {
             commandByKey.put(new FindingKey(command.componentId(), command.vulnDbId()), command);
         }
 
-        final var dao = new AssessmentProjectionDao(handle);
+        final var dao = new AssessmentOriginDao(handle);
         final var changes = new ArrayList<AssessmentChange>();
         if (!modified.isEmpty()) {
             final long[] ids =
@@ -570,7 +570,7 @@ public final class AnalysisDao {
     }
 
     private static void writeOwner(
-            final AssessmentProjectionDao dao, final PolicyFinding finding, final AssessmentOwnership owner) {
+            final AssessmentOriginDao dao, final PolicyFinding finding, final AssessmentOwnership owner) {
         dao.upsertOrigin(finding.analysisId(), owner, true);
     }
 

@@ -20,7 +20,7 @@ package org.dependencytrack.assessmentsync;
 
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentConsensus.Contributor;
-import org.dependencytrack.assessmentsync.AssessmentProjectionDao.Origin;
+import org.dependencytrack.assessmentsync.AssessmentOriginDao.Origin;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.SourceCommentWrite;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.SourceContributionWrite;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.StoredProjection;
@@ -41,7 +41,6 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
@@ -67,8 +66,8 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                 .bind("policyId", policyId)
                 .bind("analysisId", analysisId)
                 .execute());
-        useJdbiTransaction(handle -> assertThat(new AssessmentProjectionDao(handle)
-                        .upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false))
+        useJdbiTransaction(handle -> assertThat(
+                        new AssessmentOriginDao(handle).upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false))
                 .isEqualTo(0));
 
         final WorkerWriteResult applied = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
@@ -111,8 +110,8 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
     @Test
     void shouldTreatNullAndZeroScoresAsDifferent() {
         final long analysisId = persistAnalysis(AnalysisState.NOT_SET, null);
-        useJdbiTransaction(handle ->
-                new AssessmentProjectionDao(handle).upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false));
+        useJdbiTransaction(
+                handle -> new AssessmentOriginDao(handle).upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false));
 
         final WorkerWriteResult zero = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
                 .applyWorkerWrite(write(analysisId, AssessmentOwnership.NEUTRAL, score(BigDecimal.ZERO), null, 0)));
@@ -142,8 +141,8 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
     @Test
     void shouldStoreContributorDetailsAndDropRemovedSources() {
         final long analysisId = persistAnalysis(AnalysisState.NOT_SET, null);
-        useJdbiTransaction(handle ->
-                new AssessmentProjectionDao(handle).upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false));
+        useJdbiTransaction(
+                handle -> new AssessmentOriginDao(handle).upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false));
         final Contributor kernel = contributor("kernel");
         final Contributor firmware = contributor("firmware");
 
@@ -186,7 +185,7 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
     void shouldPreserveSourceCommentIdentityAndOriginalTimestamp() {
         final long analysisId = persistAnalysis(AnalysisState.NOT_SET, null);
         final long originVersion = inJdbiTransaction(handle ->
-                new AssessmentProjectionDao(handle).upsertOrigin(analysisId, AssessmentOwnership.INHERITED, false));
+                new AssessmentOriginDao(handle).upsertOrigin(analysisId, AssessmentOwnership.INHERITED, false));
         final Contributor source = contributor("kernel");
 
         final WorkerWriteResult applied = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
@@ -240,8 +239,8 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
     @Test
     void shouldKeepLocalAnalysisCommentsWhenReplacingContributions() {
         final long analysisId = persistAnalysis(AnalysisState.NOT_SET, "keep this local note");
-        useJdbiTransaction(handle ->
-                new AssessmentProjectionDao(handle).upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false));
+        useJdbiTransaction(
+                handle -> new AssessmentOriginDao(handle).upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false));
         inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
                 .applyWorkerWrite(new WorkerWrite(
                         analysisId,
@@ -267,8 +266,8 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
     @Test
     void shouldRejectWorkerWriteWhenOriginIsLocalOrVersionMoved() {
         final long localAnalysisId = persistAnalysis(AnalysisState.EXPLOITABLE, null);
-        useJdbiTransaction(handle -> assertThat(new AssessmentProjectionDao(handle)
-                        .upsertOrigin(localAnalysisId, AssessmentOwnership.LOCAL, false))
+        useJdbiTransaction(handle -> assertThat(
+                        new AssessmentOriginDao(handle).upsertOrigin(localAnalysisId, AssessmentOwnership.LOCAL, false))
                 .isEqualTo(1));
         final WorkerWriteResult rejectedLocal = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
                 .applyWorkerWrite(new WorkerWrite(
@@ -289,7 +288,7 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
         assertThat(local.contributions()).isEmpty();
 
         final long inheritedAnalysisId = persistAnalysis(AnalysisState.NOT_SET, null);
-        final long inheritedVersion = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
+        final long inheritedVersion = inJdbiTransaction(handle -> new AssessmentOriginDao(handle)
                 .upsertOrigin(inheritedAnalysisId, AssessmentOwnership.INHERITED, false));
         final WorkerWriteResult first = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
                 .applyWorkerWrite(write(
@@ -330,7 +329,7 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
         final Contributor contributor = new Contributor(
                 sourceProject.getUuid(), sourceComponent.getUuid(), vulnerability.getUuid(), sourceAnalysisId);
         useJdbiTransaction(handle ->
-                new AssessmentProjectionDao(handle).upsertOrigin(targetAnalysisId, AssessmentOwnership.NEUTRAL, false));
+                new AssessmentOriginDao(handle).upsertOrigin(targetAnalysisId, AssessmentOwnership.NEUTRAL, false));
         inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
                 .applyWorkerWrite(new WorkerWrite(
                         targetAnalysisId,
@@ -404,19 +403,9 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                             """).bind("analysisId", inheritedAnalysisId).execute();
         });
 
-        final List<UUID> cursors = new ArrayList<>();
-        UUID cursor = null;
-        for (int page = 0; page < 5; page++) {
-            final UUID previous = cursor;
-            cursor = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle).backfillOrigins(previous, 1));
-            if (cursor == null) {
-                break;
-            }
-            cursors.add(cursor);
+        for (final Project project : List.of(policyProject, localProject, inheritedProject)) {
+            useJdbiTransaction(handle -> new AssessmentOriginDao(handle).backfillProjectOrigins(project.getUuid()));
         }
-        assertThat(cursors)
-                .containsExactlyInAnyOrder(policyProject.getUuid(), localProject.getUuid(), inheritedProject.getUuid());
-        assertThat(cursor).isNull();
 
         final StoredProjection policy =
                 inJdbiTransaction(handle -> new AssessmentProjectionDao(handle).load(policyAnalysisId));
@@ -429,8 +418,9 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
         assertThat(inherited.origin()).isEqualTo(new Origin(AssessmentOwnership.INHERITED, 4, "already inherited"));
         assertThat(inherited.decision().state()).isEqualTo(AnalysisState.IN_TRIAGE);
 
-        final UUID again = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle).backfillOrigins(null, 10));
-        assertThat(again).isNull();
+        final int relabeled = inJdbiTransaction(
+                handle -> new AssessmentOriginDao(handle).backfillProjectOrigins(inheritedProject.getUuid()));
+        assertThat(relabeled).isZero();
         assertThat(inJdbiTransaction(handle -> new AssessmentProjectionDao(handle).load(inheritedAnalysisId))
                         .origin())
                 .isEqualTo(new Origin(AssessmentOwnership.INHERITED, 4, "already inherited"));
