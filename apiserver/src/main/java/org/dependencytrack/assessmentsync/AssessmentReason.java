@@ -18,7 +18,7 @@
  */
 package org.dependencytrack.assessmentsync;
 
-/// Why a pure matching, consensus, or projection step did not apply a machine decision.
+/// Why synchronization did not apply a machine decision, or withdrew one.
 public enum AssessmentReason {
     IDENTITY_MISSING,
     IDENTITY_CONFLICT,
@@ -26,5 +26,6 @@ public enum AssessmentReason {
     FINDING_INACTIVE,
     NO_AUTHORED_SOURCE,
     SOURCE_CONFLICT,
-    TARGET_LOCAL
+    TARGET_LOCAL,
+    WITHDRAWN
 }

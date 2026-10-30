@@ -29,6 +29,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
 /// Target marker index and descendant membership. Source projects are not foreign keys.
 public final class AssessmentEmbeddingDao {
@@ -46,7 +47,7 @@ public final class AssessmentEmbeddingDao {
             throw new IllegalArgumentException("targetProjectId must be positive");
         }
         requireNonNull(membership, "membership must not be null");
-        requireTransaction();
+        requireTransaction(handle);
 
         final var markers = new LinkedHashSet<Long>();
         for (final MarkerMembership marker : membership) {
@@ -284,12 +285,6 @@ public final class AssessmentEmbeddingDao {
             componentIds.add(componentId);
         }
         return componentIds;
-    }
-
-    private void requireTransaction() {
-        if (!handle.isInTransaction()) {
-            throw new IllegalStateException("Embedding replacement requires an active transaction");
-        }
     }
 
     /// One marker row. {@code sourceProjectUuid} is null when the source project is unresolved.

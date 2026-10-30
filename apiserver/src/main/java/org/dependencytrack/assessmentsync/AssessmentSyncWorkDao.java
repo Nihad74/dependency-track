@@ -23,16 +23,17 @@ import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jspecify.annotations.Nullable;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.assessmentsync.DaoSupport.nullableLong;
+import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
+import static org.dependencytrack.assessmentsync.DaoSupport.readNullableInstant;
+import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
 /// Durable per-target reconciliation and refresh revisions. Mutators lock the work row first.
 ///
@@ -64,7 +65,7 @@ public final class AssessmentSyncWorkDao {
     /// Allocates the next revision and marks it as a full-project pass.
     public long requestFull(final UUID targetUuid) {
         requireNonNull(targetUuid, "targetUuid must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         return handle.createQuery(/* language=SQL */ """
                         INSERT INTO "ASSESSMENT_SYNC_WORK" (
                           "TARGET_UUID"
@@ -99,7 +100,7 @@ public final class AssessmentSyncWorkDao {
     public long requestFindings(final UUID targetUuid, final Collection<FindingKey> keys) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireNonNull(keys, "keys must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final long revision = handle.createQuery(/* language=SQL */ """
                         INSERT INTO "ASSESSMENT_SYNC_WORK" (
                           "TARGET_UUID"
@@ -164,7 +165,7 @@ public final class AssessmentSyncWorkDao {
     /// Captures {@code REQUESTED_REVISION} or resumes the pass already in progress.
     public @Nullable Pass beginOrResumePass(final UUID targetUuid) {
         requireNonNull(targetUuid, "targetUuid must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final WorkRow locked = lock(targetUuid);
         if (locked == null) {
             return null;
@@ -210,7 +211,7 @@ public final class AssessmentSyncWorkDao {
             final @Nullable Long cursorComponentId,
             final @Nullable Long cursorVulnerabilityId) {
         requireNonNull(targetUuid, "targetUuid must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         lock(targetUuid);
         final int updated = handle.createUpdate(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_WORK"
@@ -231,7 +232,7 @@ public final class AssessmentSyncWorkDao {
     /// Acknowledges only {@code activeRevision}. Newer finding rows and a newer full request stay pending.
     public boolean completePass(final UUID targetUuid, final long activeRevision) {
         requireNonNull(targetUuid, "targetUuid must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final WorkRow locked = lock(targetUuid);
         if (locked == null || locked.activeRevision() == null || locked.activeRevision() != activeRevision) {
             return false;
@@ -274,7 +275,7 @@ public final class AssessmentSyncWorkDao {
     /// through this row once both revisions are caught up.
     public boolean acknowledgeCancellation(final UUID targetUuid) {
         requireNonNull(targetUuid, "targetUuid must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         if (lock(targetUuid) == null) {
             return false;
         }
@@ -304,7 +305,7 @@ public final class AssessmentSyncWorkDao {
 
     public long requestRefresh(final UUID targetUuid) {
         requireNonNull(targetUuid, "targetUuid must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         return handle.createQuery(/* language=SQL */ """
                         INSERT INTO "ASSESSMENT_SYNC_WORK" (
                           "TARGET_UUID"
@@ -338,7 +339,7 @@ public final class AssessmentSyncWorkDao {
         if (capturedRefresh < 0) {
             throw new IllegalArgumentException("capturedRefresh must not be negative");
         }
-        requireTransaction();
+        requireTransaction(handle);
         if (lock(targetUuid) == null) {
             throw new IllegalStateException("No assessment sync work for " + targetUuid);
         }
@@ -369,7 +370,7 @@ public final class AssessmentSyncWorkDao {
 
     /// Locks due rows whose reconciliation or refresh is unfinished.
     public List<WorkRow> pollDue(final int limit) {
-        requireTransaction();
+        requireTransaction(handle);
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be positive");
         }
@@ -392,7 +393,7 @@ public final class AssessmentSyncWorkDao {
     public boolean recordDispatchAttempt(final UUID targetUuid, final Instant nextDispatchAt) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final int updated = handle.createUpdate(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_WORK"
                            SET "NEXT_DISPATCH_AT" = :nextDispatchAt
@@ -408,7 +409,7 @@ public final class AssessmentSyncWorkDao {
     public boolean scheduleDispatch(final UUID targetUuid, final Instant nextDispatchAt) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
-        requireTransaction();
+        requireTransaction(handle);
         final int updated = handle.createUpdate(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_WORK"
                            SET "NEXT_DISPATCH_AT" = :nextDispatchAt
@@ -484,26 +485,6 @@ public final class AssessmentSyncWorkDao {
             unique.putIfAbsent(key, key);
         }
         return unique.values();
-    }
-
-    private void requireTransaction() {
-        if (!handle.isInTransaction()) {
-            throw new IllegalStateException("Assessment work writes require an active transaction");
-        }
-    }
-
-    private static @Nullable Long nullableLong(final ResultSet rs, final String column) throws SQLException {
-        final long value = rs.getLong(column);
-        return rs.wasNull() ? null : value;
-    }
-
-    private static Instant readInstant(final ResultSet rs, final String column) throws SQLException {
-        return requireNonNull(readNullableInstant(rs, column), column);
-    }
-
-    private static @Nullable Instant readNullableInstant(final ResultSet rs, final String column) throws SQLException {
-        final OffsetDateTime value = rs.getObject(column, OffsetDateTime.class);
-        return value == null ? null : value.toInstant();
     }
 
     /// One target's durable progress.

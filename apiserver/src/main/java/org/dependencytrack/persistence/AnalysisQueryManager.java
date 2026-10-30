@@ -44,6 +44,7 @@ import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand.DecisionAction;
 import org.dependencytrack.persistence.jdbi.JdbiFactory;
 import org.dependencytrack.util.AnalysisCommentFormatter.AnalysisCommentField;
+import org.jspecify.annotations.Nullable;
 
 import javax.jdo.PersistenceManager;
 import javax.jdo.Query;
@@ -106,10 +107,15 @@ public class AnalysisQueryManager extends QueryManager {
             if (project == null || project.getUuid() == null) {
                 throw new IllegalStateException("component must belong to a project");
             }
-            JdbiFactory.useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
+            final AssessmentOriginDao.Origin originBefore = JdbiFactory.withJdbiHandle(this, handle -> {
+                AssessmentMutationGuard.lockProject(handle, project.getUuid());
+                return new AssessmentOriginDao(handle)
+                        .findOriginOfFinding(
+                                command.component().getId(),
+                                command.vulnerability().getId());
+            });
 
             Analysis analysis = getAnalysis(command.component(), command.vulnerability());
-            final AssessmentOriginDao.Origin originBefore = analysis == null ? null : currentOrigin(analysis.getId());
             final long decisionVersionBefore = originBefore == null ? 0 : originBefore.decisionVersion();
             if (command.expectedDecisionVersion() != null
                     && decisionVersionBefore != command.expectedDecisionVersion()) {
@@ -120,6 +126,11 @@ public class AnalysisQueryManager extends QueryManager {
             }
             final boolean inheritedBefore =
                     originBefore != null && originBefore.owner() == AssessmentOwnership.INHERITED;
+            final AssessmentOwnership ownerBefore = analysis == null
+                    ? null
+                    : originBefore != null
+                            ? originBefore.owner()
+                            : AssessmentOwnership.ofUnlabeled(analysis.getVulnerabilityPolicyId() != null);
             final MakeAnalysisCommand effective = applyV1Defaults(command, inheritedBefore);
 
             final boolean created = analysis == null;
@@ -158,7 +169,7 @@ public class AnalysisQueryManager extends QueryManager {
             }
             createAnalysisComments(analysis, effective.commenter(), comments);
 
-            final OriginWrite originWrite = originWrite(action, update, created, commentAdded, inheritedBefore);
+            final OriginWrite originWrite = planOriginWrite(action, update, created, commentAdded);
             if (originWrite.writesAnything()) {
                 pm.flush();
                 final long analysisId = analysis.getId();
@@ -169,13 +180,16 @@ public class AnalysisQueryManager extends QueryManager {
                         effective.vulnerability().getUuid(),
                         AssessmentChange.Reason.AUTHORED,
                         AssessmentChange.LookupKey.listOf(project.getName(), project.getVersion()));
+                // The DAO cannot tell that an unlabeled row changed owner, so that change also moves the version.
+                final boolean versionMoves = update.valuesChanged()
+                        || (originBefore == null && ownerBefore != null && originWrite.owner() != ownerBefore);
                 JdbiFactory.useJdbiHandle(this, handle -> {
                     final var dao = new AssessmentOriginDao(handle);
-                    if (originWrite.clearContributions()) {
+                    if (originWrite.dropTrail()) {
                         dao.deleteCopiedContributions(analysisId);
                     }
                     if (originWrite.owner() != null) {
-                        dao.upsertOrigin(analysisId, originWrite.owner(), update.machineChanged());
+                        dao.upsertOrigin(analysisId, originWrite.owner(), versionMoves);
                     }
                     if (originWrite.recordChange()) {
                         new AssessmentChangeRecorder(handle).record(change);
@@ -204,15 +218,14 @@ public class AnalysisQueryManager extends QueryManager {
         });
     }
 
-    /// A row without an origin is local, unless a vulnerability policy wrote it.
     private static boolean isReleasable(final Analysis analysis, final AssessmentOriginDao.Origin origin) {
         if (analysis == null) {
             return false;
         }
-        if (origin == null) {
-            return analysis.getVulnerabilityPolicyId() == null;
-        }
-        return origin.owner() == AssessmentOwnership.LOCAL;
+        final AssessmentOwnership owner = origin != null
+                ? origin.owner()
+                : AssessmentOwnership.ofUnlabeled(analysis.getVulnerabilityPolicyId() != null);
+        return owner == AssessmentOwnership.LOCAL;
     }
 
     /// REST API v1 resets an omitted state, justification, or response to {@code NOT_SET}.
@@ -227,25 +240,20 @@ public class AnalysisQueryManager extends QueryManager {
                 .withResponse(requireNonNullElse(command.response(), AnalysisResponse.NOT_SET));
     }
 
-    private static OriginWrite originWrite(
-            final DecisionAction action,
-            final FieldUpdate update,
-            final boolean created,
-            final boolean commentAdded,
-            final boolean inheritedBefore) {
+    /// The source trail stays as provenance while a local owner keeps the inherited decision (ADR 044). Any later
+    /// change to the decision drops it, whichever action makes the change.
+    private static OriginWrite planOriginWrite(
+            final DecisionAction action, final FieldUpdate update, final boolean created, final boolean commentAdded) {
         return switch (action) {
-            case RELEASE_LOCAL -> OriginWrite.owner(AssessmentOwnership.NEUTRAL, true, true);
-            // The source trail stays as provenance while the decision is still the inherited one (ADR 044).
-            case TAKE_LOCAL -> OriginWrite.owner(AssessmentOwnership.LOCAL, update.decisionChanged(), true);
-            case COMMENT_ONLY ->
-                created ? OriginWrite.owner(AssessmentOwnership.NEUTRAL, false, true) : OriginWrite.COMMENT_ONLY;
+            case RELEASE_LOCAL -> OriginWrite.claim(AssessmentOwnership.NEUTRAL).droppingTrailIf(true);
+            case TAKE_LOCAL -> OriginWrite.claim(AssessmentOwnership.LOCAL).droppingTrailIf(update.decisionChanged());
+            case COMMENT_ONLY -> created ? OriginWrite.claim(AssessmentOwnership.NEUTRAL) : OriginWrite.COMMENT_ONLY;
             case AUTO -> {
-                if (update.machineChanged()) {
-                    yield OriginWrite.owner(
-                            AssessmentOwnership.LOCAL, inheritedBefore && update.decisionChanged(), true);
+                if (update.valuesChanged()) {
+                    yield OriginWrite.claim(AssessmentOwnership.LOCAL).droppingTrailIf(update.decisionChanged());
                 }
                 if (created) {
-                    yield OriginWrite.owner(AssessmentOwnership.NEUTRAL, false, commentAdded);
+                    yield OriginWrite.claim(AssessmentOwnership.NEUTRAL).recordingChangeIf(commentAdded);
                 }
                 yield commentAdded ? OriginWrite.COMMENT_ONLY : OriginWrite.NONE;
             }
@@ -255,10 +263,6 @@ public class AnalysisQueryManager extends QueryManager {
     /// Blank and null details are the same explanation. Clients send either for an empty field.
     private static boolean sameDetails(final String left, final String right) {
         return StringUtils.isBlank(left) ? StringUtils.isBlank(right) : left.equals(right);
-    }
-
-    private AssessmentOriginDao.Origin currentOrigin(final long analysisId) {
-        return JdbiFactory.withJdbiHandle(this, handle -> new AssessmentOriginDao(handle).findOrigin(analysisId));
     }
 
     private static FieldUpdate applySuppliedFields(
@@ -418,24 +422,33 @@ public class AnalysisQueryManager extends QueryManager {
 
         private static final FieldUpdate NONE = new FieldUpdate(false, false, false, false);
 
-        private boolean machineChanged() {
+        /// The structured decision or the free-text details changed.
+        private boolean valuesChanged() {
             return decisionChanged || detailsChanged;
         }
     }
 
-    /// {@code owner} is null when ownership stays as it is.
-    private record OriginWrite(AssessmentOwnership owner, boolean clearContributions, boolean recordChange) {
+    /// What an authored write does to the origin. {@code owner} is null when ownership stays as it is.
+    private record OriginWrite(@Nullable AssessmentOwnership owner, boolean dropTrail, boolean recordChange) {
 
         private static final OriginWrite COMMENT_ONLY = new OriginWrite(null, false, true);
         private static final OriginWrite NONE = new OriginWrite(null, false, false);
 
-        private static OriginWrite owner(
-                final AssessmentOwnership owner, final boolean clearContributions, final boolean recordChange) {
-            return new OriginWrite(owner, clearContributions, recordChange);
+        /// Sets the owner and records an assessment change.
+        private static OriginWrite claim(final AssessmentOwnership owner) {
+            return new OriginWrite(owner, false, true);
+        }
+
+        private OriginWrite droppingTrailIf(final boolean drop) {
+            return new OriginWrite(owner, drop, recordChange);
+        }
+
+        private OriginWrite recordingChangeIf(final boolean record) {
+            return new OriginWrite(owner, dropTrail, record);
         }
 
         private boolean writesAnything() {
-            return owner != null || clearContributions || recordChange;
+            return owner != null || dropTrail || recordChange;
         }
     }
 

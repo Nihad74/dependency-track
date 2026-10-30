@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
+import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
 /// Paged discovery of targets affected by one outbox row. Reads the durable cursor from that row.
 ///
@@ -191,8 +193,8 @@ public final class AssessmentSyncFanoutDao {
 
     /// Next project-scope targets after the row's stored cursor, in UUID order.
     public List<UUID> pageProjectTargets(final long outboxId, final int limit) {
-        requireLimit(limit);
-        requireTransaction();
+        requirePositive(limit, "limit");
+        requireTransaction(handle);
         return handle.createQuery("WITH\n" + EVENT + ",\n" + PROJECT_TARGETS + """
                         SELECT project_target.target_uuid AS "TARGET_UUID"
                           FROM project_target
@@ -210,8 +212,8 @@ public final class AssessmentSyncFanoutDao {
 
     /// Next finding-scope targets that have at least one matching key.
     public List<UUID> pageFindingTargets(final long outboxId, final int limit) {
-        requireLimit(limit);
-        requireTransaction();
+        requirePositive(limit, "limit");
+        requireTransaction(handle);
         return handle.createQuery("WITH\n" + EVENT + ",\n" + FINDING_KEYS + """
                         SELECT finding_key.target_uuid AS "TARGET_UUID"
                           FROM finding_key
@@ -232,8 +234,8 @@ public final class AssessmentSyncFanoutDao {
     public List<TargetFinding> findingKeys(
             final long outboxId, final List<UUID> targetUuids, final int limitPerTarget) {
         requireNonNull(targetUuids, "targetUuids must not be null");
-        requireLimit(limitPerTarget);
-        requireTransaction();
+        requirePositive(limitPerTarget, "limit");
+        requireTransaction(handle);
         if (targetUuids.isEmpty()) {
             return List.of();
         }
@@ -265,18 +267,6 @@ public final class AssessmentSyncFanoutDao {
                         rs.getLong("COMPONENT_ID"),
                         rs.getLong("VULNERABILITY_ID")))
                 .list();
-    }
-
-    private void requireTransaction() {
-        if (!handle.isInTransaction()) {
-            throw new IllegalStateException("Assessment fan-out reads require an active transaction");
-        }
-    }
-
-    private static void requireLimit(final int limit) {
-        if (limit <= 0) {
-            throw new IllegalArgumentException("limit must be positive");
-        }
     }
 
     /// One candidate finding on a target project.

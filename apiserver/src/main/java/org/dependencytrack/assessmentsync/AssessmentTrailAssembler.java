@@ -27,16 +27,19 @@ import org.jspecify.annotations.Nullable;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
+import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
 
 /// Projects target analysis rows and the source groups the caller can read right now.
 ///
@@ -44,26 +47,23 @@ import static java.util.Objects.requireNonNull;
 /// The caller is the principal of the request the handle is bound to. A handle without one yields no
 /// source groups, because an unbound handle treats portfolio ACL as open.
 /// Deleted or inaccessible sources are omitted entirely. The result has no hidden-source count.
+/// Source text is read only for contributions that passed the access check, so hidden text never leaves the
+/// database.
 public final class AssessmentTrailAssembler {
 
-    public List<Trail> assemble(final Handle handle, final Collection<Long> targetAnalysisIds) {
-        requireNonNull(handle, "handle must not be null");
-        requireNonNull(targetAnalysisIds, "targetAnalysisIds must not be null");
+    private AssessmentTrailAssembler() {}
+
+    public static List<Trail> assemble(final Handle handle, final Collection<Long> targetAnalysisIds) {
         if (targetAnalysisIds.isEmpty()) {
             return List.of();
         }
 
-        final var orderedIds = new ArrayList<Long>(targetAnalysisIds.size());
-        for (final Long analysisId : targetAnalysisIds) {
-            if (analysisId == null || analysisId <= 0) {
-                throw new IllegalArgumentException("analysisId must be positive");
-            }
-            if (!orderedIds.contains(analysisId)) {
-                orderedIds.add(analysisId);
-            }
+        final var orderedIds = new LinkedHashSet<Long>(targetAnalysisIds);
+        for (final long analysisId : orderedIds) {
+            requirePositive(analysisId, "analysisId");
         }
 
-        final var machines = loadMachines(handle, orderedIds);
+        final var targets = loadTargets(handle, orderedIds);
         final var identities = loadContributionIdentities(handle, orderedIds);
         final var visible = visibleContributions(handle, identities);
         final var detailsByKey = loadVisibleDetails(handle, visible);
@@ -80,30 +80,23 @@ public final class AssessmentTrailAssembler {
 
         final var trails = new ArrayList<Trail>(orderedIds.size());
         for (final Long analysisId : orderedIds) {
-            final MachineRow machine = machines.get(analysisId);
-            if (machine == null) {
+            final TargetRow target = targets.get(analysisId);
+            if (target == null) {
                 continue;
             }
             final List<SourceAssessment> groups = groupsByAnalysis.getOrDefault(analysisId, List.of());
-            trails.add(new Trail(
-                    analysisId,
-                    machine.owner(),
-                    machine.decisionVersion(),
-                    machine.inheritanceStatus(),
-                    machine.localDetails(),
-                    List.copyOf(groups)));
+            trails.add(new Trail(analysisId, target.owner(), target.decisionVersion(), target.localDetails(), groups));
         }
         return List.copyOf(trails);
     }
 
-    private static LinkedHashMap<Long, MachineRow> loadMachines(final Handle handle, final List<Long> analysisIds) {
-        final var machines = new LinkedHashMap<Long, MachineRow>();
+    private static LinkedHashMap<Long, TargetRow> loadTargets(final Handle handle, final Collection<Long> analysisIds) {
+        final var targets = new LinkedHashMap<Long, TargetRow>();
         handle.createQuery(/* language=SQL */ """
                         SELECT a."ID"
                              , a."DETAILS"
                              , o."OWNER"
                              , o."DECISION_VERSION"
-                             , o."LAST_REASON"
                           FROM "ANALYSIS" AS a
                           LEFT JOIN "ASSESSMENT_ORIGIN" AS o
                             ON o."ANALYSIS_ID" = a."ID"
@@ -111,25 +104,20 @@ public final class AssessmentTrailAssembler {
                         """)
                 .bind("analysisIds", toLongArray(analysisIds))
                 .map((rs, ctx) -> {
-                    final long analysisId = rs.getLong("ID");
                     final String ownerName = rs.getString("OWNER");
                     final AssessmentOwnership owner = ownerName == null ? null : AssessmentOwnership.valueOf(ownerName);
-                    final String storedDetails = rs.getString("DETAILS");
-                    machines.put(
-                            analysisId,
-                            new MachineRow(
-                                    owner,
-                                    owner == null ? 0 : rs.getLong("DECISION_VERSION"),
-                                    safeReason(rs.getString("LAST_REASON")),
-                                    owner == AssessmentOwnership.INHERITED ? null : storedDetails));
-                    return analysisId;
+                    return new TargetRow(
+                            rs.getLong("ID"),
+                            owner,
+                            owner == null ? 0 : rs.getLong("DECISION_VERSION"),
+                            owner == AssessmentOwnership.INHERITED ? null : rs.getString("DETAILS"));
                 })
-                .list();
-        return machines;
+                .forEach(target -> targets.put(target.analysisId(), target));
+        return targets;
     }
 
     private static List<ContributionIdentity> loadContributionIdentities(
-            final Handle handle, final List<Long> analysisIds) {
+            final Handle handle, final Collection<Long> analysisIds) {
         return handle.createQuery(/* language=SQL */ """
                         SELECT "TARGET_ANALYSIS_ID"
                              , "SOURCE_PROJECT_UUID"
@@ -154,13 +142,12 @@ public final class AssessmentTrailAssembler {
         if (identities.isEmpty() || !canReadSources(handle)) {
             return List.of();
         }
-        final var projectUuids = new ArrayList<UUID>();
+        final var projectUuids = new LinkedHashSet<UUID>();
         for (final ContributionIdentity identity : identities) {
-            if (!projectUuids.contains(identity.sourceProjectUuid())) {
-                projectUuids.add(identity.sourceProjectUuid());
-            }
+            projectUuids.add(identity.sourceProjectUuid());
         }
-        final Set<UUID> accessible = handle.attach(ProjectDao.class).getAccessibleProjectUuids(projectUuids);
+        final Set<UUID> accessible =
+                handle.attach(ProjectDao.class).getAccessibleProjectUuids(List.copyOf(projectUuids));
         if (accessible.isEmpty()) {
             return List.of();
         }
@@ -201,24 +188,20 @@ public final class AssessmentTrailAssembler {
                 .bind("projectUuids", candidateProjects.toArray(UUID[]::new))
                 .bind("componentUuids", candidateComponents.toArray(UUID[]::new))
                 .bind("analysisIds", toLongArray(candidateAnalyses))
-                .map((rs, ctx) -> {
-                    final var source = new LiveSource(
-                            new ProjectIdentity(
-                                    rs.getObject("project_uuid", UUID.class),
-                                    requireNonNull(rs.getString("project_name"), "project name must not be null"),
-                                    rs.getString("project_version")),
-                            new ComponentIdentity(
-                                    rs.getObject("component_uuid", UUID.class),
-                                    requireNonNull(rs.getString("component_name"), "component name must not be null"),
-                                    rs.getString("component_version")),
-                            rs.getLong("analysis_id"));
-                    live.put(
-                            new LiveSourceKey(
-                                    source.project().uuid(), source.component().uuid(), source.analysisId()),
-                            source);
-                    return source.analysisId();
-                })
-                .list();
+                .map((rs, ctx) -> new LiveSource(
+                        new ProjectIdentity(
+                                rs.getObject("project_uuid", UUID.class),
+                                requireNonNull(rs.getString("project_name"), "project name must not be null"),
+                                rs.getString("project_version")),
+                        new ComponentIdentity(
+                                rs.getObject("component_uuid", UUID.class),
+                                requireNonNull(rs.getString("component_name"), "component name must not be null"),
+                                rs.getString("component_version")),
+                        rs.getLong("analysis_id")))
+                .forEach(source -> live.put(
+                        new LiveSourceKey(
+                                source.project().uuid(), source.component().uuid(), source.analysisId()),
+                        source));
 
         final var visible = new ArrayList<VisibleContribution>();
         for (final ContributionIdentity identity : identities) {
@@ -259,18 +242,13 @@ public final class AssessmentTrailAssembler {
                             ON c."TARGET_ANALYSIS_ID" = v.target_id
                            AND c."SOURCE_PROJECT_UUID" = v.project_uuid
                            AND c."SOURCE_ANALYSIS_ID" = v.source_analysis_id
+                         WHERE c."SOURCE_DETAILS" IS NOT NULL
                         """)
                 .bind("targetIds", keys.targetIds())
                 .bind("projectUuids", keys.projectUuids())
                 .bind("sourceAnalysisIds", keys.sourceAnalysisIds())
-                .map((rs, ctx) -> {
-                    final String text = rs.getString("SOURCE_DETAILS");
-                    if (text != null) {
-                        details.put(key(rs), text);
-                    }
-                    return text;
-                })
-                .list();
+                .map((rs, ctx) -> Map.entry(key(rs), rs.getString("SOURCE_DETAILS")))
+                .forEach(entry -> details.put(entry.getKey(), entry.getValue()));
         return details;
     }
 
@@ -300,15 +278,14 @@ public final class AssessmentTrailAssembler {
                 .bind("targetIds", keys.targetIds())
                 .bind("projectUuids", keys.projectUuids())
                 .bind("sourceAnalysisIds", keys.sourceAnalysisIds())
-                .map((rs, ctx) -> {
-                    comments.computeIfAbsent(key(rs), ignored -> new ArrayList<>())
-                            .add(new SourceComment(
-                                    readInstant(rs, "ORIGINAL_TIMESTAMP"),
-                                    requireNonNull(rs.getString("COMMENT"), "comment must not be null"),
-                                    rs.getString("COMMENTER")));
-                    return rs.getLong("SOURCE_COMMENT_ID");
-                })
-                .list();
+                .map((rs, ctx) -> Map.entry(
+                        key(rs),
+                        new SourceComment(
+                                readInstant(rs, "ORIGINAL_TIMESTAMP"),
+                                requireNonNull(rs.getString("COMMENT"), "comment must not be null"),
+                                rs.getString("COMMENTER"))))
+                .forEach(entry -> comments.computeIfAbsent(entry.getKey(), ignored -> new ArrayList<>())
+                        .add(entry.getValue()));
         final var copied = new LinkedHashMap<ContributionKey, List<SourceComment>>();
         for (final var entry : comments.entrySet()) {
             copied.put(entry.getKey(), List.copyOf(entry.getValue()));
@@ -336,30 +313,8 @@ public final class AssessmentTrailAssembler {
         return new KeyArrays(targetIds, projectUuids, sourceAnalysisIds);
     }
 
-    private static long[] toLongArray(final List<Long> values) {
-        final var array = new long[values.size()];
-        for (int i = 0; i < values.size(); i++) {
-            array[i] = values.get(i);
-        }
-        return array;
-    }
-
-    /// Only the fixed reason enum is safe to show. Free text could name a hidden source.
-    private static @Nullable String safeReason(final @Nullable String reason) {
-        if (reason == null) {
-            return null;
-        }
-        for (final AssessmentReason known : AssessmentReason.values()) {
-            if (known.name().equals(reason)) {
-                return reason;
-            }
-        }
-        return null;
-    }
-
-    private static Instant readInstant(final ResultSet rs, final String column) throws SQLException {
-        final OffsetDateTime value = rs.getObject(column, OffsetDateTime.class);
-        return requireNonNull(value, column).toInstant();
+    private static long[] toLongArray(final Collection<Long> values) {
+        return values.stream().mapToLong(Long::longValue).toArray();
     }
 
     /// One target analysis. {@code localDetails} is null while the decision is inherited.
@@ -367,7 +322,6 @@ public final class AssessmentTrailAssembler {
             long analysisId,
             @Nullable AssessmentOwnership decisionOrigin,
             long decisionVersion,
-            @Nullable String inheritanceStatus,
             @Nullable String localDetails,
             List<SourceAssessment> sourceAssessments) {
 
@@ -410,9 +364,9 @@ public final class AssessmentTrailAssembler {
         }
     }
 
-    /// Original source comment. {@code author} is the source commenter.
+    /// Original source comment, as the source commenter wrote it.
     public record SourceComment(
-            Instant timestamp, String comment, @Nullable String author) {
+            Instant timestamp, String comment, @Nullable String commenter) {
 
         public SourceComment {
             requireNonNull(timestamp, "timestamp must not be null");
@@ -420,10 +374,10 @@ public final class AssessmentTrailAssembler {
         }
     }
 
-    private record MachineRow(
+    private record TargetRow(
+            long analysisId,
             @Nullable AssessmentOwnership owner,
             long decisionVersion,
-            @Nullable String inheritanceStatus,
             @Nullable String localDetails) {}
 
     private record ContributionIdentity(

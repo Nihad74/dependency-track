@@ -21,7 +21,6 @@ package org.dependencytrack.resources.v1.vo;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
-import org.dependencytrack.assessmentsync.AssessmentOwnership;
 import org.dependencytrack.assessmentsync.AssessmentTrailAssembler;
 import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisComment;
@@ -89,36 +88,36 @@ public record AnalysisTrailResponse(
         BigDecimal owaspScore,
 
         @Schema(description = "Who owns the structured decision. Null when no origin row exists") @Nullable
-        AssessmentOwnership decisionOrigin,
+        DecisionOrigin decisionOrigin,
 
         @Schema(
                 description = "Origin version, or 0 when no origin row exists",
                 requiredMode = Schema.RequiredMode.REQUIRED)
         long decisionVersion,
 
-        @Schema(description = "Generic inheritance status. Contains no source name or count") @Nullable
-        String inheritanceStatus,
-
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
         @Schema(description = "Source assessments the caller can currently read. Hidden sources are omitted")
         List<SourceAssessment> sourceAssessments) {
 
-    public static AnalysisTrailResponse of(Analysis analysis) {
-        return of(analysis, null);
+    /// Who owns the structured decision. Clients cannot assign policy or inherited ownership.
+    public enum DecisionOrigin {
+        LOCAL,
+        POLICY,
+        INHERITED,
+        NEUTRAL
     }
 
     /// Machine fields come from the target analysis. Inherited rows do not expose copied details here.
-    public static AnalysisTrailResponse of(Analysis analysis, AssessmentTrailAssembler.@Nullable Trail trail) {
+    public static AnalysisTrailResponse of(Analysis analysis, AssessmentTrailAssembler.Trail trail) {
         final List<AnalysisComment> jdoComments = analysis.getAnalysisComments();
         final List<Comment> comments =
                 jdoComments != null ? jdoComments.stream().map(Comment::of).toList() : List.of();
-        final String details = trail == null ? analysis.getAnalysisDetails() : trail.localDetails();
 
         return new AnalysisTrailResponse(
                 analysis.getAnalysisState(),
                 analysis.getAnalysisJustification(),
                 analysis.getAnalysisResponse(),
-                details,
+                trail.localDetails(),
                 comments,
                 analysis.isSuppressed(),
                 analysis.getSeverity(),
@@ -130,22 +129,20 @@ public record AnalysisTrailResponse(
                 analysis.getCvssV4Score(),
                 analysis.getOwaspVector(),
                 analysis.getOwaspScore(),
-                trail == null ? null : trail.decisionOrigin(),
-                trail == null ? 0 : trail.decisionVersion(),
-                trail == null ? null : trail.inheritanceStatus(),
+                trail.decisionOrigin() == null
+                        ? null
+                        : DecisionOrigin.valueOf(trail.decisionOrigin().name()),
+                trail.decisionVersion(),
                 sourceAssessments(trail));
     }
 
-    private static List<SourceAssessment> sourceAssessments(AssessmentTrailAssembler.@Nullable Trail trail) {
-        if (trail == null || trail.sourceAssessments().isEmpty()) {
-            return List.of();
-        }
+    private static List<SourceAssessment> sourceAssessments(AssessmentTrailAssembler.Trail trail) {
         final var groups =
                 new ArrayList<SourceAssessment>(trail.sourceAssessments().size());
         for (final AssessmentTrailAssembler.SourceAssessment source : trail.sourceAssessments()) {
             final var comments = new ArrayList<SourceComment>(source.comments().size());
             for (final AssessmentTrailAssembler.SourceComment comment : source.comments()) {
-                comments.add(new SourceComment(Date.from(comment.timestamp()), comment.comment(), comment.author()));
+                comments.add(new SourceComment(Date.from(comment.timestamp()), comment.comment(), comment.commenter()));
             }
             groups.add(new SourceAssessment(
                     new ProjectIdentity(

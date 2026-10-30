@@ -48,7 +48,6 @@ import org.jspecify.annotations.Nullable;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -61,6 +60,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.assessmentsync.DaoSupport.nullableLong;
+import static org.dependencytrack.assessmentsync.DaoSupport.readNullableInstant;
 import static org.dependencytrack.notification.api.NotificationFactory.createVulnerabilityAnalysisDecisionChangeNotification;
 
 /// Applies one page of target findings on the caller's transaction.
@@ -150,7 +151,7 @@ public final class AssessmentSynchronizer {
                     change.decision(),
                     null,
                     null,
-                    change.reason() == null ? null : change.reason().name(),
+                    change.reason(),
                     prepared.decisionVersion(),
                     contributions);
             final var written = projectionDao.applyWorkerWrite(write);
@@ -888,7 +889,7 @@ public final class AssessmentSynchronizer {
                 .map((rs, ctx) -> {
                     final SourceAnalysis analysis = byAnalysis.get(rs.getLong("analysis_id"));
                     final String comment = rs.getString("comment");
-                    final Instant timestamp = readInstant(rs, "original_timestamp");
+                    final Instant timestamp = readNullableInstant(rs, "original_timestamp");
                     if (analysis == null || comment == null || timestamp == null) {
                         return null;
                     }
@@ -958,7 +959,7 @@ public final class AssessmentSynchronizer {
                             .computeIfAbsent(key, ignored -> new CopiedTrailBuilder(contributor, sourceDetails));
                     final Long commentId = nullableLong(rs, "comment_id");
                     final String comment = rs.getString("comment");
-                    final Instant timestamp = readInstant(rs, "original_timestamp");
+                    final Instant timestamp = readNullableInstant(rs, "original_timestamp");
                     if (commentId != null && comment != null && timestamp != null) {
                         builder.comments()
                                 .add(new SourceCommentWrite(commentId, comment, rs.getString("commenter"), timestamp));
@@ -1104,16 +1105,6 @@ public final class AssessmentSynchronizer {
                 rs.getBigDecimal("cvss_v4_score"),
                 rs.getString("owasp_vector"),
                 rs.getBigDecimal("owasp_score"));
-    }
-
-    private static @Nullable Long nullableLong(final ResultSet rs, final String column) throws SQLException {
-        final long value = rs.getLong(column);
-        return rs.wasNull() ? null : value;
-    }
-
-    private static @Nullable Instant readInstant(final ResultSet rs, final String column) throws SQLException {
-        final OffsetDateTime value = rs.getObject(column, OffsetDateTime.class);
-        return value == null ? null : value.toInstant();
     }
 
     private record TargetRow(

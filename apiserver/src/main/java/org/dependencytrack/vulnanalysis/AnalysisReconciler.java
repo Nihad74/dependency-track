@@ -18,6 +18,7 @@
  */
 package org.dependencytrack.vulnanalysis;
 
+import org.dependencytrack.assessmentsync.AssessmentOwnership;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
 import org.dependencytrack.model.AnalysisState;
@@ -70,6 +71,7 @@ final class AnalysisReconciler {
     private final @Nullable Double cvssV4Score;
     private final @Nullable String owaspVector;
     private final @Nullable Double owaspScore;
+    private final @Nullable AssessmentOwnership owner;
 
     AnalysisReconciler(long projectId, long componentId, long vulnDbId, @Nullable Analysis existing) {
         this.projectId = projectId;
@@ -91,6 +93,7 @@ final class AnalysisReconciler {
         this.cvssV4Score = existing != null ? existing.cvssV4Score() : null;
         this.owaspVector = existing != null ? existing.owaspVector() : null;
         this.owaspScore = existing != null ? existing.owaspScore() : null;
+        this.owner = existing != null ? existing.owner() : null;
     }
 
     @Nullable
@@ -250,7 +253,16 @@ final class AnalysisReconciler {
                     desiredOwaspScore);
 
             if (!hasChanged) {
+                // A local vulnerability policy wins over inheritance, so it claims a worker-owned row even when the
+                // values already match. Only the policy id changes. A hand-written local row stays local.
                 if (this.vulnPolicyId == null) {
+                    if (owner != AssessmentOwnership.INHERITED && owner != AssessmentOwnership.NEUTRAL) {
+                        return null;
+                    }
+                    return new Result(
+                            new FindingKey(componentId, vulnDbId), command, commenter, List.of(), false, false);
+                }
+                if (owner == AssessmentOwnership.POLICY) {
                     return null;
                 }
                 return new Result(

@@ -32,4 +32,9 @@ public enum AssessmentOwnership {
     public static boolean authored(final @Nullable AssessmentOwnership owner) {
         return owner == null || owner == LOCAL || owner == POLICY;
     }
+
+    /// Owner of an analysis that has no origin row: a policy owns what it wrote, anything else is local.
+    public static AssessmentOwnership ofUnlabeled(final boolean writtenByPolicy) {
+        return writtenByPolicy ? POLICY : LOCAL;
+    }
 }

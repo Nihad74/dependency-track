@@ -22,6 +22,7 @@ import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChangeRecorder;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentOriginDao;
+import org.dependencytrack.assessmentsync.AssessmentOriginDao.OriginUpdate;
 import org.dependencytrack.assessmentsync.AssessmentOwnership;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
@@ -68,7 +69,8 @@ public final class AnalysisDao {
             @Nullable String cvssV4Vector,
             @Nullable Double cvssV4Score,
             @Nullable String owaspVector,
-            @Nullable Double owaspScore) {}
+            @Nullable Double owaspScore,
+            @Nullable AssessmentOwnership owner) {}
 
     private static final RowMapper<Map.Entry<FindingKey, Analysis>> FINDING_ANALYSIS_ROW_MAPPER =
             (rs, ctx) -> Map.entry(
@@ -93,7 +95,8 @@ public final class AnalysisDao {
                             rs.getString("CVSSV4VECTOR"),
                             rs.getObject("CVSSV4SCORE", Double.class),
                             rs.getString("OWASPVECTOR"),
-                            rs.getObject("OWASPSCORE", Double.class)));
+                            rs.getObject("OWASPSCORE", Double.class),
+                            rs.getString("OWNER") != null ? AssessmentOwnership.valueOf(rs.getString("OWNER")) : null));
 
     Map<FindingKey, Analysis> getForProjectFindings(long projectId, Collection<FindingKey> findingKeys) {
         if (findingKeys.isEmpty()) {
@@ -130,7 +133,10 @@ public final class AnalysisDao {
                              , CAST("CVSSV4SCORE" AS DOUBLE PRECISION) AS "CVSSV4SCORE"
                              , "OWASPVECTOR"
                              , CAST("OWASPSCORE" AS DOUBLE PRECISION) AS "OWASPSCORE"
+                             , o."OWNER"
                           FROM "ANALYSIS"
+                          LEFT JOIN "ASSESSMENT_ORIGIN" AS o
+                            ON o."ANALYSIS_ID" = "ANALYSIS"."ID"
                          WHERE "PROJECT_ID" = :projectId
                            AND ("COMPONENT_ID", "VULNERABILITY_ID")
                             IN (SELECT * FROM UNNEST(:componentIds, :vulnerabilityIds))
@@ -175,7 +181,10 @@ public final class AnalysisDao {
                              , CAST("CVSSV4SCORE" AS DOUBLE PRECISION) AS "CVSSV4SCORE"
                              , "OWASPVECTOR"
                              , CAST("OWASPSCORE" AS DOUBLE PRECISION) AS "OWASPSCORE"
+                             , o."OWNER"
                           FROM "ANALYSIS"
+                          LEFT JOIN "ASSESSMENT_ORIGIN" AS o
+                            ON o."ANALYSIS_ID" = "ANALYSIS"."ID"
                          WHERE "PROJECT_ID" = :projectId
                            AND "VULNERABILITY_POLICY_ID" IS NOT NULL
                         <#if hasExclusions>
@@ -541,7 +550,7 @@ public final class AnalysisDao {
             commandByKey.put(new FindingKey(command.componentId(), command.vulnDbId()), command);
         }
 
-        final var dao = new AssessmentOriginDao(handle);
+        final var origins = new ArrayList<OriginUpdate>();
         final var changes = new ArrayList<AssessmentChange>();
         if (!modified.isEmpty()) {
             final long[] ids =
@@ -554,7 +563,7 @@ public final class AnalysisDao {
                 }
                 final AssessmentOwnership owner =
                         command.vulnPolicyName() == null ? AssessmentOwnership.NEUTRAL : AssessmentOwnership.POLICY;
-                writeOwner(dao, finding, owner);
+                origins.add(new OriginUpdate(finding.analysisId(), owner, true));
                 changes.add(policyChange(
                         finding,
                         owner == AssessmentOwnership.POLICY
@@ -563,15 +572,15 @@ public final class AnalysisDao {
             }
         }
         for (final PolicyFinding finding : loadEqualValueTakeovers(ownershipOnly)) {
-            writeOwner(dao, finding, AssessmentOwnership.POLICY);
+            origins.add(new OriginUpdate(finding.analysisId(), AssessmentOwnership.POLICY, true));
             changes.add(policyChange(finding, AssessmentChange.Reason.POLICY));
         }
+        // A policy write replaces the decision, so a copied source trail no longer explains it (ADR 044).
+        final var dao = new AssessmentOriginDao(handle);
+        dao.deleteCopiedContributions(
+                origins.stream().map(OriginUpdate::analysisId).toList());
+        dao.upsertOrigins(origins);
         new AssessmentChangeRecorder(handle).recordAll(changes);
-    }
-
-    private static void writeOwner(
-            final AssessmentOriginDao dao, final PolicyFinding finding, final AssessmentOwnership owner) {
-        dao.upsertOrigin(finding.analysisId(), owner, true);
     }
 
     private List<PolicyFinding> loadFindingsByAnalysisId(final long[] ids) {
