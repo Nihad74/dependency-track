@@ -46,7 +46,7 @@ public final class AssessmentProjectionDiff {
 
     /// Authored target rows, including a legacy row with no sidecar, are not machine-written.
     private static boolean protectsLocalDecision(final @Nullable AssessmentOwnership origin) {
-        return origin == null || origin == AssessmentOwnership.LOCAL || origin == AssessmentOwnership.POLICY;
+        return AssessmentOwnership.authored(origin);
     }
 
     private static Change applyAgreed(final CurrentProjection current, final AssessmentConsensus.Agreed agreed) {

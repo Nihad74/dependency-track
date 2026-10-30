@@ -336,6 +336,26 @@ class ReconcileProjectAssessmentsActivityTest extends PersistenceCapableTest {
     }
 
     @Test
+    void inheritedSourceRowIsNotPassedOn() throws Exception {
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        useJdbiTransaction(handle -> handle.createUpdate("""
+                        INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER")
+                        VALUES (:analysisId, 'INHERITED')
+                        ON CONFLICT ("ANALYSIS_ID") DO UPDATE
+                        SET "OWNER" = 'INHERITED'
+                        """)
+                .bind("analysisId", fixture.alpineAnalysisId)
+                .execute());
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+
+        final ReconcileProjectAssessmentsRes result = reconcile(fixture.target.getUuid(), 50);
+
+        assertThat(result.getApplied()).isZero();
+        assertThat(ReconcileFixture.state(fixture.library().getId(), fixture.vulnerability.getId()))
+                .isNull();
+    }
+
+    @Test
     void deletedTargetAcknowledgesWork() throws Exception {
         final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
         ReconcileFixture.requestFull(fixture.target.getUuid());

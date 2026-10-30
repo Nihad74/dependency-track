@@ -43,22 +43,22 @@ public final class AssessmentMatcher {
     ///
     /// Two source components with the same winning identity are ambiguous. Candidates that are
     /// different identities are not collapsed to a winner.
-    public static MatchResult match(final ComponentIdentity target, final List<SourceCandidate> sourceCandidates) {
+    public static MatchResult match(final ComponentIdentity target, final List<ComponentIdentity> sourceCandidates) {
         Objects.requireNonNull(target, "target must not be null");
         Objects.requireNonNull(sourceCandidates, "sourceCandidates must not be null");
 
         final var byComponent = new LinkedHashMap<UUID, Classified>();
-        for (final SourceCandidate candidate : sourceCandidates) {
+        for (final ComponentIdentity candidate : sourceCandidates) {
             Objects.requireNonNull(candidate, "source candidate must not be null");
             final Classified classified = classify(target, candidate);
             if (classified.relation() == Relation.IGNORE) {
                 continue;
             }
-            final Classified existing = byComponent.get(candidate.component().uuid());
+            final Classified existing = byComponent.get(candidate.uuid());
             if (existing == null) {
-                byComponent.put(candidate.component().uuid(), classified);
+                byComponent.put(candidate.uuid(), classified);
             } else if (existing.relation() != classified.relation()) {
-                byComponent.put(candidate.component().uuid(), existing.asConflict());
+                byComponent.put(candidate.uuid(), existing.asConflict());
             }
         }
 
@@ -78,11 +78,7 @@ public final class AssessmentMatcher {
             return new MatchResult.Unavailable(AssessmentReason.AMBIGUOUS_COMPONENT);
         }
         if (matches.size() == 1) {
-            final SourceCandidate candidate = matches.getFirst().candidate();
-            if (!AssessmentConsensus.eligible(candidate.origin())) {
-                return new MatchResult.Unavailable(AssessmentReason.NO_AUTHORED_SOURCE);
-            }
-            return new MatchResult.Matched(candidate);
+            return new MatchResult.Matched(matches.getFirst().candidate());
         }
         if (!conflicts.isEmpty()) {
             return new MatchResult.Unavailable(AssessmentReason.IDENTITY_CONFLICT);
@@ -104,8 +100,7 @@ public final class AssessmentMatcher {
         return new VulnerabilityMatch.Same();
     }
 
-    private static Classified classify(final ComponentIdentity target, final SourceCandidate candidate) {
-        final ComponentIdentity other = candidate.component();
+    private static Classified classify(final ComponentIdentity target, final ComponentIdentity other) {
         final String targetPurl = canonicalVersionedPurl(target.purl());
         final String candidatePurl = canonicalVersionedPurl(other.purl());
         final boolean hashConflict = hashesConflict(target, other);
@@ -116,22 +111,22 @@ public final class AssessmentMatcher {
                 // Name, version, and classifier are not a second identity check once the full PURL matches.
                 // Those comparable fields apply to the CPE fallback below. Hashes still conflict.
                 if (hashConflict) {
-                    return new Classified(candidate, Relation.CONFLICT);
+                    return new Classified(other, Relation.CONFLICT);
                 }
-                return new Classified(candidate, Relation.MATCH);
+                return new Classified(other, Relation.MATCH);
             }
-            return new Classified(candidate, Relation.IGNORE);
+            return new Classified(other, Relation.IGNORE);
         }
 
         final Cpe targetCpe = concreteCpe(target.cpe());
         final Cpe candidateCpe = concreteCpe(other.cpe());
         if (targetCpe == null || candidateCpe == null || !targetCpe.equals(candidateCpe)) {
-            return new Classified(candidate, Relation.IGNORE);
+            return new Classified(other, Relation.IGNORE);
         }
         if (parsePurl(other.purl()) != null || hashConflict || comparableConflict) {
-            return new Classified(candidate, Relation.CONFLICT);
+            return new Classified(other, Relation.CONFLICT);
         }
-        return new Classified(candidate, Relation.MATCH);
+        return new Classified(other, Relation.MATCH);
     }
 
     private static boolean hashesConflict(final ComponentIdentity target, final ComponentIdentity candidate) {
@@ -270,21 +265,12 @@ public final class AssessmentMatcher {
         STREEBOG_512
     }
 
-    /// A source component and the ownership of its analysis, when one exists.
-    public record SourceCandidate(
-            ComponentIdentity component, @Nullable AssessmentOwnership origin) {
-
-        public SourceCandidate {
-            Objects.requireNonNull(component, "component must not be null");
-        }
-    }
-
     public sealed interface MatchResult {
 
-        record Matched(SourceCandidate candidate) implements MatchResult {
+        record Matched(ComponentIdentity component) implements MatchResult {
 
             public Matched {
-                Objects.requireNonNull(candidate, "candidate must not be null");
+                Objects.requireNonNull(component, "component must not be null");
             }
         }
 
@@ -326,7 +312,7 @@ public final class AssessmentMatcher {
         IGNORE
     }
 
-    private record Classified(SourceCandidate candidate, Relation relation) {
+    private record Classified(ComponentIdentity candidate, Relation relation) {
 
         private Classified asConflict() {
             return new Classified(candidate, Relation.CONFLICT);
