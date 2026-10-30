@@ -133,10 +133,10 @@ public final class AssessmentSynchronizer {
                     prepared.decision(),
                     prepared.details(),
                     prepared.policyId(),
-                    contributors(trails),
-                    prepared.localComment());
+                    contributors(trails));
             final Change change = AssessmentProjectionDiff.diff(current, consensus);
             final AssessmentOwnership origin = change.origin();
+            // authored(null) is already true; the null check narrows origin for the worker write below.
             if (origin == null || AssessmentOwnership.authored(origin)) {
                 skipped++;
                 continue;
@@ -235,8 +235,7 @@ public final class AssessmentSynchronizer {
                             target.decision(),
                             target.details(),
                             target.policyId(),
-                            contributors(trails),
-                            target.localComment()),
+                            contributors(trails)),
                     decision.consensus());
             if (AssessmentOwnership.authored(change.origin())) {
                 continue;
@@ -252,9 +251,6 @@ public final class AssessmentSynchronizer {
 
     /// One source match per source project. Ambiguous identity blocks the finding.
     /// An inactive target attribution withdraws instead of inheriting.
-    ///
-    /// The marker component and each package descendant are separate target rows.
-    /// A descendant decision is never used as the marker component's own decision.
     private static Decision decide(
             final TargetRow target,
             final Map<Long, List<UUID>> sourcesByComponent,
@@ -360,8 +356,7 @@ public final class AssessmentSynchronizer {
                     target.decisionVersion(),
                     target.decision(),
                     target.details(),
-                    target.policyId(),
-                    target.localComment());
+                    target.policyId());
         }
         if (!(consensus instanceof AssessmentConsensus.Agreed)) {
             return null;
@@ -369,7 +364,7 @@ public final class AssessmentSynchronizer {
         final Long inserted = insertNeutralAnalysis(handle, projectId, target);
         if (inserted != null) {
             return new PreparedTarget(
-                    inserted, AssessmentOwnership.NEUTRAL, 0, AssessmentDecision.neutral(), null, null, false);
+                    inserted, AssessmentOwnership.NEUTRAL, 0, AssessmentDecision.neutral(), null, null);
         }
         return rereadAnalysis(handle, projectId, target);
     }
@@ -438,11 +433,6 @@ public final class AssessmentSynchronizer {
                              , a."VULNERABILITY_POLICY_ID" AS policy_id
                              , o."OWNER" AS owner
                              , o."DECISION_VERSION" AS decision_version
-                             , EXISTS (
-                                 SELECT 1
-                                   FROM "ANALYSISCOMMENT" AS ac
-                                  WHERE ac."ANALYSIS_ID" = a."ID"
-                               ) AS local_comment
                           FROM "ANALYSIS" AS a
                           LEFT JOIN "ASSESSMENT_ORIGIN" AS o
                             ON o."ANALYSIS_ID" = a."ID"
@@ -469,8 +459,7 @@ public final class AssessmentSynchronizer {
                             rs.getLong("decision_version"),
                             readDecision(rs),
                             rs.getString("details"),
-                            nullableLong(rs, "policy_id"),
-                            rs.getBoolean("local_comment"));
+                            nullableLong(rs, "policy_id"));
                 })
                 .findOne()
                 .orElse(null);
@@ -581,11 +570,6 @@ public final class AssessmentSynchronizer {
                              , a."VULNERABILITY_POLICY_ID" AS policy_id
                              , o."OWNER" AS owner
                              , o."DECISION_VERSION" AS decision_version
-                             , EXISTS (
-                                 SELECT 1
-                                   FROM "ANALYSISCOMMENT" AS ac
-                                  WHERE ac."ANALYSIS_ID" = a."ID"
-                               ) AS local_comment
                           FROM UNNEST(:componentIds, :vulnerabilityIds) AS k(component_id, vulnerability_id)
                          INNER JOIN "COMPONENT" AS c
                             ON c."ID" = k.component_id
@@ -630,8 +614,7 @@ public final class AssessmentSynchronizer {
                             owner == null ? 0 : rs.getLong("decision_version"),
                             analysisId == null ? AssessmentDecision.neutral() : readDecision(rs),
                             rs.getString("details"),
-                            nullableLong(rs, "policy_id"),
-                            rs.getBoolean("local_comment"));
+                            nullableLong(rs, "policy_id"));
                     targets.put(new FindingKey(componentId, vulnerabilityId), row);
                     return row;
                 })
@@ -1099,8 +1082,7 @@ public final class AssessmentSynchronizer {
             long decisionVersion,
             AssessmentDecision decision,
             @Nullable String details,
-            @Nullable Long policyId,
-            boolean localComment) {}
+            @Nullable Long policyId) {}
 
     private record PreparedTarget(
             long analysisId,
@@ -1108,8 +1090,7 @@ public final class AssessmentSynchronizer {
             long decisionVersion,
             AssessmentDecision decision,
             @Nullable String details,
-            @Nullable Long policyId,
-            boolean localComment) {}
+            @Nullable Long policyId) {}
 
     private record SourceComponent(ComponentIdentity identity, Map<UUID, SourceAnalysis> analysisByVulnerability) {}
 
