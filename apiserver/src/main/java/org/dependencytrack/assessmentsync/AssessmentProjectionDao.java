@@ -324,7 +324,6 @@ public final class AssessmentProjectionDao {
                                 )
                                 SELECT COUNT(*)::int
                                   FROM relabeled
-                                 WHERE (SELECT COUNT(*) FROM dropped) >= 0
                                 """), neutral)
                 .bind("projectUuid", projectUuid)
                 .bind("details", details)

@@ -179,8 +179,8 @@ public final class MaintainAssessmentProjectionsActivity
             if (Thread.interrupted()) {
                 throw new InterruptedException("Interrupted during assessment verification");
             }
-            final List<FindingKey> page =
-                    findingPage(handle, projectId, cursorComponentId, cursorVulnerabilityId, findingBatchSize);
+            final List<FindingKey> page = InheritableFindingKeys.page(
+                    handle, projectId, cursorComponentId, cursorVulnerabilityId, findingBatchSize);
             if (page.isEmpty()) {
                 return drift;
             }
@@ -216,52 +216,6 @@ public final class MaintainAssessmentProjectionsActivity
                 .bind("cursor", hasCursor ? cursor : ZERO_CURSOR)
                 .bind("limit", limit)
                 .map((rs, ctx) -> requireNonNull(rs.getObject("UUID", UUID.class)))
-                .list();
-    }
-
-    private static List<FindingKey> findingPage(
-            final Handle handle,
-            final long projectId,
-            final @Nullable Long cursorComponentId,
-            final @Nullable Long cursorVulnerabilityId,
-            final int limit) {
-        final boolean hasCursor = cursorComponentId != null && cursorVulnerabilityId != null;
-        return handle.createQuery(/* language=SQL */ """
-                        SELECT component_id
-                             , vulnerability_id
-                          FROM (
-                                SELECT DISTINCT fa."COMPONENT_ID" AS component_id
-                                     , fa."VULNERABILITY_ID" AS vulnerability_id
-                                  FROM "FINDINGATTRIBUTION" AS fa
-                                 INNER JOIN "COMPONENT" AS c
-                                    ON c."ID" = fa."COMPONENT_ID"
-                                 WHERE c."PROJECT_ID" = :projectId
-                                   AND fa."DELETED_AT" IS NULL
-                                UNION
-                                SELECT a."COMPONENT_ID"
-                                     , a."VULNERABILITY_ID"
-                                  FROM "ANALYSIS" AS a
-                                 INNER JOIN "ASSESSMENT_ORIGIN" AS o
-                                    ON o."ANALYSIS_ID" = a."ID"
-                                 WHERE a."PROJECT_ID" = :projectId
-                                   AND o."OWNER" = 'INHERITED'
-                                   AND a."COMPONENT_ID" IS NOT NULL
-                               ) AS keys
-                         WHERE :hasCursor = FALSE
-                            OR component_id > :cursorComponentId
-                            OR (
-                              component_id = :cursorComponentId
-                              AND vulnerability_id > :cursorVulnerabilityId
-                            )
-                         ORDER BY component_id, vulnerability_id
-                         LIMIT :limit
-                        """)
-                .bind("projectId", projectId)
-                .bind("hasCursor", hasCursor)
-                .bind("cursorComponentId", cursorComponentId == null ? 0L : cursorComponentId)
-                .bind("cursorVulnerabilityId", cursorVulnerabilityId == null ? 0L : cursorVulnerabilityId)
-                .bind("limit", limit)
-                .map((rs, ctx) -> new FindingKey(rs.getLong("component_id"), rs.getLong("vulnerability_id")))
                 .list();
     }
 
