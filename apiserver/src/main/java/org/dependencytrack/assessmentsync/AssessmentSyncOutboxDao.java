@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
@@ -202,18 +203,30 @@ public final class AssessmentSyncOutboxDao {
 
     /// Records a dispatch attempt. False means expansion already deleted the row.
     public boolean recordDispatchAttempt(final long id, final Instant nextDispatchAt) {
-        requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
+        return recordDispatchAttempts(Map.of(id, nextDispatchAt)) == 1;
+    }
+
+    /// Records one dispatch attempt per row in one statement. Rows expansion already deleted are skipped.
+    public int recordDispatchAttempts(final Map<Long, Instant> nextDispatchAtById) {
         requireTransaction(handle);
-        final int updated = handle.createUpdate(/* language=SQL */ """
-                        UPDATE "ASSESSMENT_SYNC_OUTBOX"
-                           SET "NEXT_DISPATCH_AT" = :nextDispatchAt
-                             , "DISPATCH_ATTEMPTS" = "DISPATCH_ATTEMPTS" + 1
-                         WHERE "ID" = :id
+        if (nextDispatchAtById.isEmpty()) {
+            return 0;
+        }
+        final long[] ids =
+                nextDispatchAtById.keySet().stream().mapToLong(Long::longValue).toArray();
+        final long[] nextDispatchAtMillis = nextDispatchAtById.values().stream()
+                .mapToLong(Instant::toEpochMilli)
+                .toArray();
+        return handle.createUpdate(/* language=SQL */ """
+                        UPDATE "ASSESSMENT_SYNC_OUTBOX" AS o
+                           SET "NEXT_DISPATCH_AT" = to_timestamp(t.next_dispatch_at_ms / 1000.0)
+                             , "DISPATCH_ATTEMPTS" = o."DISPATCH_ATTEMPTS" + 1
+                          FROM UNNEST(:ids, :nextDispatchAtMillis) AS t(id, next_dispatch_at_ms)
+                         WHERE o."ID" = t.id
                         """)
-                .bind("id", id)
-                .bind("nextDispatchAt", nextDispatchAt)
+                .bind("ids", ids)
+                .bind("nextDispatchAtMillis", nextDispatchAtMillis)
                 .execute();
-        return updated == 1;
     }
 
     /// Deletes the row after the caller has finished expansion.
