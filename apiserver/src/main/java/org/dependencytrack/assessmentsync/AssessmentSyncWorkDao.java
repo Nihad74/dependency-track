@@ -170,12 +170,7 @@ public final class AssessmentSyncWorkDao {
             return null;
         }
         if (locked.activeRevision() != null) {
-            return new Pass(
-                    locked.activeRevision(),
-                    locked.activeFull(),
-                    locked.cursorComponentId(),
-                    locked.cursorVulnerabilityId(),
-                    true);
+            return new Pass(locked.activeRevision(), locked.activeFull(), locked.cursor(), true);
         }
         if (locked.requestedRevision() == locked.completedRevision()) {
             return null;
@@ -190,25 +185,14 @@ public final class AssessmentSyncWorkDao {
                            AND "ACTIVE_REVISION" IS NULL
                         RETURNING "ACTIVE_REVISION"
                                 , "ACTIVE_FULL"
-                                , "CURSOR_COMPONENT_ID"
-                                , "CURSOR_VULNERABILITY_ID"
                         """)
                 .bind("targetUuid", targetUuid)
-                .map((rs, ctx) -> new Pass(
-                        rs.getLong("ACTIVE_REVISION"),
-                        rs.getBoolean("ACTIVE_FULL"),
-                        nullableLong(rs, "CURSOR_COMPONENT_ID"),
-                        nullableLong(rs, "CURSOR_VULNERABILITY_ID"),
-                        false))
+                .map((rs, ctx) -> new Pass(rs.getLong("ACTIVE_REVISION"), rs.getBoolean("ACTIVE_FULL"), null, false))
                 .one();
     }
 
     /// Saves the keyset cursor for the captured pass. A mismatched revision is left unchanged.
-    public boolean advancePass(
-            final UUID targetUuid,
-            final long activeRevision,
-            final @Nullable Long cursorComponentId,
-            final @Nullable Long cursorVulnerabilityId) {
+    public boolean advancePass(final UUID targetUuid, final long activeRevision, final FindingKey cursor) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireTransaction(handle);
         lock(targetUuid);
@@ -222,8 +206,8 @@ public final class AssessmentSyncWorkDao {
                         """)
                 .bind("targetUuid", targetUuid)
                 .bind("activeRevision", activeRevision)
-                .bind("cursorComponentId", cursorComponentId)
-                .bind("cursorVulnerabilityId", cursorVulnerabilityId)
+                .bind("cursorComponentId", cursor.componentId())
+                .bind("cursorVulnerabilityId", cursor.vulnDbId())
                 .execute();
         return updated == 1;
     }
@@ -530,15 +514,19 @@ public final class AssessmentSyncWorkDao {
             requireNonNull(targetUuid, "targetUuid must not be null");
             requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
         }
+
+        /// The saved keyset cursor, or null when the pass has not finished a finding yet.
+        public @Nullable FindingKey cursor() {
+            return cursorComponentId == null || cursorVulnerabilityId == null
+                    ? null
+                    : new FindingKey(cursorComponentId, cursorVulnerabilityId);
+        }
     }
 
     /// A pass captured from the locked work row. {@code resumed} means the cursor was kept.
+    /// One captured pass. {@code cursor} is the last finding finished, or null at the start.
     public record Pass(
-            long activeRevision,
-            boolean full,
-            @Nullable Long cursorComponentId,
-            @Nullable Long cursorVulnerabilityId,
-            boolean resumed) {}
+            long activeRevision, boolean full, @Nullable FindingKey cursor, boolean resumed) {}
 
     /// One pending finding key and the revision that requested it.
     public record PendingFinding(long componentId, long vulnerabilityId, long revision) {}

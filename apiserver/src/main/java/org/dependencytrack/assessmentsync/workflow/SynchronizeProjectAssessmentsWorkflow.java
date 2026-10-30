@@ -100,7 +100,7 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
             return null;
         }
         if (pending.getReconciliationPending()) {
-            ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(argument));
+            continueAsNew(ctx, argument);
             return null;
         }
         if (pending.getRefreshPending() && pending.getRefreshRequested() > highestRefresh) {
@@ -110,14 +110,20 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
                 return null;
             }
             if (pending.getReconciliationPending() || pending.getRefreshPending()) {
-                ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(argument));
+                continueAsNew(ctx, argument);
             }
             return null;
         }
         if (pending.getRefreshPending()) {
-            ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(argument));
+            continueAsNew(ctx, argument);
         }
         return null;
+    }
+
+    private static void continueAsNew(
+            final WorkflowContext<SynchronizeProjectAssessmentsArg> ctx,
+            final SynchronizeProjectAssessmentsArg argument) {
+        ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(argument));
     }
 
     /// The child uses the project analysis key, never this workflow's assessment-sync key.

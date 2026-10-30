@@ -92,14 +92,7 @@ public final class ReconcileProjectAssessmentsActivity
     private ReconcileProjectAssessmentsRes deferInactive(final Handle handle, final UUID targetUuid) {
         new AssessmentSyncWorkDao(handle)
                 .scheduleDispatch(targetUuid, Instant.now().plus(inactiveBackoff));
-        return ReconcileProjectAssessmentsRes.newBuilder()
-                .setHasMore(false)
-                .setRefreshRevision(0)
-                .setTargetDeleted(false)
-                .setApplied(0)
-                .setWithdrawn(0)
-                .setSkipped(0)
-                .build();
+        return idle(false);
     }
 
     private ReconcileProjectAssessmentsRes reconcile(final Handle handle, final UUID targetUuid) {
@@ -108,26 +101,12 @@ public final class ReconcileProjectAssessmentsActivity
         final Long projectId = handle.attach(ProjectDao.class).getProjectId(targetUuid);
         if (projectId == null) {
             workDao.acknowledgeCancellation(targetUuid);
-            return ReconcileProjectAssessmentsRes.newBuilder()
-                    .setHasMore(false)
-                    .setRefreshRevision(0)
-                    .setTargetDeleted(true)
-                    .setApplied(0)
-                    .setWithdrawn(0)
-                    .setSkipped(0)
-                    .build();
+            return idle(true);
         }
 
         final Pass pass = workDao.beginOrResumePass(targetUuid);
         if (pass == null) {
-            return ReconcileProjectAssessmentsRes.newBuilder()
-                    .setHasMore(false)
-                    .setRefreshRevision(0)
-                    .setTargetDeleted(false)
-                    .setApplied(0)
-                    .setWithdrawn(0)
-                    .setSkipped(0)
-                    .build();
+            return idle(false);
         }
         if (pass.full() && !pass.resumed()) {
             new AssessmentEmbeddingIndexer(handle).rebuild(targetUuid);
@@ -144,8 +123,7 @@ public final class ReconcileProjectAssessmentsActivity
             if (page.isEmpty()) {
                 throw new IllegalStateException("Assessment page was empty while more keys were reported");
             }
-            final FindingKey last = page.getLast();
-            if (!workDao.advancePass(targetUuid, pass.activeRevision(), last.componentId(), last.vulnDbId())) {
+            if (!workDao.advancePass(targetUuid, pass.activeRevision(), page.getLast())) {
                 throw new IllegalStateException("Assessment cursor was not advanced for " + targetUuid);
             }
         } else if (!workDao.completePass(targetUuid, pass.activeRevision())) {
@@ -164,39 +142,36 @@ public final class ReconcileProjectAssessmentsActivity
                 .build();
     }
 
+    /// Nothing reconciled in this call.
+    private static ReconcileProjectAssessmentsRes idle(final boolean targetDeleted) {
+        return ReconcileProjectAssessmentsRes.newBuilder()
+                .setHasMore(false)
+                .setRefreshRevision(0)
+                .setTargetDeleted(targetDeleted)
+                .build();
+    }
+
     private static List<FindingKey> pageKeys(
             final Handle handle, final long projectId, final UUID targetUuid, final Pass pass, final int limit) {
-        final Long storedCursorComponentId = pass.cursorComponentId();
-        final Long storedCursorVulnerabilityId = pass.cursorVulnerabilityId();
-        final boolean hasCursor = storedCursorComponentId != null && storedCursorVulnerabilityId != null;
-        final long cursorComponentId = storedCursorComponentId == null ? 0L : storedCursorComponentId;
-        final long cursorVulnerabilityId = storedCursorVulnerabilityId == null ? 0L : storedCursorVulnerabilityId;
         if (pass.full()) {
-            return InheritableFindingKeys.page(
-                    handle, projectId, pass.cursorComponentId(), pass.cursorVulnerabilityId(), limit);
+            return InheritableFindingKeys.page(handle, projectId, pass.cursor(), limit);
         }
-        return handle.createQuery(/* language=SQL */ """
-                        SELECT "COMPONENT_ID"
-                             , "VULNERABILITY_ID"
-                          FROM "ASSESSMENT_SYNC_FINDING"
-                         WHERE "TARGET_UUID" = :targetUuid
-                           AND "REVISION" <= :activeRevision
-                           AND (
-                             :hasCursor = FALSE
-                             OR "COMPONENT_ID" > :cursorComponentId
-                             OR (
-                               "COMPONENT_ID" = :cursorComponentId
-                               AND "VULNERABILITY_ID" > :cursorVulnerabilityId
-                             )
-                           )
-                         ORDER BY "COMPONENT_ID", "VULNERABILITY_ID"
-                         LIMIT :limit
-                        """)
+        return InheritableFindingKeys.bindCursor(
+                        handle.createQuery(
+                                /* language=SQL */ """
+                                SELECT "COMPONENT_ID"
+                                     , "VULNERABILITY_ID"
+                                  FROM "ASSESSMENT_SYNC_FINDING"
+                                 WHERE "TARGET_UUID" = :targetUuid
+                                   AND "REVISION" <= :activeRevision
+                                   AND %s
+                                 ORDER BY "COMPONENT_ID", "VULNERABILITY_ID"
+                                 LIMIT :limit
+                                """.formatted(InheritableFindingKeys.afterCursor(
+                                        "\"COMPONENT_ID\"", "\"VULNERABILITY_ID\""))),
+                        pass.cursor())
                 .bind("targetUuid", targetUuid)
                 .bind("activeRevision", pass.activeRevision())
-                .bind("hasCursor", hasCursor)
-                .bind("cursorComponentId", cursorComponentId)
-                .bind("cursorVulnerabilityId", cursorVulnerabilityId)
                 .bind("limit", limit)
                 .map((rs, ctx) -> new FindingKey(rs.getLong("COMPONENT_ID"), rs.getLong("VULNERABILITY_ID")))
                 .list();

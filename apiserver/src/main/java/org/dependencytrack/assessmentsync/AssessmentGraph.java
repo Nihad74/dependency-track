@@ -19,101 +19,58 @@
 package org.dependencytrack.assessmentsync;
 
 import java.util.ArrayDeque;
-import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 
-/// Project-local reachability beneath a marker. The caller supplies the graph.
+/// Dependency graph of one project's components. Every node is a key; an edge to an id that is not a key is
+/// ignored, so a removed component also hides what was only reachable through it.
 public final class AssessmentGraph {
 
-    private AssessmentGraph() {}
+    private final Map<Long, List<Long>> childrenByNode;
 
-    /// Package component ids strictly beneath {@code markerId}. The marker itself is omitted.
-    ///
-    /// An empty graph or a marker that is not in the graph yields an empty set.
-    public static Set<Long> descendants(final Graph graph, final long markerId) {
-        Objects.requireNonNull(graph, "graph must not be null");
-        final Node marker = graph.nodes().get(markerId);
-        if (marker == null || !graph.projectId().equals(marker.projectId())) {
+    public AssessmentGraph(final Map<Long, List<Long>> childrenByNode) {
+        final var copy = new HashMap<Long, List<Long>>(childrenByNode.size());
+        childrenByNode.forEach((node, children) -> copy.put(node, List.copyOf(children)));
+        this.childrenByNode = copy;
+    }
+
+    /// Every node reachable from {@code roots}, roots included. Roots that are not nodes are ignored.
+    public Set<Long> reachableFrom(final Collection<Long> roots) {
+        final var visited = new LinkedHashSet<Long>();
+        for (final long root : roots) {
+            if (childrenByNode.containsKey(root)) {
+                visited.add(root);
+            }
+        }
+        walk(visited, List.copyOf(visited));
+        return Set.copyOf(visited);
+    }
+
+    /// Components strictly beneath {@code markerId}. The marker itself is omitted, even on a cycle.
+    public Set<Long> descendants(final long markerId) {
+        if (!childrenByNode.containsKey(markerId)) {
             return Set.of();
         }
-
-        final Map<Long, List<Edge>> edgesByParent = new HashMap<>();
-        for (final Edge edge : graph.edges()) {
-            List<Edge> children = edgesByParent.get(edge.fromComponentId());
-            if (children == null) {
-                children = new ArrayList<>();
-                edgesByParent.put(edge.fromComponentId(), children);
-            }
-            children.add(edge);
-        }
-
-        final Set<Long> visited = new HashSet<>();
-        final Set<Long> descendants = new LinkedHashSet<>();
-        final ArrayDeque<Long> pending = new ArrayDeque<>();
+        final var visited = new LinkedHashSet<Long>();
         visited.add(markerId);
-        pending.add(markerId);
+        walk(visited, List.of(markerId));
+        visited.remove(markerId);
+        return Set.copyOf(visited);
+    }
+
+    /// Breadth-first from {@code start}, whose nodes are already in {@code visited}.
+    private void walk(final Set<Long> visited, final List<Long> start) {
+        final var pending = new ArrayDeque<Long>(start);
         while (!pending.isEmpty()) {
-            final long current = pending.removeFirst();
-            final List<Edge> children = edgesByParent.get(current);
-            if (children == null) {
-                continue;
-            }
-            for (final Edge edge : children) {
-                if (!graph.projectId().equals(edge.projectId())) {
-                    continue;
-                }
-                final Node child = graph.nodes().get(edge.toComponentId());
-                if (child == null || !graph.projectId().equals(child.projectId())) {
-                    continue;
-                }
-                if (!visited.add(child.componentId())) {
-                    continue;
-                }
-                if (!child.service()) {
-                    descendants.add(child.componentId());
-                }
-                pending.addLast(child.componentId());
-            }
-        }
-        return Set.copyOf(descendants);
-    }
-
-    /// Immutable dependency graph for one target project. Foreign nodes and edges may be present.
-    public record Graph(UUID projectId, Map<Long, Node> nodes, List<Edge> edges) {
-
-        public Graph {
-            Objects.requireNonNull(projectId, "projectId must not be null");
-            Objects.requireNonNull(nodes, "nodes must not be null");
-            Objects.requireNonNull(edges, "edges must not be null");
-            nodes = Map.copyOf(nodes);
-            edges = List.copyOf(edges);
-            for (final Map.Entry<Long, Node> entry : nodes.entrySet()) {
-                if (entry.getKey().longValue() != entry.getValue().componentId()) {
-                    throw new IllegalArgumentException("node map key must equal the component id");
+            for (final long child : childrenByNode.getOrDefault(pending.removeFirst(), List.of())) {
+                if (childrenByNode.containsKey(child) && visited.add(child)) {
+                    pending.add(child);
                 }
             }
-        }
-    }
-
-    public record Node(long componentId, UUID projectId, boolean service) {
-
-        public Node {
-            Objects.requireNonNull(projectId, "projectId must not be null");
-        }
-    }
-
-    /// Directed dependency from parent to child. {@code projectId} is the project that owns the edge.
-    public record Edge(UUID projectId, long fromComponentId, long toComponentId) {
-
-        public Edge {
-            Objects.requireNonNull(projectId, "projectId must not be null");
         }
     }
 }

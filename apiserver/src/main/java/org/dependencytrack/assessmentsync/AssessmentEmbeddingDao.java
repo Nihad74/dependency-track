@@ -57,8 +57,9 @@ public final class AssessmentEmbeddingDao {
             }
         }
 
+        final Set<StoredMember> members = desiredMembers(membership);
         if (storedMarkers(targetProjectId).equals(desiredMarkers(membership))
-                && storedMembers(targetProjectId).equals(desiredMembers(membership))) {
+                && storedMembers(targetProjectId).equals(members)) {
             return;
         }
 
@@ -77,13 +78,11 @@ public final class AssessmentEmbeddingDao {
         final var versions = new String[membership.size()];
         final var sourceUuids = new @Nullable UUID[membership.size()];
         int markerIndex = 0;
-        int memberCount = 0;
         for (final MarkerMembership marker : membership) {
             markerIds[markerIndex] = marker.markerComponentId();
             names[markerIndex] = marker.markerName();
             versions[markerIndex] = marker.markerVersion();
             sourceUuids[markerIndex] = marker.sourceProjectUuid();
-            memberCount += dedupeMembers(marker).size();
             markerIndex++;
         }
         handle.createUpdate(/* language=SQL */ """
@@ -118,19 +117,13 @@ public final class AssessmentEmbeddingDao {
                 .bind("sourceUuids", sourceUuids)
                 .execute();
 
-        if (memberCount == 0) {
+        if (members.isEmpty()) {
             return;
         }
-        final var memberMarkerIds = new long[memberCount];
-        final var memberComponentIds = new long[memberCount];
-        int memberIndex = 0;
-        for (final MarkerMembership marker : membership) {
-            for (final long componentId : dedupeMembers(marker)) {
-                memberMarkerIds[memberIndex] = marker.markerComponentId();
-                memberComponentIds[memberIndex] = componentId;
-                memberIndex++;
-            }
-        }
+        final long[] memberMarkerIds =
+                members.stream().mapToLong(StoredMember::markerComponentId).toArray();
+        final long[] memberComponentIds =
+                members.stream().mapToLong(StoredMember::componentId).toArray();
         handle.createUpdate(/* language=SQL */ """
                         INSERT INTO "ASSESSMENT_EMBEDDING_MEMBER" (
                           "TARGET_PROJECT_ID"
@@ -259,7 +252,7 @@ public final class AssessmentEmbeddingDao {
     }
 
     private static Set<StoredMember> desiredMembers(final Collection<MarkerMembership> membership) {
-        final var members = new HashSet<StoredMember>();
+        final var members = new LinkedHashSet<StoredMember>();
         for (final MarkerMembership marker : membership) {
             for (final long componentId : dedupeMembers(marker)) {
                 members.add(new StoredMember(marker.markerComponentId(), componentId));
