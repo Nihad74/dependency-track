@@ -267,6 +267,8 @@ final class ProjectQueryManager extends QueryManager {
     @Override
     public Project updateProject(Project transientProject, boolean commitIndex) {
         return callInTransaction(() -> {
+            // Lock before reading, so the values captured below are the ones this update replaces.
+            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, transientProject.getUuid()));
             final Project project = getObjectByUuid(Project.class, transientProject.getUuid());
             final String nameBefore = project.getName();
             final String versionBefore = project.getVersion();
@@ -274,7 +276,6 @@ final class ProjectQueryManager extends QueryManager {
             final ProjectCollectionLogic collectionBefore = project.getCollectionLogic();
             final UUID parentBefore =
                     project.getParent() == null ? null : project.getParent().getUuid();
-            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
 
             // NB: Resolve the parent BEFORE setting any field below, for the same reason the
             // collection tag is resolved before collectionLogic further down: getObjectByUuid

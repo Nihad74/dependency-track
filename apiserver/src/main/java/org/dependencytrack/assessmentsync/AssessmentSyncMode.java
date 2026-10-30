@@ -36,6 +36,11 @@ public enum AssessmentSyncMode {
         return this == CAPTURE || this == ACTIVE;
     }
 
+    /// Machine decisions are reconciled onto targets in active mode only.
+    public boolean appliesAssessments() {
+        return this == ACTIVE;
+    }
+
     /// Current mode. A missing property is OFF. Any other unknown value is rejected.
     public static AssessmentSyncMode current() {
         return from(ConfigProvider.getConfig());

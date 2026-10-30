@@ -82,7 +82,7 @@ public final class ReconcileProjectAssessmentsActivity
         }
         final UUID targetUuid = AssessmentSyncArguments.projectUuid(
                 AssessmentSyncArguments.require(argument).getProjectUuid());
-        if (AssessmentSyncMode.current() != AssessmentSyncMode.ACTIVE) {
+        if (!AssessmentSyncMode.current().appliesAssessments()) {
             return inJdbiTransaction(handle -> deferInactive(handle, targetUuid));
         }
         return inJdbiTransaction(handle -> reconcile(handle, targetUuid));

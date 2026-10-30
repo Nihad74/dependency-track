@@ -52,6 +52,8 @@ import org.jdbi.v3.core.Handle;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.jdo.JDOObjectNotFoundException;
 import java.time.Instant;
@@ -661,6 +663,25 @@ public class ProjectDaoTest extends PersistenceCapableTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"OFF", "WITHDRAW"})
+    public void deleteRecordsNothingWhileTheModeDoesNotCapture(final String mode) {
+        final var parent = new Project();
+        parent.setName("acme-app-parent");
+        parent.setVersion("1.0.0");
+        qm.persist(parent);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, mode);
+        try {
+            withJdbiHandle(handle -> handle.attach(ProjectDao.class).deleteProjects(List.of(parent.getUuid())));
+
+            assertThat(projectDao.getProjectId(parent.getUuid())).isNull();
+            assertThat(outboxCount(parent.getUuid())).isZero();
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
     @Test
     public void deleteProjectsRollbackLeavesNoOutboxRow() {
         final var parent = new Project();
@@ -680,6 +701,46 @@ public class ProjectDaoTest extends PersistenceCapableTest {
         } finally {
             MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
         }
+    }
+
+    @Test
+    public void cloneKeepsTheOwnerOfACopiedAnalysis() {
+        final var project = new Project();
+        project.setName("acme-app");
+        project.setVersion("1.0.0");
+        qm.persist(project);
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("noted-lib");
+        component.setVersion("1.0.0");
+        qm.persist(component);
+        final var vuln = new Vulnerability();
+        vuln.setVulnId("INT-NOTED");
+        vuln.setSource(Vulnerability.Source.INTERNAL);
+        qm.persist(vuln);
+        qm.addVulnerability(vuln, component, "internal");
+        qm.makeAnalysis(new MakeAnalysisCommand(component, vuln)
+                .withComment("only a note")
+                .withCommenter("jane")
+                .withDecisionAction(MakeAnalysisCommand.DecisionAction.COMMENT_ONLY));
+
+        final UUID clonedUuid = projectDao.cloneProject(new CloneProjectCommand(
+                project.getUuid(), "1.1.0", false, false, true, true, true, false, false, false, false, false));
+
+        final List<String> owners = jdbiHandle
+                .createQuery("""
+                        SELECT origin."OWNER"
+                          FROM "ANALYSIS" AS analysis
+                         INNER JOIN "PROJECT" AS project
+                            ON project."ID" = analysis."PROJECT_ID"
+                          LEFT JOIN "ASSESSMENT_ORIGIN" AS origin
+                            ON origin."ANALYSIS_ID" = analysis."ID"
+                         WHERE project."UUID" = :projectUuid
+                        """)
+                .bind("projectUuid", clonedUuid)
+                .mapTo(String.class)
+                .list();
+        assertThat(owners).containsExactly("NEUTRAL");
     }
 
     @Test

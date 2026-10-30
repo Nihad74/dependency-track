@@ -24,6 +24,7 @@ import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentOriginDao;
 import org.dependencytrack.assessmentsync.AssessmentOriginDao.OriginUpdate;
 import org.dependencytrack.assessmentsync.AssessmentOwnership;
+import org.dependencytrack.assessmentsync.FindingIdentity;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
 import org.dependencytrack.model.AnalysisState;
@@ -32,11 +33,8 @@ import org.dependencytrack.model.Severity;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.statement.SqlStatements;
-import org.jdbi.v3.core.statement.StatementContext;
 import org.jspecify.annotations.Nullable;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -553,9 +551,7 @@ public final class AnalysisDao {
         final var origins = new ArrayList<OriginUpdate>();
         final var changes = new ArrayList<AssessmentChange>();
         if (!modified.isEmpty()) {
-            final long[] ids =
-                    modified.values().stream().mapToLong(Long::longValue).toArray();
-            for (final PolicyFinding finding : loadFindingsByAnalysisId(ids)) {
+            for (final FindingIdentity finding : FindingIdentity.ofAnalyses(handle, modified.values())) {
                 final MakeAnalysisCommand command =
                         commandByKey.get(new FindingKey(finding.componentId(), finding.vulnerabilityId()));
                 if (command == null) {
@@ -564,16 +560,15 @@ public final class AnalysisDao {
                 final AssessmentOwnership owner =
                         command.vulnPolicyName() == null ? AssessmentOwnership.NEUTRAL : AssessmentOwnership.POLICY;
                 origins.add(new OriginUpdate(finding.analysisId(), owner, true));
-                changes.add(policyChange(
-                        finding,
+                changes.add(finding.change(
                         owner == AssessmentOwnership.POLICY
                                 ? AssessmentChange.Reason.POLICY
                                 : AssessmentChange.Reason.POLICY_UNASSIGNED));
             }
         }
-        for (final PolicyFinding finding : loadEqualValueTakeovers(ownershipOnly)) {
+        for (final FindingIdentity finding : loadEqualValueTakeovers(ownershipOnly)) {
             origins.add(new OriginUpdate(finding.analysisId(), AssessmentOwnership.POLICY, true));
-            changes.add(policyChange(finding, AssessmentChange.Reason.POLICY));
+            changes.add(finding.change(AssessmentChange.Reason.POLICY));
         }
         // A policy write replaces the decision, so a copied source trail no longer explains it (ADR 044).
         final var dao = new AssessmentOriginDao(handle);
@@ -583,35 +578,7 @@ public final class AnalysisDao {
         new AssessmentChangeRecorder(handle).recordAll(changes);
     }
 
-    private List<PolicyFinding> loadFindingsByAnalysisId(final long[] ids) {
-        final List<PolicyFinding> findings = handle.createQuery("""
-                        SELECT a."ID" AS analysis_id
-                             , a."COMPONENT_ID" AS component_id
-                             , a."VULNERABILITY_ID" AS vulnerability_id
-                             , p."UUID" AS project_uuid
-                             , p."NAME" AS project_name
-                             , p."VERSION" AS project_version
-                             , c."UUID" AS component_uuid
-                             , v."UUID" AS vulnerability_uuid
-                          FROM "ANALYSIS" AS a
-                         INNER JOIN "PROJECT" AS p
-                            ON p."ID" = a."PROJECT_ID"
-                         INNER JOIN "COMPONENT" AS c
-                            ON c."ID" = a."COMPONENT_ID"
-                         INNER JOIN "VULNERABILITY" AS v
-                            ON v."ID" = a."VULNERABILITY_ID"
-                         WHERE a."ID" = ANY(:ids)
-                        """)
-                .bind("ids", ids)
-                .map(this::mapPolicyFinding)
-                .list();
-        if (findings.size() != ids.length) {
-            throw new IllegalStateException("Updated analysis is missing its finding identity");
-        }
-        return findings;
-    }
-
-    private List<PolicyFinding> loadEqualValueTakeovers(final List<MakeAnalysisCommand> commands) {
+    private List<FindingIdentity> loadEqualValueTakeovers(final List<MakeAnalysisCommand> commands) {
         if (commands.isEmpty()) {
             return List.of();
         }
@@ -627,14 +594,7 @@ public final class AnalysisDao {
             policyNames[i] = command.vulnPolicyName();
         }
         return handle.createQuery("""
-                        SELECT a."ID" AS analysis_id
-                             , a."COMPONENT_ID" AS component_id
-                             , a."VULNERABILITY_ID" AS vulnerability_id
-                             , p."UUID" AS project_uuid
-                             , p."NAME" AS project_name
-                             , p."VERSION" AS project_version
-                             , c."UUID" AS component_uuid
-                             , v."UUID" AS vulnerability_uuid
+                        SELECT %s
                           FROM UNNEST(:projectIds, :componentIds, :vulnerabilityIds, :policyNames)
                             AS t(project_id, component_id, vulnerability_id, policy_name)
                          INNER JOIN "ANALYSIS" AS a
@@ -653,46 +613,14 @@ public final class AnalysisDao {
                           LEFT JOIN "ASSESSMENT_ORIGIN" AS o
                             ON o."ANALYSIS_ID" = a."ID"
                          WHERE o."OWNER" IS DISTINCT FROM 'POLICY'
-                        """)
+                        """.formatted(FindingIdentity.COLUMNS))
                 .bind("projectIds", projectIds)
                 .bind("componentIds", componentIds)
                 .bind("vulnerabilityIds", vulnerabilityIds)
                 .bind("policyNames", policyNames)
-                .map(this::mapPolicyFinding)
+                .map(FindingIdentity.MAPPER)
                 .list();
     }
-
-    private PolicyFinding mapPolicyFinding(final ResultSet rs, final StatementContext ctx) throws SQLException {
-        return new PolicyFinding(
-                rs.getLong("analysis_id"),
-                rs.getLong("component_id"),
-                rs.getLong("vulnerability_id"),
-                rs.getObject("project_uuid", UUID.class),
-                rs.getString("project_name"),
-                rs.getString("project_version"),
-                rs.getObject("component_uuid", UUID.class),
-                rs.getObject("vulnerability_uuid", UUID.class));
-    }
-
-    private static AssessmentChange policyChange(final PolicyFinding finding, final AssessmentChange.Reason reason) {
-        return new AssessmentChange(
-                AssessmentChange.Scope.FINDING,
-                finding.projectUuid(),
-                finding.componentUuid(),
-                finding.vulnerabilityUuid(),
-                reason,
-                AssessmentChange.LookupKey.listOf(finding.projectName(), finding.projectVersion()));
-    }
-
-    private record PolicyFinding(
-            long analysisId,
-            long componentId,
-            long vulnerabilityId,
-            UUID projectUuid,
-            @Nullable String projectName,
-            @Nullable String projectVersion,
-            UUID componentUuid,
-            UUID vulnerabilityUuid) {}
 
     public record CreateCommentCommand(long analysisId, String commenter, String comment) {}
 

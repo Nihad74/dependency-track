@@ -22,8 +22,6 @@ import org.cyclonedx.proto.v1_7.Bom;
 import org.cyclonedx.proto.v1_7.Property;
 import org.cyclonedx.proto.v1_7.VulnerabilityAffects;
 import org.cyclonedx.proto.v1_7.VulnerabilityReference;
-import org.dependencytrack.assessmentsync.AssessmentChange;
-import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.dependencytrack.assessmentsync.AssessmentEmbeddingIndexer;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentStructureCapture;
@@ -73,6 +71,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -522,10 +521,8 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
             final int attributionsDeleted = findingDao.deleteAttributions(attributionIdsToDelete);
             LOGGER.debug("Removed {} stale attribution(s)", attributionsDeleted);
 
-            if (AssessmentSyncMode.current().recordsOutbox()) {
-                recordAttributionChanges(
-                        handle, projectUuid, existingAttributions, createAttributionCommands, attributionIdsToDelete);
-            }
+            recordAttributionChanges(
+                    handle, projectUuid, existingAttributions, createAttributionCommands, attributionIdsToDelete);
 
             final PolicyApplication policyApplication =
                     applyVulnPolicyResults(handle, projectId, policyResults, vulnDbIdsByComponentId);
@@ -574,104 +571,18 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
             return;
         }
 
-        final var componentIds = new HashSet<Long>();
-        final var vulnerabilityIds = new HashSet<Long>();
+        final var findings = new LinkedHashSet<AssessmentStructureCapture.FindingRef>();
         for (final FindingDao.CreateAttributionCommand command : createAttributionCommands) {
-            componentIds.add(command.componentId());
-            vulnerabilityIds.add(command.vulnDbId());
+            findings.add(new AssessmentStructureCapture.FindingRef(command.componentId(), command.vulnDbId()));
         }
         for (final FindingDao.FindingAttribution attribution : existingAttributions) {
             if (attributionIdsToDelete.contains(attribution.id())) {
-                componentIds.add(attribution.componentId());
-                vulnerabilityIds.add(attribution.vulnDbId());
+                findings.add(
+                        new AssessmentStructureCapture.FindingRef(attribution.componentId(), attribution.vulnDbId()));
             }
         }
-        if (componentIds.isEmpty() || vulnerabilityIds.isEmpty()) {
-            return;
-        }
-
-        final ProjectName project = handle.createQuery(/* language=SQL */ """
-                        SELECT "NAME"
-                             , "VERSION"
-                          FROM "PROJECT"
-                         WHERE "UUID" = :projectUuid
-                        """)
-                .bind("projectUuid", projectUuid)
-                .map((rs, ctx) -> new ProjectName(rs.getString("NAME"), rs.getString("VERSION")))
-                .findOne()
-                .orElse(null);
-        if (project == null) {
-            return;
-        }
-
-        final Map<Long, UUID> componentUuidById = loadUuids(handle, "COMPONENT", componentIds);
-        final Map<Long, UUID> vulnerabilityUuidById = loadUuids(handle, "VULNERABILITY", vulnerabilityIds);
-        final List<AssessmentChange.LookupKey> lookupKeys =
-                AssessmentChange.LookupKey.listOf(project.name(), project.version());
-        final var changes = new ArrayList<AssessmentChange>();
-        for (final FindingDao.CreateAttributionCommand command : createAttributionCommands) {
-            addFindingChange(
-                    changes,
-                    projectUuid,
-                    componentUuidById.get(command.componentId()),
-                    vulnerabilityUuidById.get(command.vulnDbId()),
-                    lookupKeys);
-        }
-        for (final FindingDao.FindingAttribution attribution : existingAttributions) {
-            if (!attributionIdsToDelete.contains(attribution.id())) {
-                continue;
-            }
-            addFindingChange(
-                    changes,
-                    projectUuid,
-                    componentUuidById.get(attribution.componentId()),
-                    vulnerabilityUuidById.get(attribution.vulnDbId()),
-                    lookupKeys);
-        }
-        AssessmentStructureCapture.recordFindings(handle, changes);
+        AssessmentStructureCapture.recordAttributionChanges(handle, projectUuid, findings);
     }
-
-    private static Map<Long, UUID> loadUuids(final Handle handle, final String tableName, final Set<Long> ids) {
-        final var uuids = new HashMap<Long, UUID>();
-        handle.createQuery(/* language=SQL */ """
-                        SELECT "ID"
-                             , "UUID"
-                          FROM "%s"
-                         WHERE "ID" = ANY(:ids)
-                        """.formatted(tableName))
-                .bind("ids", ids.toArray(Long[]::new))
-                .map((rs, ctx) -> new IdUuid(rs.getLong("ID"), rs.getObject("UUID", UUID.class)))
-                .forEach(row -> {
-                    final UUID uuid = row.uuid();
-                    if (uuid != null) {
-                        uuids.put(row.id(), uuid);
-                    }
-                });
-        return uuids;
-    }
-
-    private static void addFindingChange(
-            final List<AssessmentChange> changes,
-            final UUID projectUuid,
-            final @Nullable UUID componentUuid,
-            final @Nullable UUID vulnerabilityUuid,
-            final List<AssessmentChange.LookupKey> lookupKeys) {
-        if (componentUuid == null || vulnerabilityUuid == null) {
-            return;
-        }
-        changes.add(new AssessmentChange(
-                Scope.FINDING,
-                projectUuid,
-                componentUuid,
-                vulnerabilityUuid,
-                AssessmentChange.Reason.ATTRIBUTION,
-                lookupKeys));
-    }
-
-    private record ProjectName(
-            @Nullable String name, @Nullable String version) {}
-
-    private record IdUuid(long id, @Nullable UUID uuid) {}
 
     private List<Long> readNewComponentIds(FileMetadata contextFileMetadata) {
         try (final InputStream inputStream = fileStorage.get(contextFileMetadata)) {
@@ -933,7 +844,7 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
             final List<FindingKey> createdFindingKeys,
             final Set<FindingKey> reactivatedFindingKeys,
             final List<FindingKey> policyChangedKeys) {
-        if (AssessmentSyncMode.current() != AssessmentSyncMode.ACTIVE) {
+        if (!AssessmentSyncMode.current().appliesAssessments()) {
             return;
         }
         final var keys = new HashSet<FindingKey>();

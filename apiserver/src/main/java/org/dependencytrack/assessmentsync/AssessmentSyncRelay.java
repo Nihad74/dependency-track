@@ -174,7 +174,7 @@ final class AssessmentSyncRelay implements Closeable {
 
     private CycleOutcome dispatchBoth() throws InterruptedException {
         throwIfInterrupted();
-        if (AssessmentSyncMode.current() != AssessmentSyncMode.ACTIVE) {
+        if (!AssessmentSyncMode.current().appliesAssessments()) {
             LOGGER.debug("Assessment sync relay skipped because mode is {}", AssessmentSyncMode.current());
             return CycleOutcome.SKIPPED;
         }

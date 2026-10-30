@@ -1552,6 +1552,18 @@ class VulnAnalysisWorkflowTest extends PersistenceCapableTest {
     }
 
     @Test
+    void policyRunDuringWithdrawalRecordsNothing() {
+        final PolicyFixture fixture = vulnerableFinding();
+        createPolicy("testPolicy", "testAuthor", "true", notAffectedPolicyAnalysis(), List.of());
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "WITHDRAW");
+
+        analyze(fixture.project());
+
+        assertThat(origin(fixture)).isEqualTo(AssessmentOwnership.POLICY);
+        assertThat(recordedChanges()).isEmpty();
+    }
+
+    @Test
     void policyMatchingAHandWrittenDecisionLeavesItLocal() {
         final PolicyFixture fixture = vulnerableFinding();
         analyze(fixture.project());
