@@ -142,6 +142,19 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
     }
 
     @Test
+    void backfillQueuesAFullPassOnlyForProjectsWithAMarker() throws Exception {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        useJdbiTransaction(handle -> insertBareProject(handle, UUID_1, "no-marker"));
+        insertProject(UUID_3, "with-marker");
+
+        final MaintainAssessmentProjectionsRes page = scan(activity(10, new SimpleMeterRegistry()), BOOTSTRAP);
+
+        assertThat(page.getScanned()).isEqualTo(2);
+        assertThat(requestedRevision(UUID_1)).isZero();
+        assertThat(requestedRevision(UUID_3)).isEqualTo(1);
+    }
+
+    @Test
     void lateCommitAfterTheCursorIsStillSeen() throws Exception {
         MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
         insertProject(UUID_1, "first");
@@ -155,10 +168,7 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
         final Handle slow = openJdbiHandle();
         try {
             slow.begin();
-            slow.createUpdate("""
-                            INSERT INTO "PROJECT" ("NAME", "UUID")
-                            VALUES (:name, :uuid)
-                            """).bind("name", "late").bind("uuid", UUID_5).execute();
+            insertProject(slow, UUID_5, "late");
             final long lateId =
                     slow.createQuery("""
                             SELECT "ID"
@@ -453,12 +463,38 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
         return builder.build();
     }
 
+    /// A project with one operating-system marker at its root, so backfill queues a full pass for it.
     private static void insertProject(final UUID uuid, final String name) {
-        useJdbiTransaction(handle ->
-                handle.createUpdate("""
+        useJdbiTransaction(handle -> insertProject(handle, uuid, name));
+    }
+
+    private static void insertProject(final Handle handle, final UUID uuid, final String name) {
+        insertBareProject(handle, uuid, name);
+        final UUID markerUuid = UUID.randomUUID();
+        handle.createUpdate("""
+                        INSERT INTO "COMPONENT" ("PROJECT_ID", "NAME", "VERSION", "CLASSIFIER", "UUID")
+                        SELECT "ID", 'os', '1', 'OPERATING_SYSTEM', :markerUuid
+                          FROM "PROJECT"
+                         WHERE "UUID" = :uuid
+                        """)
+                .bind("markerUuid", markerUuid)
+                .bind("uuid", uuid)
+                .execute();
+        handle.createUpdate("""
+                        UPDATE "PROJECT"
+                           SET "DIRECT_DEPENDENCIES" = CAST(:json AS jsonb)
+                         WHERE "UUID" = :uuid
+                        """)
+                .bind("json", "[{\"uuid\":\"" + markerUuid + "\"}]")
+                .bind("uuid", uuid)
+                .execute();
+    }
+
+    private static void insertBareProject(final Handle handle, final UUID uuid, final String name) {
+        handle.createUpdate("""
                         INSERT INTO "PROJECT" ("NAME", "UUID")
                         VALUES (:name, :uuid)
-                        """).bind("name", name).bind("uuid", uuid).execute());
+                        """).bind("name", name).bind("uuid", uuid).execute();
     }
 
     private static void recordProject(final UUID projectUuid, final Reason reason) {

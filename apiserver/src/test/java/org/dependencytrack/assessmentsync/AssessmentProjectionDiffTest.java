@@ -59,8 +59,8 @@ class AssessmentProjectionDiffTest {
 
     @Test
     void shouldProtectLocalOwnership() {
-        final CurrentProjection current = new CurrentProjection(
-                AssessmentOwnership.LOCAL, LOCAL_NOT_SET, "product note", 42L, List.of(FIRST), true);
+        final CurrentProjection current =
+                new CurrentProjection(AssessmentOwnership.LOCAL, LOCAL_NOT_SET, "product note", 42L, List.of(FIRST));
 
         final Change change = AssessmentProjectionDiff.diff(current, new Agreed(AGREED, List.of(FIRST, SECOND)));
 
@@ -76,13 +76,12 @@ class AssessmentProjectionDiffTest {
         assertThat(change.details()).isEqualTo("product note");
         assertThat(change.policyId()).isEqualTo(42L);
         assertThat(change.contributors()).containsExactly(FIRST);
-        assertThat(change.localComment()).isTrue();
     }
 
     @Test
     void shouldProtectPolicyOwnership() {
         final CurrentProjection current =
-                new CurrentProjection(AssessmentOwnership.POLICY, AGREED, "policy detail", 8L, List.of(FIRST), false);
+                new CurrentProjection(AssessmentOwnership.POLICY, AGREED, "policy detail", 8L, List.of(FIRST));
 
         final Change change =
                 AssessmentProjectionDiff.diff(current, new Unavailable(AssessmentReason.NO_AUTHORED_SOURCE));
@@ -94,12 +93,11 @@ class AssessmentProjectionDiffTest {
         assertThat(change.decision()).isEqualTo(AGREED);
         assertThat(change.details()).isEqualTo("policy detail");
         assertThat(change.policyId()).isEqualTo(8L);
-        assertThat(change.localComment()).isFalse();
     }
 
     @Test
     void shouldProtectNullOrigin() {
-        final CurrentProjection current = new CurrentProjection(null, LOCAL_NOT_SET, null, null, List.of(), true);
+        final CurrentProjection current = new CurrentProjection(null, LOCAL_NOT_SET, null, null, List.of());
 
         final Change change = AssessmentProjectionDiff.diff(current, new Agreed(AGREED, List.of(FIRST)));
 
@@ -107,13 +105,12 @@ class AssessmentProjectionDiffTest {
         assertThat(change.reason()).isEqualTo(AssessmentReason.TARGET_LOCAL);
         assertThat(change.machineChanged()).isFalse();
         assertThat(change.decision().state()).isEqualTo(AnalysisState.NOT_SET);
-        assertThat(change.localComment()).isTrue();
     }
 
     @Test
     void shouldApplyAgreedDecision() {
         final CurrentProjection current =
-                new CurrentProjection(AssessmentOwnership.NEUTRAL, LOCAL_NOT_SET, "stale", 7L, List.of(), false);
+                new CurrentProjection(AssessmentOwnership.NEUTRAL, LOCAL_NOT_SET, "stale", 7L, List.of());
 
         final Change change = AssessmentProjectionDiff.diff(current, new Agreed(AGREED, List.of(FIRST, SECOND)));
 
@@ -125,7 +122,6 @@ class AssessmentProjectionDiffTest {
         assertThat(change.details()).isNull();
         assertThat(change.policyId()).isNull();
         assertThat(change.contributors()).containsExactly(FIRST, SECOND);
-        assertThat(change.localComment()).isFalse();
         assertThat(change.reason()).isNull();
         assertThat(change.machineChanged()).isTrue();
         assertThat(change.contributorsChanged()).isTrue();
@@ -134,7 +130,7 @@ class AssessmentProjectionDiffTest {
     @Test
     void shouldWithdrawInheritedValuesOnConflict() {
         final CurrentProjection current = new CurrentProjection(
-                AssessmentOwnership.INHERITED, AGREED, "copied source text", 9L, List.of(FIRST, SECOND), true);
+                AssessmentOwnership.INHERITED, AGREED, "copied source text", 9L, List.of(FIRST, SECOND));
 
         final Change change = AssessmentProjectionDiff.diff(current, new Conflict(List.of(FIRST, SECOND)));
 
@@ -143,8 +139,8 @@ class AssessmentProjectionDiffTest {
 
     @Test
     void shouldWithdrawInheritedValuesWhenUnavailable() {
-        final CurrentProjection current = new CurrentProjection(
-                AssessmentOwnership.INHERITED, AGREED, "copied source text", 9L, List.of(FIRST), true);
+        final CurrentProjection current =
+                new CurrentProjection(AssessmentOwnership.INHERITED, AGREED, "copied source text", 9L, List.of(FIRST));
 
         final Change change =
                 AssessmentProjectionDiff.diff(current, new Unavailable(AssessmentReason.NO_AUTHORED_SOURCE));
@@ -155,7 +151,7 @@ class AssessmentProjectionDiffTest {
     @Test
     void shouldRecordContributorChangeWithoutMachineChange() {
         final CurrentProjection current =
-                new CurrentProjection(AssessmentOwnership.INHERITED, AGREED, null, null, List.of(FIRST, SECOND), true);
+                new CurrentProjection(AssessmentOwnership.INHERITED, AGREED, null, null, List.of(FIRST, SECOND));
 
         final Change change = AssessmentProjectionDiff.diff(current, new Agreed(AGREED, List.of(FIRST)));
 
@@ -165,7 +161,6 @@ class AssessmentProjectionDiffTest {
         assertThat(change.details()).isNull();
         assertThat(change.policyId()).isNull();
         assertThat(change.contributors()).containsExactly(FIRST);
-        assertThat(change.localComment()).isTrue();
         assertThat(change.reason()).isNull();
         assertThat(change.machineChanged()).isFalse();
         assertThat(change.contributorsChanged()).isTrue();
@@ -174,7 +169,7 @@ class AssessmentProjectionDiffTest {
     @Test
     void shouldLeaveNeutralUnchangedWhenSourcesConflict() {
         final CurrentProjection current =
-                new CurrentProjection(AssessmentOwnership.NEUTRAL, LOCAL_NOT_SET, null, null, List.of(), true);
+                new CurrentProjection(AssessmentOwnership.NEUTRAL, LOCAL_NOT_SET, null, null, List.of());
 
         final Change change = AssessmentProjectionDiff.diff(current, new Conflict(List.of(FIRST, SECOND)));
 
@@ -182,7 +177,6 @@ class AssessmentProjectionDiffTest {
         assertThat(change.decision().state()).isEqualTo(AnalysisState.NOT_SET);
         assertThat(change.machineChanged()).isFalse();
         assertThat(change.contributorsChanged()).isFalse();
-        assertThat(change.localComment()).isTrue();
         assertThat(change.reason()).isNull();
     }
 
@@ -194,7 +188,6 @@ class AssessmentProjectionDiffTest {
         assertThat(change.details()).isNull();
         assertThat(change.policyId()).isNull();
         assertThat(change.contributors()).isEmpty();
-        assertThat(change.localComment()).isTrue();
         assertThat(change.decision().state()).isEqualTo(AnalysisState.NOT_SET);
         assertThat(change.decision().justification()).isEqualTo(AnalysisJustification.NOT_SET);
         assertThat(change.decision().response()).isEqualTo(AnalysisResponse.NOT_SET);
