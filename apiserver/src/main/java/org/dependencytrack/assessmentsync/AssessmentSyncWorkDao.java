@@ -52,6 +52,7 @@ public final class AssessmentSyncWorkDao {
             rs.getLong("REFRESH_REQUESTED"),
             rs.getLong("REFRESH_COMPLETED"),
             readInstant(rs, "NEXT_DISPATCH_AT"),
+            rs.getInt("DISPATCH_ATTEMPTS"),
             readNullableInstant(rs, "LAST_SUCCESS_AT"),
             rs.getString("LAST_ERROR_CODE"));
 
@@ -216,6 +217,7 @@ public final class AssessmentSyncWorkDao {
                         UPDATE "ASSESSMENT_SYNC_WORK"
                            SET "CURSOR_COMPONENT_ID" = :cursorComponentId
                              , "CURSOR_VULNERABILITY_ID" = :cursorVulnerabilityId
+                             , "DISPATCH_ATTEMPTS" = 0
                          WHERE "TARGET_UUID" = :targetUuid
                            AND "ACTIVE_REVISION" = :activeRevision
                         """)
@@ -251,6 +253,7 @@ public final class AssessmentSyncWorkDao {
                              , "CURSOR_COMPONENT_ID" = NULL
                              , "CURSOR_VULNERABILITY_ID" = NULL
                              , "LAST_SUCCESS_AT" = now()
+                             , "DISPATCH_ATTEMPTS" = 0
                              , "PENDING_SINCE" = CASE
                                  WHEN "REQUESTED_REVISION" = :activeRevision
                                   AND "REFRESH_COMPLETED" = "REFRESH_REQUESTED"
@@ -291,6 +294,7 @@ public final class AssessmentSyncWorkDao {
                              , "CURSOR_COMPONENT_ID" = NULL
                              , "CURSOR_VULNERABILITY_ID" = NULL
                              , "LAST_SUCCESS_AT" = now()
+                             , "DISPATCH_ATTEMPTS" = 0
                              , "LAST_ERROR_CODE" = NULL
                              , "PENDING_SINCE" = NULL
                          WHERE "TARGET_UUID" = :targetUuid
@@ -342,7 +346,8 @@ public final class AssessmentSyncWorkDao {
         }
         return handle.createQuery(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_WORK"
-                           SET "REFRESH_COMPLETED" = LEAST(
+                           SET "DISPATCH_ATTEMPTS" = 0
+                             , "REFRESH_COMPLETED" = LEAST(
                                  "REFRESH_REQUESTED"
                                , GREATEST("REFRESH_COMPLETED", :capturedRefresh)
                                )
@@ -370,21 +375,7 @@ public final class AssessmentSyncWorkDao {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be positive");
         }
-        return handle.createQuery(/* language=SQL */ """
-                        SELECT "TARGET_UUID"
-                             , "REQUESTED_REVISION"
-                             , "COMPLETED_REVISION"
-                             , "FULL_REVISION"
-                             , "ACTIVE_REVISION"
-                             , "ACTIVE_FULL"
-                             , "CURSOR_COMPONENT_ID"
-                             , "CURSOR_VULNERABILITY_ID"
-                             , "REFRESH_REQUESTED"
-                             , "REFRESH_COMPLETED"
-                             , "NEXT_DISPATCH_AT"
-                             , "LAST_SUCCESS_AT"
-                             , "LAST_ERROR_CODE"
-                          FROM "ASSESSMENT_SYNC_WORK"
+        return handle.createQuery(selectWorkSql() + /* language=SQL */ """
                          WHERE "NEXT_DISPATCH_AT" <= clock_timestamp()
                            AND (
                              "COMPLETED_REVISION" < "REQUESTED_REVISION"
@@ -397,6 +388,23 @@ public final class AssessmentSyncWorkDao {
                 .bind("limit", limit)
                 .map(WORK_ROW)
                 .list();
+    }
+
+    /// Pushes the next dispatch back. Attempts reset when a pass or refresh makes progress.
+    public boolean recordDispatchAttempt(final UUID targetUuid, final Instant nextDispatchAt) {
+        requireNonNull(targetUuid, "targetUuid must not be null");
+        requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
+        requireTransaction();
+        final int updated = handle.createUpdate(/* language=SQL */ """
+                        UPDATE "ASSESSMENT_SYNC_WORK"
+                           SET "NEXT_DISPATCH_AT" = :nextDispatchAt
+                             , "DISPATCH_ATTEMPTS" = "DISPATCH_ATTEMPTS" + 1
+                         WHERE "TARGET_UUID" = :targetUuid
+                        """)
+                .bind("targetUuid", targetUuid)
+                .bind("nextDispatchAt", nextDispatchAt)
+                .execute();
+        return updated == 1;
     }
 
     public boolean scheduleDispatch(
@@ -468,6 +476,7 @@ public final class AssessmentSyncWorkDao {
                      , "REFRESH_REQUESTED"
                      , "REFRESH_COMPLETED"
                      , "NEXT_DISPATCH_AT"
+                     , "DISPATCH_ATTEMPTS"
                      , "LAST_SUCCESS_AT"
                      , "LAST_ERROR_CODE"
                   FROM "ASSESSMENT_SYNC_WORK"
@@ -516,6 +525,7 @@ public final class AssessmentSyncWorkDao {
             long refreshRequested,
             long refreshCompleted,
             Instant nextDispatchAt,
+            int dispatchAttempts,
             @Nullable Instant lastSuccessAt,
             @Nullable String lastErrorCode) {
 

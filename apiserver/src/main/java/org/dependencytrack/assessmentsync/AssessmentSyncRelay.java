@@ -132,7 +132,7 @@ final class AssessmentSyncRelay implements Closeable {
     /// One poll. Visible to tests so a cycle can run without waiting for the scheduler.
     void executeCycle() throws InterruptedException {
         final Timer.Sample cycleLatencySample = Timer.start();
-        CycleOutcome outcome = CycleOutcome.FAILED;
+        final CycleOutcome outcome;
         try {
             outcome = dispatchBoth();
         } catch (InterruptedException e) {
@@ -263,14 +263,14 @@ final class AssessmentSyncRelay implements Closeable {
                                 .setProjectUuid(row.targetUuid().toString())
                                 .build());
                 requests.add(request);
-                pending.add(new WorkDispatch(row.targetUuid(), request.requestId()));
+                pending.add(new WorkDispatch(row.targetUuid(), row.dispatchAttempts(), request.requestId()));
             }
             final Set<UUID> createdRequestIds = createdRequestIds(requests);
             var created = 0;
             var active = 0;
             for (final WorkDispatch dispatch : pending) {
-                // The run being accepted is not acknowledgement. Task 7 completes the work row.
-                workDao.scheduleDispatch(dispatch.targetUuid(), nextDispatchAt(0), null);
+                // The run being accepted is not acknowledgement. Reconciliation completes the work row.
+                workDao.recordDispatchAttempt(dispatch.targetUuid(), nextDispatchAt(dispatch.attempts()));
                 if (createdRequestIds.contains(dispatch.requestId())) {
                     created++;
                 } else {
@@ -348,5 +348,5 @@ final class AssessmentSyncRelay implements Closeable {
 
     private record OutboxDispatch(long id, int attempts, UUID requestId) {}
 
-    private record WorkDispatch(UUID targetUuid, UUID requestId) {}
+    private record WorkDispatch(UUID targetUuid, int attempts, UUID requestId) {}
 }
