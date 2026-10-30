@@ -335,6 +335,44 @@ class ReconcileProjectAssessmentsActivityTest extends PersistenceCapableTest {
     }
 
     @Test
+    void theMarkerItselfDoesNotInherit() throws Exception {
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        final String markerPurl = "pkg:generic/" + fixture.alpine.getName() + "@" + fixture.alpine.getVersion();
+        final long markerId = withJdbiHandle(handle -> handle.createQuery("""
+                        UPDATE "COMPONENT"
+                           SET "PURL" = :purl
+                         WHERE "PROJECT_ID" = :projectId
+                           AND "CLASSIFIER" = 'OPERATING_SYSTEM'
+                        RETURNING "ID"
+                        """)
+                .bind("purl", markerPurl)
+                .bind("projectId", fixture.target.getId())
+                .mapTo(long.class)
+                .one());
+        qm.getPersistenceManager().evictAll();
+        final Component marker = qm.getObjectById(Component.class, markerId);
+        qm.addVulnerability(fixture.vulnerability, marker, "internal");
+        final var sourceMarker = new Component();
+        sourceMarker.setProject(fixture.alpine);
+        sourceMarker.setName(fixture.alpine.getName());
+        sourceMarker.setVersion(fixture.alpine.getVersion());
+        sourceMarker.setPurl(markerPurl);
+        final Component persistedSourceMarker = qm.createComponent(sourceMarker, false);
+        qm.addVulnerability(fixture.vulnerability, persistedSourceMarker, "internal");
+        qm.makeAnalysis(new MakeAnalysisCommand(persistedSourceMarker, fixture.vulnerability)
+                .withState(AnalysisState.EXPLOITABLE)
+                .withOptions(Set.of(MakeAnalysisCommand.Option.OMIT_NOTIFICATION)));
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+
+        reconcile(fixture.target.getUuid(), 50);
+
+        assertThat(ReconcileFixture.owner(fixture.library().getId(), fixture.vulnerability.getId()))
+                .isEqualTo("INHERITED");
+        assertThat(ReconcileFixture.owner(markerId, fixture.vulnerability.getId()))
+                .isNotEqualTo("INHERITED");
+    }
+
+    @Test
     void inheritedSourceRowIsNotPassedOn() throws Exception {
         final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
         useJdbiTransaction(handle -> handle.createUpdate("""

@@ -18,10 +18,17 @@
  */
 package org.dependencytrack.assessmentsync.workflow;
 
+import org.dependencytrack.assessmentsync.AssessmentSyncSettings;
+import org.dependencytrack.common.ConfigKeys;
+import org.dependencytrack.dex.api.WorkflowContext;
 import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
+import org.eclipse.microprofile.config.ConfigProvider;
 import org.jspecify.annotations.Nullable;
 
 import java.util.UUID;
+
+import static java.util.Objects.requireNonNull;
+import static org.dependencytrack.dex.api.payload.PayloadConverters.stringConverter;
 
 /// Validation shared by the assessment sync workflows and activities. Bad arguments are terminal.
 final class AssessmentSyncArguments {
@@ -36,13 +43,37 @@ final class AssessmentSyncArguments {
     }
 
     static UUID projectUuid(final String projectUuid) {
-        if (projectUuid.isBlank()) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID");
+        return uuid("project_uuid", projectUuid);
+    }
+
+    /// {@code field} is the proto field name used in the failure message.
+    static UUID uuid(final String field, final String value) {
+        if (value.isBlank()) {
+            throw new TerminalApplicationFailureException(field + " must be a UUID");
         }
         try {
-            return UUID.fromString(projectUuid);
+            return UUID.fromString(value);
         } catch (IllegalArgumentException e) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID", e);
+            throw new TerminalApplicationFailureException(field + " must be a UUID", e);
         }
+    }
+
+    static long positive(final String field, final long value) {
+        if (value <= 0) {
+            throw new TerminalApplicationFailureException(field + " must be positive");
+        }
+        return value;
+    }
+
+    /// Batches per run before continue-as-new, read once per run as a side effect so replay sees the same value.
+    static int maxBatches(final WorkflowContext<?> ctx) {
+        return Integer.parseInt(requireNonNull(
+                ctx.executeSideEffect(
+                                "max-batches",
+                                stringConverter(),
+                                () -> Integer.toString(AssessmentSyncSettings.positiveInt(
+                                        ConfigProvider.getConfig(), ConfigKeys.ASSESSMENT_SYNC_WORKFLOW_MAX_BATCHES)))
+                        .await(),
+                "max-batches"));
     }
 }

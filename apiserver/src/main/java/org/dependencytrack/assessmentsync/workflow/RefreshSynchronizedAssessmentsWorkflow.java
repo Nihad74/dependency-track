@@ -21,7 +21,6 @@ package org.dependencytrack.assessmentsync.workflow;
 import org.dependencytrack.dex.api.Workflow;
 import org.dependencytrack.dex.api.WorkflowContext;
 import org.dependencytrack.dex.api.WorkflowSpec;
-import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.metrics.UpdateProjectMetricsActivity;
 import org.dependencytrack.policy.EvalProjectPoliciesActivity;
 import org.dependencytrack.proto.internal.workflow.v1.EvalProjectPoliciesArg;
@@ -41,9 +40,6 @@ public final class RefreshSynchronizedAssessmentsWorkflow implements Workflow<Re
 
     /// Instance id for one captured refresh of one target.
     public static String instanceId(final UUID targetUuid, final long refreshRevision) {
-        if (targetUuid == null) {
-            throw new IllegalArgumentException("targetUuid must not be null");
-        }
         if (refreshRevision <= 0) {
             throw new IllegalArgumentException("refreshRevision must be positive");
         }
@@ -56,9 +52,7 @@ public final class RefreshSynchronizedAssessmentsWorkflow implements Workflow<Re
             final @Nullable RefreshSynchronizedAssessmentsArg arg) {
         final RefreshSynchronizedAssessmentsArg argument = AssessmentSyncArguments.require(arg);
         final UUID projectUuid = AssessmentSyncArguments.projectUuid(argument.getProjectUuid());
-        if (argument.getRefreshRevision() <= 0) {
-            throw new TerminalApplicationFailureException("refresh_revision must be positive");
-        }
+        AssessmentSyncArguments.positive("refresh_revision", argument.getRefreshRevision());
         final String projectUuidText = projectUuid.toString();
 
         ctx.activity(EvalProjectPoliciesActivity.class)

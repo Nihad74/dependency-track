@@ -24,8 +24,8 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 
-/// Keyset pages of the findings a full pass or verification must look at: findings on markers and
-/// embedded members, which can inherit, and inherited rows, which may need withdrawal.
+/// Keyset pages of the findings a full pass or verification must look at: findings on embedded members,
+/// which can inherit, and inherited rows, which may need withdrawal. The marker itself is not a member.
 final class InheritableFindingKeys {
 
     private InheritableFindingKeys() {}
@@ -48,19 +48,11 @@ final class InheritableFindingKeys {
                                     ON c."ID" = fa."COMPONENT_ID"
                                  WHERE c."PROJECT_ID" = :projectId
                                    AND fa."DELETED_AT" IS NULL
-                                   AND (
-                                     EXISTS (
-                                       SELECT 1
-                                         FROM "ASSESSMENT_EMBEDDING" AS e
-                                        WHERE e."TARGET_PROJECT_ID" = :projectId
-                                          AND e."MARKER_COMPONENT_ID" = fa."COMPONENT_ID"
-                                     )
-                                     OR EXISTS (
-                                       SELECT 1
-                                         FROM "ASSESSMENT_EMBEDDING_MEMBER" AS m
-                                        WHERE m."TARGET_PROJECT_ID" = :projectId
-                                          AND m."COMPONENT_ID" = fa."COMPONENT_ID"
-                                     )
+                                   AND EXISTS (
+                                     SELECT 1
+                                       FROM "ASSESSMENT_EMBEDDING_MEMBER" AS m
+                                      WHERE m."TARGET_PROJECT_ID" = :projectId
+                                        AND m."COMPONENT_ID" = fa."COMPONENT_ID"
                                    )
                                 UNION
                                 SELECT a."COMPONENT_ID"
