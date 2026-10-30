@@ -20,7 +20,6 @@ package org.dependencytrack.resources.v1;
 
 import alpine.common.validation.RegexSequence;
 import alpine.common.validation.ValidationTask;
-import alpine.model.auth.Principal;
 import alpine.server.auth.PermissionRequired;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -301,11 +300,9 @@ public class AnalysisResource extends AbstractApiResource {
     }
 
     private static AnalysisTrailResponse trail(final QueryManager qm, final Analysis analysis) {
-        final Principal principal =
-                qm.getAlpineRequest() == null ? null : qm.getAlpineRequest().getPrincipal();
         final long analysisId = analysis.getId();
         final var trails = JdbiFactory.withJdbiHandle(
-                qm, handle -> new AssessmentTrailAssembler().assemble(handle, principal, List.of(analysisId)));
+                qm, handle -> new AssessmentTrailAssembler().assemble(handle, List.of(analysisId)));
         return AnalysisTrailResponse.of(analysis, trails.isEmpty() ? null : trails.getFirst());
     }
 }

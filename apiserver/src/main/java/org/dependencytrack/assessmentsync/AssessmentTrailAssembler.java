@@ -18,9 +18,6 @@
  */
 package org.dependencytrack.assessmentsync;
 
-import alpine.model.auth.ApiKeyPrincipal;
-import alpine.model.auth.Principal;
-import alpine.model.auth.UserPrincipal;
 import alpine.resources.AlpineRequest;
 import org.dependencytrack.persistence.jdbi.ApiRequestConfig;
 import org.dependencytrack.persistence.jdbi.ProjectDao;
@@ -44,12 +41,12 @@ import static java.util.Objects.requireNonNull;
 /// Projects target analysis rows and the source groups the caller can read right now.
 ///
 /// Access is the caller's current portfolio ACL, not a permission stored at sync time.
-/// A missing principal, or a handle that is not bound to that principal, yields no source groups.
+/// The caller is the principal of the request the handle is bound to. A handle without one yields no
+/// source groups, because an unbound handle treats portfolio ACL as open.
 /// Deleted or inaccessible sources are omitted entirely. The result has no hidden-source count.
 public final class AssessmentTrailAssembler {
 
-    public List<Trail> assemble(
-            final Handle handle, final @Nullable Principal principal, final Collection<Long> targetAnalysisIds) {
+    public List<Trail> assemble(final Handle handle, final Collection<Long> targetAnalysisIds) {
         requireNonNull(handle, "handle must not be null");
         requireNonNull(targetAnalysisIds, "targetAnalysisIds must not be null");
         if (targetAnalysisIds.isEmpty()) {
@@ -68,7 +65,7 @@ public final class AssessmentTrailAssembler {
 
         final var machines = loadMachines(handle, orderedIds);
         final var identities = loadContributionIdentities(handle, orderedIds);
-        final var visible = visibleContributions(handle, principal, identities);
+        final var visible = visibleContributions(handle, identities);
         final var detailsByKey = loadVisibleDetails(handle, visible);
         final var commentsByKey = loadVisibleComments(handle, visible);
         final var groupsByAnalysis = new LinkedHashMap<Long, List<SourceAssessment>>();
@@ -153,8 +150,8 @@ public final class AssessmentTrailAssembler {
 
     /// Drops sources the principal cannot read, and sources whose project, component, or analysis is gone.
     private static List<VisibleContribution> visibleContributions(
-            final Handle handle, final @Nullable Principal principal, final List<ContributionIdentity> identities) {
-        if (identities.isEmpty() || !canReadSources(handle, principal)) {
+            final Handle handle, final List<ContributionIdentity> identities) {
+        if (identities.isEmpty() || !canReadSources(handle)) {
             return List.of();
         }
         final var projectUuids = new ArrayList<UUID>();
@@ -239,27 +236,9 @@ public final class AssessmentTrailAssembler {
         return List.copyOf(visible);
     }
 
-    /// A null principal is not authorization. The handle must be the same caller's request,
-    /// because an unbound handle treats portfolio ACL as open.
-    private static boolean canReadSources(final Handle handle, final @Nullable Principal principal) {
-        if (principal == null) {
-            return false;
-        }
+    private static boolean canReadSources(final Handle handle) {
         final AlpineRequest request = handle.getConfig(ApiRequestConfig.class).apiRequest();
-        if (request == null || request.getPrincipal() == null) {
-            return false;
-        }
-        return samePrincipal(request.getPrincipal(), principal);
-    }
-
-    private static boolean samePrincipal(final Principal bound, final Principal requested) {
-        if (bound instanceof final UserPrincipal user && requested instanceof final UserPrincipal other) {
-            return user.id() == other.id();
-        }
-        if (bound instanceof final ApiKeyPrincipal apiKey && requested instanceof final ApiKeyPrincipal other) {
-            return apiKey.id() == other.id();
-        }
-        return false;
+        return request != null && request.getPrincipal() != null;
     }
 
     private static LinkedHashMap<ContributionKey, String> loadVisibleDetails(
