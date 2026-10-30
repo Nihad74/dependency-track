@@ -25,6 +25,8 @@ Two gauges show how far synchronization is behind. Watch both. An un-suppression
 * `dt.assessment_sync.backlog.oldest_event_age_seconds` is the age of the oldest outbox row. It covers the time until the affected targets are listed.
 * `dt.assessment_sync.backlog.oldest_work_age_seconds` is the time since the longest-waiting target last had no unfinished reconciliation or refresh. It covers the stage after the outbox row is gone. Under constant load a target may never become idle, so treat this value as an upper bound for the delay of a pending request.
 
+A gauge whose database query fails reports `NaN` and logs a warning. Alert on `NaN` as well as on high values, because a failed query is not an empty backlog.
+
 ## Access control
 
 With portfolio access control on, a source feeds a target only when every team that can access the target can also access the source. Access through a parent project counts. Changes to team mappings, project parents, and team deletion are recorded and reconcile the affected projects and their descendants.

@@ -132,7 +132,11 @@ public final class AssessmentSyncMetrics {
         if (AssessmentSyncMode.current() != AssessmentSyncMode.OFF) {
             return 0d;
         }
-        return inheritedRows() > 0d ? 1d : 0d;
+        final double inherited = inheritedRows();
+        if (Double.isNaN(inherited)) {
+            return Double.NaN;
+        }
+        return inherited > 0d ? 1d : 0d;
     }
 
     private static double query(final String sql) {
@@ -142,7 +146,7 @@ public final class AssessmentSyncMetrics {
             return value == null ? 0d : value;
         } catch (RuntimeException e) {
             LOGGER.warn("Assessment sync metric query failed", e);
-            return 0d;
+            return Double.NaN;
         }
     }
 }
