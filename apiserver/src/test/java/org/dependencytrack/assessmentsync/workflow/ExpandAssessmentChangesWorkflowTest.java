@@ -302,6 +302,34 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
     }
 
     @Test
+    void embeddedMemberWithoutTheChangedFindingIsNotEnqueued() throws Exception {
+        start(100, 200);
+        final Project source = project("source-without-reach", "1.0.0", null);
+        final Component sourceComponent = component(source, "zlib", "1.3.0", Classifier.LIBRARY);
+        final Vulnerability vulnerability = vulnerability();
+        final Project embedded = project("unaffected-consumer", "1.0.0", null);
+        final Component marker = component(embedded, "os", "1", Classifier.OPERATING_SYSTEM);
+        final Component member = component(embedded, "zlib", "1.3.0", Classifier.LIBRARY);
+        useJdbiTransaction(handle -> new AssessmentEmbeddingDao(handle)
+                .replaceMembership(
+                        embedded.getId(),
+                        List.of(new MarkerMembership(
+                                marker.getId(), "os", "1", source.getUuid(), List.of(member.getId())))));
+        final long outboxId = record(new AssessmentChange(
+                Scope.FINDING,
+                source.getUuid(),
+                sourceComponent.getUuid(),
+                vulnerability.getUuid(),
+                Reason.AUTHORED,
+                List.of()));
+
+        activity.execute(ACTIVITY_CONTEXT, argument(outboxId));
+
+        assertThat(outboxCount()).isZero();
+        assertThat(work(embedded.getUuid())).isNull();
+    }
+
+    @Test
     void continueAsNewFinishesTargetsBeyondTheBatchLimit() throws Exception {
         MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_WORKFLOW_MAX_BATCHES, "1");
         start(1, 200);
