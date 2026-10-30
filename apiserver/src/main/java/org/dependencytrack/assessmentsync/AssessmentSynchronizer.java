@@ -100,14 +100,10 @@ public final class AssessmentSynchronizer {
         final Map<UUID, Candidates> candidatesBySource = candidates(componentsBySource);
         final Map<Long, List<CopiedTrail>> trailsByAnalysis = loadTrails(handle, targets);
 
-        var applied = 0;
-        var withdrawn = 0;
         var skipped = 0;
         var conflicts = 0;
-        var machineFieldsChanged = false;
-        final var audits = new ArrayList<AuditNotice>();
-        final var projectionDao = new AssessmentProjectionDao(handle);
-
+        final var planned = new ArrayList<PlannedTarget>(keys.size());
+        final var missingAnalyses = new ArrayList<TargetRow>();
         for (final FindingKey key : keys) {
             final TargetRow target = targets.get(key);
             if (target == null || (target.analysisId() != null && target.owner() == null)) {
@@ -115,15 +111,28 @@ public final class AssessmentSynchronizer {
                 continue;
             }
             final Decision decision = decide(target, sourcesByComponent, componentsBySource, candidatesBySource);
-            final Result consensus = decision.consensus();
-            if (consensus instanceof AssessmentConsensus.Conflict) {
+            if (decision.consensus() instanceof AssessmentConsensus.Conflict) {
                 conflicts++;
             }
-            final PreparedTarget prepared = prepareTarget(handle, projectId, target, consensus);
+            if (target.analysisId() == null) {
+                if (!(decision.consensus() instanceof AssessmentConsensus.Agreed)) {
+                    skipped++;
+                    continue;
+                }
+                missingAnalyses.add(target);
+            }
+            planned.add(new PlannedTarget(key, target, decision));
+        }
+        final Map<FindingKey, Long> inserted = insertNeutralAnalyses(handle, projectId, missingAnalyses);
+
+        final var pending = new ArrayList<PendingWrite>(planned.size());
+        for (final PlannedTarget plan : planned) {
+            final PreparedTarget prepared = prepareTarget(handle, projectId, plan, inserted);
             if (prepared == null) {
                 skipped++;
                 continue;
             }
+            final TargetRow target = plan.target();
             final List<CopiedTrail> trails =
                     target.analysisId() != null && target.analysisId().longValue() == prepared.analysisId()
                             ? trailsByAnalysis.getOrDefault(prepared.analysisId(), List.of())
@@ -134,6 +143,7 @@ public final class AssessmentSynchronizer {
                     prepared.details(),
                     prepared.policyId(),
                     contributors(trails));
+            final Result consensus = plan.decision().consensus();
             final Change change = AssessmentProjectionDiff.diff(current, consensus);
             final AssessmentOwnership origin = change.origin();
             // authored(null) is already true; the null check narrows origin for the worker write below.
@@ -141,43 +151,56 @@ public final class AssessmentSynchronizer {
                 skipped++;
                 continue;
             }
-            final List<SourceContributionWrite> contributions = decision.contributions();
+            final List<SourceContributionWrite> contributions = plan.decision().contributions();
             if (!change.machineChanged() && !change.contributorsChanged() && !trailsDiffer(trails, contributions)) {
                 skipped++;
                 continue;
             }
-            final var write = new WorkerWrite(
-                    prepared.analysisId(),
-                    origin,
-                    change.decision(),
-                    null,
-                    null,
-                    change.reason(),
-                    prepared.decisionVersion(),
-                    contributions);
-            final var written = projectionDao.applyWorkerWrite(write);
-            if (written.status() != AssessmentProjectionDao.WorkerWriteStatus.APPLIED) {
+            pending.add(new PendingWrite(
+                    plan.key(),
+                    current,
+                    change,
+                    new WorkerWrite(
+                            prepared.analysisId(),
+                            origin,
+                            change.decision(),
+                            null,
+                            null,
+                            change.reason(),
+                            prepared.decisionVersion(),
+                            contributions)));
+        }
+
+        final List<AssessmentProjectionDao.WorkerWriteResult> results = new AssessmentProjectionDao(handle)
+                .applyWorkerWrites(pending.stream().map(PendingWrite::write).toList());
+        var applied = 0;
+        var withdrawn = 0;
+        var machineFieldsChanged = false;
+        final var audits = new ArrayList<AuditNotice>();
+        for (int i = 0; i < pending.size(); i++) {
+            if (results.get(i).status() != AssessmentProjectionDao.WorkerWriteStatus.APPLIED) {
                 skipped++;
                 continue;
             }
-            if (origin == AssessmentOwnership.NEUTRAL) {
+            final PendingWrite write = pending.get(i);
+            if (write.write().owner() == AssessmentOwnership.NEUTRAL) {
                 withdrawn++;
             } else {
                 applied++;
             }
-            if (change.machineChanged()) {
+            if (write.change().machineChanged()) {
                 machineFieldsChanged = true;
             }
-            final boolean stateChanged =
-                    current.decision().state() != change.decision().state();
-            final boolean suppressionChanged =
-                    current.decision().suppressed() != change.decision().suppressed();
+            final boolean stateChanged = write.current().decision().state()
+                    != write.change().decision().state();
+            final boolean suppressionChanged = write.current().decision().suppressed()
+                    != write.change().decision().suppressed();
             if (stateChanged || suppressionChanged) {
                 audits.add(new AuditNotice(
-                        key.componentId(),
-                        key.vulnDbId(),
-                        change.decision().state(),
-                        change.decision().suppressed(),
+                        write.key().componentId(),
+                        write.key().vulnDbId(),
+                        write.change().decision().state(),
+                        write.change().decision().suppressed(),
                         stateChanged,
                         suppressionChanged));
             }
@@ -348,7 +371,8 @@ public final class AssessmentSynchronizer {
     }
 
     private static @Nullable PreparedTarget prepareTarget(
-            final Handle handle, final long projectId, final TargetRow target, final Result consensus) {
+            final Handle handle, final long projectId, final PlannedTarget plan, final Map<FindingKey, Long> inserted) {
+        final TargetRow target = plan.target();
         if (target.analysisId() != null) {
             return new PreparedTarget(
                     target.analysisId(),
@@ -358,57 +382,65 @@ public final class AssessmentSynchronizer {
                     target.details(),
                     target.policyId());
         }
-        if (!(consensus instanceof AssessmentConsensus.Agreed)) {
-            return null;
-        }
-        final Long inserted = insertNeutralAnalysis(handle, projectId, target);
-        if (inserted != null) {
+        final Long insertedId = inserted.get(plan.key());
+        if (insertedId != null) {
             return new PreparedTarget(
-                    inserted, AssessmentOwnership.NEUTRAL, 0, AssessmentDecision.neutral(), null, null);
+                    insertedId, AssessmentOwnership.NEUTRAL, 0, AssessmentDecision.neutral(), null, null);
         }
         return rereadAnalysis(handle, projectId, target);
     }
 
-    private static @Nullable Long insertNeutralAnalysis(
-            final Handle handle, final long projectId, final TargetRow target) {
-        final Long analysisId = handle.createQuery(/* language=SQL */ """
-                        INSERT INTO "ANALYSIS" (
-                          "PROJECT_ID"
-                        , "COMPONENT_ID"
-                        , "VULNERABILITY_ID"
-                        , "STATE"
-                        , "JUSTIFICATION"
-                        , "RESPONSE"
-                        , "SUPPRESSED"
+    /// Inserts neutral analyses with their origins in one statement. A key whose analysis a concurrent writer
+    /// created is missing from the result, and the caller reads that row instead.
+    private static Map<FindingKey, Long> insertNeutralAnalyses(
+            final Handle handle, final long projectId, final List<TargetRow> targets) {
+        if (targets.isEmpty()) {
+            return Map.of();
+        }
+        final var componentIds = new long[targets.size()];
+        final var vulnerabilityIds = new long[targets.size()];
+        for (int i = 0; i < targets.size(); i++) {
+            componentIds[i] = targets.get(i).componentId();
+            vulnerabilityIds[i] = targets.get(i).vulnerabilityId();
+        }
+        final var inserted = new LinkedHashMap<FindingKey, Long>();
+        handle.createQuery(/* language=SQL */ """
+                        WITH inserted AS (
+                          INSERT INTO "ANALYSIS" (
+                            "PROJECT_ID"
+                          , "COMPONENT_ID"
+                          , "VULNERABILITY_ID"
+                          , "STATE"
+                          , "JUSTIFICATION"
+                          , "RESPONSE"
+                          , "SUPPRESSED"
+                          )
+                          SELECT :projectId
+                               , t.component_id
+                               , t.vulnerability_id
+                               , 'NOT_SET'
+                               , 'NOT_SET'
+                               , 'NOT_SET'
+                               , FALSE
+                            FROM UNNEST(:componentIds, :vulnerabilityIds) AS t(component_id, vulnerability_id)
+                          ON CONFLICT ("PROJECT_ID", "COMPONENT_ID", "VULNERABILITY_ID") DO NOTHING
+                          RETURNING "ID", "COMPONENT_ID", "VULNERABILITY_ID"
+                        ),
+                        origin AS (
+                          INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER")
+                          SELECT "ID", 'NEUTRAL'
+                            FROM inserted
                         )
-                        VALUES (
-                          :projectId
-                        , :componentId
-                        , :vulnerabilityId
-                        , 'NOT_SET'
-                        , 'NOT_SET'
-                        , 'NOT_SET'
-                        , FALSE
-                        )
-                        ON CONFLICT ("PROJECT_ID", "COMPONENT_ID", "VULNERABILITY_ID") DO NOTHING
-                        RETURNING "ID"
+                        SELECT "ID", "COMPONENT_ID", "VULNERABILITY_ID"
+                          FROM inserted
                         """)
                 .bind("projectId", projectId)
-                .bind("componentId", target.componentId())
-                .bind("vulnerabilityId", target.vulnerabilityId())
-                .mapTo(long.class)
-                .findOne()
-                .orElse(null);
-        if (analysisId == null) {
-            return null;
-        }
-        handle.createUpdate(/* language=SQL */ """
-                        INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER")
-                        VALUES (:analysisId, 'NEUTRAL')
-                        """)
-                .bind("analysisId", analysisId)
-                .execute();
-        return analysisId;
+                .bind("componentIds", componentIds)
+                .bind("vulnerabilityIds", vulnerabilityIds)
+                .map((rs, ctx) -> Map.entry(
+                        new FindingKey(rs.getLong("COMPONENT_ID"), rs.getLong("VULNERABILITY_ID")), rs.getLong("ID")))
+                .forEach(entry -> inserted.put(entry.getKey(), entry.getValue()));
+        return inserted;
     }
 
     /// The unique analysis key already existed. A missing origin stays protected.
@@ -1083,6 +1115,10 @@ public final class AssessmentSynchronizer {
             AssessmentDecision decision,
             @Nullable String details,
             @Nullable Long policyId) {}
+
+    private record PlannedTarget(FindingKey key, TargetRow target, Decision decision) {}
+
+    private record PendingWrite(FindingKey key, CurrentProjection current, Change change, WorkerWrite write) {}
 
     private record PreparedTarget(
             long analysisId,
