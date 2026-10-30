@@ -393,10 +393,13 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
             workDao.requestFull(targetUuid);
         });
 
-        final Instant before = Instant.now();
         relay.executeCycle();
+        final Instant afterCycle = Instant.now();
 
-        assertThat(Duration.between(before, work(targetUuid).nextDispatchAt())).isLessThan(Duration.ofMillis(100));
+        final WorkRow work = work(targetUuid);
+        assertThat(work.dispatchAttempts()).isEqualTo(1);
+        // One first step from a 30 ms base with at most 50% jitter, counted from the dispatch inside the cycle.
+        assertThat(work.nextDispatchAt()).isBefore(afterCycle.plusMillis(45));
     }
 
     private void startEngine(final boolean workers) {
