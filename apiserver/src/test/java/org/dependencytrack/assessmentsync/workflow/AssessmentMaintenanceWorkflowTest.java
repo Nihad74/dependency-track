@@ -318,6 +318,34 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
     }
 
     @Test
+    void withdrawalRemovesSourceTextKeptOnATakenOverRow() throws Exception {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "ACTIVE");
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+        new ReconcileProjectAssessmentsActivity(50, Duration.ofMinutes(10))
+                .execute(
+                        CONTEXT,
+                        SynchronizeProjectAssessmentsArg.newBuilder()
+                                .setProjectUuid(fixture.target.getUuid().toString())
+                                .build());
+        final long componentId = fixture.library().getId();
+        final long vulnerabilityId = fixture.vulnerability.getId();
+        qm.makeAnalysis(new MakeAnalysisCommand(fixture.library(), fixture.vulnerability)
+                .withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL));
+        assertThat(ReconcileFixture.owner(componentId, vulnerabilityId)).isEqualTo("LOCAL");
+        assertThat(ReconcileFixture.contributionCount(componentId, vulnerabilityId))
+                .isEqualTo(1);
+
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "WITHDRAW");
+        scan(activity(20, new SimpleMeterRegistry()), WITHDRAW);
+
+        assertThat(ReconcileFixture.owner(componentId, vulnerabilityId)).isEqualTo("LOCAL");
+        assertThat(ReconcileFixture.state(componentId, vulnerabilityId)).isEqualTo("EXPLOITABLE");
+        assertThat(ReconcileFixture.contributionCount(componentId, vulnerabilityId))
+                .isZero();
+    }
+
+    @Test
     void withdrawalRemovesInheritedRowsAndKeepsAuthoredRows() throws Exception {
         MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "ACTIVE");
         final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);

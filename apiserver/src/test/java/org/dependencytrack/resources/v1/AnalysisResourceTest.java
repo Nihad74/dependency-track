@@ -1230,8 +1230,54 @@ class AnalysisResourceTest extends ResourceTest {
             assertThat(body.getString("analysisState")).isEqualTo("NOT_AFFECTED");
             assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
             assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(5);
-            assertThat(contributionCount(fixture.analysisId())).isZero();
             assertThat(recordedChanges()).hasSize(1);
+        });
+    }
+
+    @Test
+    void takingOverAnInheritedDecisionWithoutChangingItKeepsTheSourceTrail() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS, Permissions.VIEW_VULNERABILITY);
+        final var fixture = inheritedFromALiveSource();
+        assertThat(getAnalysis(fixture).getJsonArray("sourceAssessments")).hasSize(1);
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 4
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+
+            final JsonObject body = getAnalysis(fixture);
+            assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
+            assertThat(body.getJsonArray("sourceAssessments"))
+                    .extracting(value -> ((JsonObject) value).getString("sourceDetails"))
+                    .containsExactly("copied");
+        });
+    }
+
+    @Test
+    void takingOverAnInheritedDecisionWithADifferentDecisionDropsTheSourceTrail() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS, Permissions.VIEW_VULNERABILITY);
+        final var fixture = inheritedFromALiveSource();
+        assertThat(getAnalysis(fixture).getJsonArray("sourceAssessments")).hasSize(1);
+        withCapture(() -> {
+            final Response response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "EXPLOITABLE",
+                      "decisionAction": "TAKE_LOCAL",
+                      "expectedDecisionVersion": 4
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+
+            final JsonObject body = getAnalysis(fixture);
+            assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
+            assertThat(body.containsKey("sourceAssessments")).isFalse();
         });
     }
 
@@ -1946,6 +1992,37 @@ class AnalysisResourceTest extends ResourceTest {
                     .execute());
         }
         return new FindingFixture(project, component, vulnerability, analysisId);
+    }
+
+    /// An inherited finding whose contribution points to a source analysis that still exists.
+    private FindingFixture inheritedFromALiveSource() {
+        final FindingFixture fixture = inheritedFinding();
+        final Project source = qm.createProject("Acme Source", null, "2.0", null, null, null, null, false);
+        var sourceComponent = new Component();
+        sourceComponent.setProject(source);
+        sourceComponent.setName("Acme Component");
+        sourceComponent.setVersion("1.0");
+        sourceComponent = qm.createComponent(sourceComponent, false);
+        final long sourceAnalysisId = qm.makeAnalysis(new MakeAnalysisCommand(sourceComponent, fixture.vulnerability())
+                .withState(AnalysisState.NOT_AFFECTED)
+                .withOptions(EnumSet.of(
+                        MakeAnalysisCommand.Option.OMIT_AUDIT_TRAIL, MakeAnalysisCommand.Option.OMIT_NOTIFICATION)));
+        final UUID sourceComponentUuid = sourceComponent.getUuid();
+        withJdbiHandle(handle -> handle.createUpdate("""
+                        UPDATE "ASSESSMENT_SOURCE_CONTRIBUTION"
+                           SET "SOURCE_PROJECT_UUID" = :sourceProject
+                             , "SOURCE_COMPONENT_UUID" = :sourceComponent
+                             , "SOURCE_VULNERABILITY_UUID" = :sourceVulnerability
+                             , "SOURCE_ANALYSIS_ID" = :sourceAnalysis
+                         WHERE "TARGET_ANALYSIS_ID" = :analysisId
+                        """)
+                .bind("sourceProject", source.getUuid())
+                .bind("sourceComponent", sourceComponentUuid)
+                .bind("sourceVulnerability", fixture.vulnerability().getUuid())
+                .bind("sourceAnalysis", sourceAnalysisId)
+                .bind("analysisId", fixture.analysisId())
+                .execute());
+        return fixture;
     }
 
     private Response putAnalysis(final FindingFixture fixture, final String json) {

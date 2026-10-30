@@ -236,12 +236,14 @@ public class AnalysisQueryManager extends QueryManager {
             final boolean inheritedBefore) {
         return switch (action) {
             case RELEASE_LOCAL -> OriginWrite.owner(AssessmentOwnership.NEUTRAL, true, true);
-            case TAKE_LOCAL -> OriginWrite.owner(AssessmentOwnership.LOCAL, true, true);
+            // The source trail stays as provenance while the decision is still the inherited one (ADR 044).
+            case TAKE_LOCAL -> OriginWrite.owner(AssessmentOwnership.LOCAL, update.decisionChanged(), true);
             case COMMENT_ONLY ->
                 created ? OriginWrite.owner(AssessmentOwnership.NEUTRAL, false, true) : OriginWrite.COMMENT_ONLY;
             case AUTO -> {
                 if (update.machineChanged()) {
-                    yield OriginWrite.owner(AssessmentOwnership.LOCAL, inheritedBefore, true);
+                    yield OriginWrite.owner(
+                            AssessmentOwnership.LOCAL, inheritedBefore && update.decisionChanged(), true);
                 }
                 if (created) {
                     yield OriginWrite.owner(AssessmentOwnership.NEUTRAL, false, commentAdded);
