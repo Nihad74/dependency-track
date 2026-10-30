@@ -27,6 +27,7 @@ import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.dependencytrack.assessmentsync.AssessmentSyncOutboxDao.OutboxEntry;
+import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.assessmentsync.workflow.ExpandAssessmentChangesActivity;
 import org.dependencytrack.assessmentsync.workflow.ExpandAssessmentChangesWorkflow;
 import org.dependencytrack.assessmentsync.workflow.SynchronizeProjectAssessmentsWorkflow;
@@ -49,6 +50,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -348,6 +350,38 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
     }
 
     @Test
+    void targetWhoseRunsKeepEndingWithoutProgressIsDispatchedLessOften() throws Exception {
+        startEngine(true);
+        final UUID targetUuid = UUID.randomUUID();
+        useJdbiTransaction(handle -> new AssessmentSyncWorkDao(handle).requestFull(targetUuid));
+
+        final Duration delay = dispatchAndEndWithoutProgress(targetUuid, 6);
+
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(targetUuid)))
+                .hasSize(6);
+        // Six runs at 1.5x from a 30 ms base, minus at most half for jitter, wait at least 113 ms.
+        assertThat(delay).isGreaterThan(Duration.ofMillis(100));
+    }
+
+    @Test
+    void progressResetsTheDispatchDelayOfATarget() throws Exception {
+        startEngine(true);
+        final UUID targetUuid = UUID.randomUUID();
+        useJdbiTransaction(handle -> new AssessmentSyncWorkDao(handle).requestFull(targetUuid));
+        dispatchAndEndWithoutProgress(targetUuid, 6);
+        useJdbiTransaction(handle -> {
+            final var workDao = new AssessmentSyncWorkDao(handle);
+            workDao.acknowledgeCancellation(targetUuid);
+            workDao.requestFull(targetUuid);
+        });
+
+        final Instant before = Instant.now();
+        relay.executeCycle();
+
+        assertThat(Duration.between(before, work(targetUuid).nextDispatchAt())).isLessThan(Duration.ofMillis(100));
+    }
+
+    @Test
     void rejectsNonPositiveRelayBounds() {
         assertThatThrownBy(() -> new AssessmentSyncRelay(workflowTest.getEngine(), meterRegistry, 0, BATCH_SIZE, 5_000))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -408,6 +442,47 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
                            SET "NEXT_DISPATCH_AT" = clock_timestamp() - INTERVAL '1 second'
                          WHERE "ID" = :id
                         """).bind("id", id).execute());
+    }
+
+    /// Each run fails because the reconcile activity is not registered.
+    /// Returns how long the relay waits after the last dispatch.
+    private Duration dispatchAndEndWithoutProgress(final UUID targetUuid, final int runs) throws Exception {
+        final String instanceId = SynchronizeProjectAssessmentsWorkflow.instanceId(targetUuid);
+        Duration delay = Duration.ZERO;
+        for (int i = 0; i < runs; i++) {
+            makeWorkDue(targetUuid);
+            final Instant before = Instant.now();
+            relay.executeCycle();
+            delay = Duration.between(before, work(targetUuid).nextDispatchAt());
+            workflowTest.awaitRunStatus(latestRunId(instanceId), WorkflowRunStatus.FAILED);
+        }
+        return delay;
+    }
+
+    private static WorkRow work(final UUID targetUuid) {
+        return withJdbiHandle(handle -> new AssessmentSyncWorkDao(handle).find(targetUuid));
+    }
+
+    private static void makeWorkDue(final UUID targetUuid) {
+        useJdbiTransaction(handle ->
+                handle.createUpdate("""
+                        UPDATE "ASSESSMENT_SYNC_WORK"
+                           SET "NEXT_DISPATCH_AT" = clock_timestamp() - INTERVAL '1 second'
+                         WHERE "TARGET_UUID" = :targetUuid
+                        """).bind("targetUuid", targetUuid).execute());
+    }
+
+    private static UUID latestRunId(final String instanceId) {
+        return withJdbiHandle(handle -> handle.createQuery("""
+                        SELECT id
+                          FROM dex_workflow_run
+                         WHERE workflow_instance_id = :instanceId
+                         ORDER BY created_at DESC
+                         LIMIT 1
+                        """)
+                .bind("instanceId", instanceId)
+                .mapTo(UUID.class)
+                .one());
     }
 
     private static List<String> runStatuses(final String instanceId) {
