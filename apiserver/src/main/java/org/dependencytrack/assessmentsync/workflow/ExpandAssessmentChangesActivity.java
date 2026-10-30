@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 
 /// Schedules one page of target work and advances the outbox cursor in that same transaction.
@@ -80,11 +81,8 @@ public final class ExpandAssessmentChangesActivity
         if (FAIL_TERMINAL.get()) {
             throw new TerminalApplicationFailureException("assessment expansion failed");
         }
-        if (argument == null) {
-            throw new TerminalApplicationFailureException("outbox_id must be positive");
-        }
         ExpandAssessmentChangesWorkflow.requireArgument(argument);
-        return inJdbiTransaction(handle -> expand(handle, argument));
+        return inJdbiTransaction(handle -> expand(handle, requireNonNull(argument)));
     }
 
     private ExpandAssessmentChangesRes expand(final Handle handle, final ExpandAssessmentChangesArg argument) {
