@@ -171,8 +171,6 @@ public final class ReconcileProjectAssessmentsActivity
                 .build();
     }
 
-    /// A full pass pages findings on markers and embedded members, which can inherit,
-    /// and inherited rows, which may need withdrawal.
     private static List<FindingKey> pageKeys(
             final Handle handle, final long projectId, final UUID targetUuid, final Pass pass, final int limit) {
         final Long storedCursorComponentId = pass.cursorComponentId();
@@ -181,57 +179,8 @@ public final class ReconcileProjectAssessmentsActivity
         final long cursorComponentId = storedCursorComponentId == null ? 0L : storedCursorComponentId;
         final long cursorVulnerabilityId = storedCursorVulnerabilityId == null ? 0L : storedCursorVulnerabilityId;
         if (pass.full()) {
-            return handle.createQuery(/* language=SQL */ """
-                            SELECT component_id
-                                 , vulnerability_id
-                              FROM (
-                                    SELECT DISTINCT fa."COMPONENT_ID" AS component_id
-                                         , fa."VULNERABILITY_ID" AS vulnerability_id
-                                      FROM "FINDINGATTRIBUTION" AS fa
-                                     INNER JOIN "COMPONENT" AS c
-                                        ON c."ID" = fa."COMPONENT_ID"
-                                     WHERE c."PROJECT_ID" = :projectId
-                                       AND fa."DELETED_AT" IS NULL
-                                       AND (
-                                         EXISTS (
-                                           SELECT 1
-                                             FROM "ASSESSMENT_EMBEDDING" AS e
-                                            WHERE e."TARGET_PROJECT_ID" = :projectId
-                                              AND e."MARKER_COMPONENT_ID" = fa."COMPONENT_ID"
-                                         )
-                                         OR EXISTS (
-                                           SELECT 1
-                                             FROM "ASSESSMENT_EMBEDDING_MEMBER" AS m
-                                            WHERE m."TARGET_PROJECT_ID" = :projectId
-                                              AND m."COMPONENT_ID" = fa."COMPONENT_ID"
-                                         )
-                                       )
-                                    UNION
-                                    SELECT a."COMPONENT_ID"
-                                         , a."VULNERABILITY_ID"
-                                      FROM "ANALYSIS" AS a
-                                     INNER JOIN "ASSESSMENT_ORIGIN" AS o
-                                        ON o."ANALYSIS_ID" = a."ID"
-                                     WHERE a."PROJECT_ID" = :projectId
-                                       AND o."OWNER" = 'INHERITED'
-                                       AND a."COMPONENT_ID" IS NOT NULL
-                                   ) AS keys
-                             WHERE :hasCursor = FALSE
-                                OR component_id > :cursorComponentId
-                                OR (
-                                  component_id = :cursorComponentId
-                                  AND vulnerability_id > :cursorVulnerabilityId
-                                )
-                             ORDER BY component_id, vulnerability_id
-                             LIMIT :limit
-                            """)
-                    .bind("projectId", projectId)
-                    .bind("hasCursor", hasCursor)
-                    .bind("cursorComponentId", cursorComponentId)
-                    .bind("cursorVulnerabilityId", cursorVulnerabilityId)
-                    .bind("limit", limit)
-                    .map((rs, ctx) -> new FindingKey(rs.getLong("component_id"), rs.getLong("vulnerability_id")))
-                    .list();
+            return InheritableFindingKeys.page(
+                    handle, projectId, pass.cursorComponentId(), pass.cursorVulnerabilityId(), limit);
         }
         return handle.createQuery(/* language=SQL */ """
                         SELECT "COMPONENT_ID"
