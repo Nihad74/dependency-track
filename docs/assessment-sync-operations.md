@@ -2,7 +2,7 @@
 
 The mode is cluster-wide configuration. Stop feature dispatch and let in-flight batches finish before every instance changes mode together. Changing one process does not change the cluster.
 
-`OFF` is not a finished rollback while `dt.assessment_sync.rollback.incomplete` is 1. That gauge is 1 when the mode is `OFF` and any analysis origin is still `INHERITED`.
+`OFF` is not a finished rollback while `dt.assessment_sync.rollback.incomplete` is 1. That gauge is 1 when the mode is `OFF` and any analysis origin is still `INHERITED`, or any copied source text is left, including text kept as provenance on `LOCAL` rows.
 
 The maintenance scan cursor is the last finished project UUID. Dex stores it in the workflow's continue-as-new argument. The next batch reads `UUID` values greater than that cursor, ordered by `UUID`, in a bounded page. It does not use a maximum row id or a wall-clock watermark. A project created or changed behind the cursor is covered by its captured outbox event. Do not delete pending outbox rows to make a scan look finished.
 
