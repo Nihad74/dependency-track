@@ -63,15 +63,8 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
     public @Nullable Void execute(
             final WorkflowContext<SynchronizeProjectAssessmentsArg> ctx,
             final @Nullable SynchronizeProjectAssessmentsArg arg) {
-        if (arg == null || arg.getProjectUuid().isBlank()) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID");
-        }
-        final UUID projectUuid;
-        try {
-            projectUuid = UUID.fromString(arg.getProjectUuid());
-        } catch (IllegalArgumentException e) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID", e);
-        }
+        final SynchronizeProjectAssessmentsArg argument = AssessmentSyncArguments.require(arg);
+        final UUID projectUuid = AssessmentSyncArguments.projectUuid(argument.getProjectUuid());
         final int maxBatches = Integer.parseInt(requireNonNull(
                 ctx.executeSideEffect(
                                 "max-batches",
@@ -87,7 +80,7 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
             final ReconcileProjectAssessmentsRes result = ctx.activity(ReconcileProjectAssessmentsActivity.class)
                     .call(new ActivityCallOptions<SynchronizeProjectAssessmentsArg>()
                             .withRetryPolicy(RECONCILE_RETRY_POLICY)
-                            .withArgument(arg))
+                            .withArgument(argument))
                     .await();
             if (result == null) {
                 throw new TerminalApplicationFailureException("Reconciliation activity returned no result");
@@ -118,27 +111,27 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
             awaitRefresh(ctx, projectUuid, highestRefresh);
         }
 
-        var pending = readPending(ctx, arg);
+        var pending = readPending(ctx, argument);
         if (pending.getTargetDeleted()) {
             return null;
         }
         if (pending.getReconciliationPending()) {
-            ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(arg));
+            ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(argument));
             return null;
         }
         if (pending.getRefreshPending() && pending.getRefreshRequested() > highestRefresh) {
             awaitRefresh(ctx, projectUuid, pending.getRefreshRequested());
-            pending = readPending(ctx, arg);
+            pending = readPending(ctx, argument);
             if (pending.getTargetDeleted()) {
                 return null;
             }
             if (pending.getReconciliationPending() || pending.getRefreshPending()) {
-                ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(arg));
+                ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(argument));
             }
             return null;
         }
         if (pending.getRefreshPending()) {
-            ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(arg));
+            ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(argument));
         }
         return null;
     }

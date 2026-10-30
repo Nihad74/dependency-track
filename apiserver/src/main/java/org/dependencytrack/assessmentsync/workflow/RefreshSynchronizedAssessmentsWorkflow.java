@@ -54,16 +54,9 @@ public final class RefreshSynchronizedAssessmentsWorkflow implements Workflow<Re
     public @Nullable Void execute(
             final WorkflowContext<RefreshSynchronizedAssessmentsArg> ctx,
             final @Nullable RefreshSynchronizedAssessmentsArg arg) {
-        if (arg == null || arg.getProjectUuid().isBlank()) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID");
-        }
-        final UUID projectUuid;
-        try {
-            projectUuid = UUID.fromString(arg.getProjectUuid());
-        } catch (IllegalArgumentException e) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID", e);
-        }
-        if (arg.getRefreshRevision() <= 0) {
+        final RefreshSynchronizedAssessmentsArg argument = AssessmentSyncArguments.require(arg);
+        final UUID projectUuid = AssessmentSyncArguments.projectUuid(argument.getProjectUuid());
+        if (argument.getRefreshRevision() <= 0) {
             throw new TerminalApplicationFailureException("refresh_revision must be positive");
         }
         final String projectUuidText = projectUuid.toString();
@@ -80,7 +73,7 @@ public final class RefreshSynchronizedAssessmentsWorkflow implements Workflow<Re
                         .build())
                 .await();
 
-        ctx.activity(CompleteAssessmentRefreshActivity.class).call(arg).await();
+        ctx.activity(CompleteAssessmentRefreshActivity.class).call(argument).await();
         return null;
     }
 }

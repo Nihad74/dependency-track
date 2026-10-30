@@ -29,7 +29,6 @@ import org.dependencytrack.assessmentsync.AssessmentSynchronizer.BatchResult;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
-import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.model.FindingKey;
 import org.dependencytrack.proto.internal.workflow.v1.ReconcileProjectAssessmentsRes;
 import org.dependencytrack.proto.internal.workflow.v1.SynchronizeProjectAssessmentsArg;
@@ -79,7 +78,8 @@ public final class ReconcileProjectAssessmentsActivity
         if (Thread.interrupted()) {
             throw new InterruptedException("Interrupted before assessment reconciliation");
         }
-        final UUID targetUuid = requireTarget(argument);
+        final UUID targetUuid = AssessmentSyncArguments.projectUuid(
+                AssessmentSyncArguments.require(argument).getProjectUuid());
         if (AssessmentSyncMode.current() != AssessmentSyncMode.ACTIVE) {
             return inJdbiTransaction(handle -> deferInactive(handle, targetUuid));
         }
@@ -258,16 +258,5 @@ public final class ReconcileProjectAssessmentsActivity
                 .bind("limit", limit)
                 .map((rs, ctx) -> new FindingKey(rs.getLong("COMPONENT_ID"), rs.getLong("VULNERABILITY_ID")))
                 .list();
-    }
-
-    private static UUID requireTarget(final @Nullable SynchronizeProjectAssessmentsArg argument) {
-        if (argument == null || argument.getProjectUuid().isBlank()) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID");
-        }
-        try {
-            return UUID.fromString(argument.getProjectUuid());
-        } catch (IllegalArgumentException e) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID", e);
-        }
     }
 }

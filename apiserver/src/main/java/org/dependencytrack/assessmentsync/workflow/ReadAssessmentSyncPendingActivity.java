@@ -23,7 +23,6 @@ import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
-import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.proto.internal.workflow.v1.AssessmentSyncPendingRes;
 import org.dependencytrack.proto.internal.workflow.v1.SynchronizeProjectAssessmentsArg;
 import org.jspecify.annotations.Nullable;
@@ -42,7 +41,8 @@ public final class ReadAssessmentSyncPendingActivity
     @Override
     public AssessmentSyncPendingRes execute(
             final ActivityContext ctx, final @Nullable SynchronizeProjectAssessmentsArg argument) {
-        final UUID targetUuid = requireTarget(argument);
+        final UUID targetUuid = AssessmentSyncArguments.projectUuid(
+                AssessmentSyncArguments.require(argument).getProjectUuid());
         return inJdbiTransaction(handle -> {
             final boolean projectExists = handle.createQuery(/* language=SQL */ """
                             SELECT 1
@@ -69,16 +69,5 @@ public final class ReadAssessmentSyncPendingActivity
                     .setTargetDeleted(false)
                     .build();
         });
-    }
-
-    private static UUID requireTarget(final @Nullable SynchronizeProjectAssessmentsArg argument) {
-        if (argument == null || argument.getProjectUuid().isBlank()) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID");
-        }
-        try {
-            return UUID.fromString(argument.getProjectUuid());
-        } catch (IllegalArgumentException e) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID", e);
-        }
     }
 }

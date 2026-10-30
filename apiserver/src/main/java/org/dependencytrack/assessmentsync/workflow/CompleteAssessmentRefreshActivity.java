@@ -39,16 +39,9 @@ public final class CompleteAssessmentRefreshActivity implements Activity<Refresh
     @Override
     public @Nullable Void execute(
             final ActivityContext ctx, final @Nullable RefreshSynchronizedAssessmentsArg argument) {
-        if (argument == null || argument.getProjectUuid().isBlank()) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID");
-        }
-        final UUID targetUuid;
-        try {
-            targetUuid = UUID.fromString(argument.getProjectUuid());
-        } catch (IllegalArgumentException e) {
-            throw new TerminalApplicationFailureException("project_uuid must be a UUID", e);
-        }
-        final long capturedRefresh = argument.getRefreshRevision();
+        final RefreshSynchronizedAssessmentsArg arg = AssessmentSyncArguments.require(argument);
+        final UUID targetUuid = AssessmentSyncArguments.projectUuid(arg.getProjectUuid());
+        final long capturedRefresh = arg.getRefreshRevision();
         if (capturedRefresh <= 0) {
             throw new TerminalApplicationFailureException("refresh_revision must be positive");
         }
