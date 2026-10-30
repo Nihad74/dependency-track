@@ -134,7 +134,7 @@ public final class ReconcileProjectAssessmentsActivity
                     .setSkipped(0)
                     .build();
         }
-        if (pass.full()) {
+        if (pass.full() && !pass.resumed()) {
             new AssessmentEmbeddingIndexer(handle).rebuild(targetUuid);
         }
 
@@ -171,6 +171,8 @@ public final class ReconcileProjectAssessmentsActivity
                 .build();
     }
 
+    /// A full pass pages findings on markers and embedded members, which can inherit,
+    /// and inherited rows, which may need withdrawal.
     private static List<FindingKey> pageKeys(
             final Handle handle, final long projectId, final UUID targetUuid, final Pass pass, final int limit) {
         final Long storedCursorComponentId = pass.cursorComponentId();
@@ -190,6 +192,20 @@ public final class ReconcileProjectAssessmentsActivity
                                         ON c."ID" = fa."COMPONENT_ID"
                                      WHERE c."PROJECT_ID" = :projectId
                                        AND fa."DELETED_AT" IS NULL
+                                       AND (
+                                         EXISTS (
+                                           SELECT 1
+                                             FROM "ASSESSMENT_EMBEDDING" AS e
+                                            WHERE e."TARGET_PROJECT_ID" = :projectId
+                                              AND e."MARKER_COMPONENT_ID" = fa."COMPONENT_ID"
+                                         )
+                                         OR EXISTS (
+                                           SELECT 1
+                                             FROM "ASSESSMENT_EMBEDDING_MEMBER" AS m
+                                            WHERE m."TARGET_PROJECT_ID" = :projectId
+                                              AND m."COMPONENT_ID" = fa."COMPONENT_ID"
+                                         )
+                                       )
                                     UNION
                                     SELECT a."COMPONENT_ID"
                                          , a."VULNERABILITY_ID"
