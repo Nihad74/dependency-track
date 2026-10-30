@@ -64,7 +64,6 @@ class ReconcileProjectAssessmentsActivityTest extends PersistenceCapableTest {
     @AfterEach
     void clearMode() {
         MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
-        ReconcileProjectAssessmentsActivity.failAfterWriteForTest(false);
     }
 
     @Test
@@ -401,14 +400,17 @@ class ReconcileProjectAssessmentsActivityTest extends PersistenceCapableTest {
         final ReconcileFixture fixture = ReconcileFixture.twoSources(qm);
         NotificationTestUtil.createCatchAllNotificationRule(qm, NotificationScope.PORTFOLIO);
         ReconcileFixture.requestFull(fixture.target.getUuid());
-        ReconcileProjectAssessmentsActivity.failAfterWriteForTest(true);
-        try {
-            assertThatThrownBy(() -> reconcile(fixture.target.getUuid(), 50))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessage("forced assessment reconciliation failure");
-        } finally {
-            ReconcileProjectAssessmentsActivity.failAfterWriteForTest(false);
-        }
+        final var failingAfterWrite = new ReconcileProjectAssessmentsActivity(50, Duration.ofMinutes(10), () -> {
+            throw new IllegalStateException("forced assessment reconciliation failure");
+        });
+
+        assertThatThrownBy(() -> failingAfterWrite.execute(
+                        CONTEXT,
+                        SynchronizeProjectAssessmentsArg.newBuilder()
+                                .setProjectUuid(fixture.target.getUuid().toString())
+                                .build()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("forced assessment reconciliation failure");
 
         assertThat(ReconcileFixture.state(fixture.library().getId(), fixture.vulnerability.getId()))
                 .isNull();

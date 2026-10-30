@@ -54,6 +54,7 @@ import org.dependencytrack.proto.internal.workflow.v1.AnalyzeProjectWorkflowArg;
 import org.dependencytrack.proto.internal.workflow.v1.ImportBomArg;
 import org.dependencytrack.proto.internal.workflow.v1.VulnAnalysisWorkflowContext;
 import org.dependencytrack.util.InternalComponentIdentifier;
+import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -115,6 +116,7 @@ import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertTo
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.flatten;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.dependencytrack.proto.internal.workflow.v1.AnalysisTrigger.ANALYSIS_TRIGGER_BOM_UPLOAD;
 import static org.dependencytrack.util.PersistenceUtil.applyIfChanged;
 import static org.dependencytrack.util.PersistenceUtil.assertPersistent;
@@ -376,32 +378,14 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
 
             return qm.callInTransaction(() -> {
                 final UUID knownProjectUuid = ctx.project.getUuid();
-                final boolean[] projectLocked = {false};
-                if (knownProjectUuid != null) {
-                    useJdbiHandle(qm, handle -> {
-                        final Long existingId = handle.createQuery(/* language=SQL */ """
-                                        SELECT "ID"
-                                          FROM "PROJECT"
-                                         WHERE "UUID" = :projectUuid
-                                        """)
-                                .bind("projectUuid", knownProjectUuid)
-                                .mapTo(Long.class)
-                                .findOne()
-                                .orElse(null);
-                        if (existingId != null) {
-                            AssessmentMutationGuard.lockProject(handle, knownProjectUuid);
-                            projectLocked[0] = true;
-                        }
-                    });
-                }
+                final boolean projectLocked = knownProjectUuid != null
+                        && withJdbiHandle(qm, handle -> lockIfExists(handle, knownProjectUuid));
 
                 final Project persistentProject = processProject(ctx, qm, bom.project(), bom.projectMetadata());
-                if (!projectLocked[0]) {
+                if (!projectLocked) {
                     useJdbiHandle(
                             qm, handle -> AssessmentMutationGuard.lockProject(handle, persistentProject.getUuid()));
                 }
-                final String nameBefore = persistentProject.getName();
-                final String versionBefore = persistentProject.getVersion();
 
                 LOGGER.info("Processing {} components", bom.components().size());
                 final Map<ComponentIdentity, Component> persistentComponentsByIdentity = processComponents(
@@ -436,11 +420,8 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
                                 handle,
                                 persistentProject.getUuid(),
                                 AssessmentChange.Reason.BOM_IMPORT,
-                                AssessmentStructureCapture.keys(
-                                        nameBefore,
-                                        versionBefore,
-                                        persistentProject.getName(),
-                                        persistentProject.getVersion())));
+                                AssessmentChange.LookupKey.listOf(
+                                        persistentProject.getName(), persistentProject.getVersion())));
 
                 return new ProcessedBom(
                         persistentProject,
@@ -448,6 +429,24 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
                         persistentServicesByIdentity.values());
             });
         }
+    }
+
+    /// Locks a project that already exists, before the import can change it. Returns whether it did.
+    private static boolean lockIfExists(final Handle handle, final UUID projectUuid) {
+        final boolean exists = handle.createQuery(/* language=SQL */ """
+                        SELECT EXISTS (
+                          SELECT 1
+                            FROM "PROJECT"
+                           WHERE "UUID" = :projectUuid
+                        )
+                        """)
+                .bind("projectUuid", projectUuid)
+                .mapTo(boolean.class)
+                .one();
+        if (exists) {
+            AssessmentMutationGuard.lockProject(handle, projectUuid);
+        }
+        return exists;
     }
 
     private static Project processProject(
