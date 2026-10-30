@@ -133,6 +133,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
     void lastPageDeletesTheOutboxRowAndLeavesTargetWorkPending() throws Exception {
         start(100, 200);
         final Project source = project("source-app", "9.9.9", null);
+        embed(source, null, "base-os", "1");
         final long outboxId = record(new AssessmentChange(
                 Scope.PROJECT,
                 source.getUuid(),
@@ -206,12 +207,12 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
         workflowTest.awaitRunStatus(runId, WorkflowRunStatus.COMPLETED);
 
         assertThat(outboxCount()).isZero();
-        assertThat(work(source.getUuid())).isNotNull();
+        assertThat(work(source.getUuid())).isNull();
         assertThat(work(oldMarker.getUuid())).isNotNull();
         assertThat(work(newMarker.getUuid())).isNotNull();
         assertThat(work(resolved.getUuid())).isNotNull();
         assertThat(work(unrelated.getUuid())).isNull();
-        assertThat(List.of(source, oldMarker, newMarker, resolved))
+        assertThat(List.of(oldMarker, newMarker, resolved))
                 .allSatisfy(project ->
                         assertThat(work(project.getUuid()).completedRevision()).isZero());
     }
@@ -284,9 +285,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
         workflowTest.awaitRunStatus(runId, WorkflowRunStatus.COMPLETED);
 
         assertThat(outboxCount()).isZero();
-        assertThat(pendingFindings(source.getUuid()))
-                .extracting(PendingFinding::componentId)
-                .containsExactly(sourceComponent.getId());
+        assertThat(work(source.getUuid())).isNull();
         assertThat(pendingFindings(copied.getUuid()))
                 .extracting(PendingFinding::componentId)
                 .containsExactly(componentId(copiedAnalysis));
@@ -296,7 +295,6 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
         assertThat(pendingFindings(copied.getUuid()))
                 .extracting(PendingFinding::componentId)
                 .doesNotContain(decoy.getId());
-        assertThat(work(source.getUuid()).fullRevision()).isZero();
         assertThat(work(copied.getUuid()).fullRevision()).isZero();
         assertThat(work(embedded.getUuid()).fullRevision()).isZero();
     }
@@ -327,6 +325,121 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
 
         assertThat(outboxCount()).isZero();
         assertThat(work(embedded.getUuid())).isNull();
+    }
+
+    @Test
+    void projectChangeOfAProjectThatEmbedsNothingRequestsNoWorkForIt() throws Exception {
+        start(100, 200);
+        final Project project = project("standalone", "1.0.0", null);
+        analysis(project, "lib", "1.0.0");
+        final long outboxId = record(
+                new AssessmentChange(Scope.PROJECT, project.getUuid(), null, null, Reason.BOM_IMPORT, List.of()));
+
+        activity.execute(ACTIVITY_CONTEXT, argument(outboxId));
+
+        assertThat(outboxCount()).isZero();
+        assertThat(work(project.getUuid())).isNull();
+    }
+
+    @Test
+    void projectChangeOfAnEmbeddingProjectRequestsAFullPassForIt() throws Exception {
+        start(100, 200);
+        final Project project = project("product", "1.0.0", null);
+        embed(project, null, "base-os", "1");
+        final long outboxId = record(
+                new AssessmentChange(Scope.PROJECT, project.getUuid(), null, null, Reason.BOM_IMPORT, List.of()));
+
+        activity.execute(ACTIVITY_CONTEXT, argument(outboxId));
+
+        assertThat(work(project.getUuid())).isNotNull();
+        assertThat(work(project.getUuid()).fullRevision()).isEqualTo(1);
+    }
+
+    @Test
+    void projectChangeOfAProjectWithInheritedRowsRequestsAFullPassForIt() throws Exception {
+        start(100, 200);
+        final Project project = project("former-product", "1.0.0", null);
+        inherit(analysis(project, "lib", "1.0.0"));
+        final long outboxId = record(
+                new AssessmentChange(Scope.PROJECT, project.getUuid(), null, null, Reason.BOM_IMPORT, List.of()));
+
+        activity.execute(ACTIVITY_CONTEXT, argument(outboxId));
+
+        assertThat(work(project.getUuid())).isNotNull();
+        assertThat(work(project.getUuid()).fullRevision()).isEqualTo(1);
+    }
+
+    @Test
+    void ownFindingOutsideAnyEmbeddingRequestsNoWorkForTheProject() throws Exception {
+        start(100, 200);
+        final Project project = project("product", "1.0.0", null);
+        embed(project, null, "base-os", "1");
+        final Component component = component(project, "app-lib", "1.0.0", Classifier.LIBRARY);
+        final Vulnerability vulnerability = vulnerability();
+        final long outboxId = record(new AssessmentChange(
+                Scope.FINDING,
+                project.getUuid(),
+                component.getUuid(),
+                vulnerability.getUuid(),
+                Reason.AUTHORED,
+                List.of()));
+
+        activity.execute(ACTIVITY_CONTEXT, argument(outboxId));
+
+        assertThat(work(project.getUuid())).isNull();
+    }
+
+    @Test
+    void ownFindingOnAMarkerOrMemberRequestsWorkForTheProject() throws Exception {
+        start(100, 200);
+        final Project project = project("product", "1.0.0", null);
+        final Component marker = component(project, "os", "1", Classifier.OPERATING_SYSTEM);
+        final Component member = component(project, "openssl", "3.0.0", Classifier.LIBRARY);
+        useJdbiTransaction(handle -> new AssessmentEmbeddingDao(handle)
+                .replaceMembership(
+                        project.getId(),
+                        List.of(new MarkerMembership(marker.getId(), "os", "1", null, List.of(member.getId())))));
+        final Vulnerability vulnerability = vulnerability();
+
+        for (final Component component : List.of(marker, member)) {
+            final long outboxId = record(new AssessmentChange(
+                    Scope.FINDING,
+                    project.getUuid(),
+                    component.getUuid(),
+                    vulnerability.getUuid(),
+                    Reason.AUTHORED,
+                    List.of()));
+            activity.execute(ACTIVITY_CONTEXT, argument(outboxId));
+        }
+
+        assertThat(pendingFindings(project.getUuid()))
+                .extracting(PendingFinding::componentId)
+                .containsExactlyInAnyOrder(marker.getId(), member.getId());
+    }
+
+    @Test
+    void ownInheritedFindingRequestsWorkForTheProject() throws Exception {
+        start(100, 200);
+        final Project project = project("former-product", "1.0.0", null);
+        final Vulnerability vulnerability = vulnerability();
+        final long analysisId = analysis(project, vulnerability, "lib");
+        inherit(analysisId);
+        final UUID componentUuid = withJdbiHandle(handle ->
+                handle.createQuery("""
+                        SELECT c."UUID"
+                          FROM "COMPONENT" AS c
+                          JOIN "ANALYSIS" AS a
+                            ON a."COMPONENT_ID" = c."ID"
+                         WHERE a."ID" = :id
+                        """).bind("id", analysisId).mapTo(UUID.class).one());
+        final long outboxId = record(new AssessmentChange(
+                Scope.FINDING, project.getUuid(), componentUuid, vulnerability.getUuid(), Reason.AUTHORED, List.of()));
+
+        activity.execute(ACTIVITY_CONTEXT, argument(outboxId));
+
+        assertThat(pendingFindings(project.getUuid()))
+                .extracting(PendingFinding::componentId)
+                .containsExactly(componentId(analysisId));
     }
 
     @Test
@@ -464,6 +577,16 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
                 .bind("sourceComponent", sourceComponent)
                 .bind("sourceVulnerability", sourceVulnerability)
                 .execute());
+    }
+
+    private static void inherit(final long analysisId) {
+        useJdbiTransaction(handle ->
+                handle.createUpdate("""
+                        INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER")
+                        VALUES (:analysisId, 'INHERITED')
+                        ON CONFLICT ("ANALYSIS_ID") DO UPDATE
+                        SET "OWNER" = 'INHERITED'
+                        """).bind("analysisId", analysisId).execute());
     }
 
     private static long record(final AssessmentChange change) {
