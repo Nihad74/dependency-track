@@ -26,6 +26,8 @@ import java.util.UUID;
 import static java.util.Objects.requireNonNull;
 
 /// Paged discovery of targets affected by one outbox row. Reads the durable cursor from that row.
+///
+/// The changed project is its own target only where it can inherit or holds inherited rows.
 public final class AssessmentSyncFanoutDao {
 
     private static final String EVENT = """
@@ -59,6 +61,19 @@ public final class AssessmentSyncFanoutDao {
                 FROM event
                 JOIN "PROJECT" AS project
                   ON project."UUID" = event.source_uuid
+               WHERE EXISTS (
+                       SELECT 1
+                         FROM "ASSESSMENT_EMBEDDING" AS own_embedding
+                        WHERE own_embedding."TARGET_PROJECT_ID" = project."ID"
+                     )
+                  OR EXISTS (
+                       SELECT 1
+                         FROM "ANALYSIS" AS own_analysis
+                         JOIN "ASSESSMENT_ORIGIN" AS own_origin
+                           ON own_origin."ANALYSIS_ID" = own_analysis."ID"
+                        WHERE own_analysis."PROJECT_ID" = project."ID"
+                          AND own_origin."OWNER" = 'INHERITED'
+                     )
               UNION
               SELECT project."UUID"
                 FROM event
@@ -99,6 +114,27 @@ public final class AssessmentSyncFanoutDao {
                  AND component."UUID" = event.source_component_uuid
                 JOIN "VULNERABILITY" AS vulnerability
                   ON vulnerability."UUID" = event.source_vulnerability_uuid
+               WHERE EXISTS (
+                       SELECT 1
+                         FROM "ASSESSMENT_EMBEDDING" AS own_embedding
+                        WHERE own_embedding."TARGET_PROJECT_ID" = project."ID"
+                          AND own_embedding."MARKER_COMPONENT_ID" = component."ID"
+                     )
+                  OR EXISTS (
+                       SELECT 1
+                         FROM "ASSESSMENT_EMBEDDING_MEMBER" AS own_member
+                        WHERE own_member."TARGET_PROJECT_ID" = project."ID"
+                          AND own_member."COMPONENT_ID" = component."ID"
+                     )
+                  OR EXISTS (
+                       SELECT 1
+                         FROM "ANALYSIS" AS own_analysis
+                         JOIN "ASSESSMENT_ORIGIN" AS own_origin
+                           ON own_origin."ANALYSIS_ID" = own_analysis."ID"
+                        WHERE own_analysis."COMPONENT_ID" = component."ID"
+                          AND own_analysis."VULNERABILITY_ID" = vulnerability."ID"
+                          AND own_origin."OWNER" = 'INHERITED'
+                     )
               UNION
               SELECT project."UUID"
                    , member."COMPONENT_ID"
