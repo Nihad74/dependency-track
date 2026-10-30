@@ -34,19 +34,14 @@ public final class AssessmentProjectionDiff {
     public static Change diff(final CurrentProjection current, final Result consensus) {
         Objects.requireNonNull(current, "current must not be null");
         Objects.requireNonNull(consensus, "consensus must not be null");
-        if (protectsLocalDecision(current.origin())) {
+        if (AssessmentOwnership.authored(current.origin())) {
             return copy(current, AssessmentReason.TARGET_LOCAL, false, false);
         }
         return switch (consensus) {
             case AssessmentConsensus.Agreed agreed -> applyAgreed(current, agreed);
             case AssessmentConsensus.Unavailable unavailable -> withdrawOrKeep(current, unavailable.reason());
-            case AssessmentConsensus.Conflict conflict -> withdrawInherited(current, conflict);
+            case AssessmentConsensus.Conflict _ -> withdrawOrKeep(current, AssessmentReason.SOURCE_CONFLICT);
         };
-    }
-
-    /// Authored target rows, including a legacy row with no sidecar, are not machine-written.
-    private static boolean protectsLocalDecision(final @Nullable AssessmentOwnership origin) {
-        return AssessmentOwnership.authored(origin);
     }
 
     private static Change applyAgreed(final CurrentProjection current, final AssessmentConsensus.Agreed agreed) {
@@ -61,17 +56,9 @@ public final class AssessmentProjectionDiff {
                 null,
                 null,
                 agreed.contributors(),
-                current.localComment(),
                 null,
                 machineChanged,
                 contributorsChanged);
-    }
-
-    private static Change withdrawInherited(
-            final CurrentProjection current, final AssessmentConsensus.Conflict conflict) {
-        // Conflict keeps every contributor on the result and selects none of their decisions.
-        Objects.requireNonNull(conflict.contributors(), "contributors must not be null");
-        return withdrawOrKeep(current, AssessmentReason.SOURCE_CONFLICT);
     }
 
     private static Change withdrawOrKeep(final CurrentProjection current, final AssessmentReason reason) {
@@ -84,7 +71,6 @@ public final class AssessmentProjectionDiff {
                 null,
                 null,
                 List.of(),
-                current.localComment(),
                 reason,
                 true,
                 !current.contributors().isEmpty());
@@ -101,7 +87,6 @@ public final class AssessmentProjectionDiff {
                 current.details(),
                 current.policyId(),
                 current.contributors(),
-                current.localComment(),
                 reason,
                 machineChanged,
                 contributorsChanged);
@@ -117,8 +102,7 @@ public final class AssessmentProjectionDiff {
             AssessmentDecision decision,
             @Nullable String details,
             @Nullable Long policyId,
-            List<Contributor> contributors,
-            boolean localComment) {
+            List<Contributor> contributors) {
 
         public CurrentProjection {
             Objects.requireNonNull(decision, "decision must not be null");
@@ -127,14 +111,13 @@ public final class AssessmentProjectionDiff {
         }
     }
 
-    /// Next machine tuple. {@code localComment} is copied through and is not a machine field.
+    /// Next machine tuple.
     public record Change(
             @Nullable AssessmentOwnership origin,
             AssessmentDecision decision,
             @Nullable String details,
             @Nullable Long policyId,
             List<Contributor> contributors,
-            boolean localComment,
             @Nullable AssessmentReason reason,
             boolean machineChanged,
             boolean contributorsChanged) {

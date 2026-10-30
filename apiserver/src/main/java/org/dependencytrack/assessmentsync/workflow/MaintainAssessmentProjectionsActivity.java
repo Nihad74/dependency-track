@@ -144,7 +144,7 @@ public final class MaintainAssessmentProjectionsActivity
             case ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP -> {
                 new AssessmentOriginDao(handle).backfillProjectOrigins(projectUuid);
                 new AssessmentEmbeddingIndexer(handle).rebuild(projectUuid);
-                if (mode.recordsOutbox()) {
+                if (canInheritOrHoldsInherited(handle, projectId)) {
                     new AssessmentSyncWorkDao(handle).requestFull(projectUuid);
                     enqueued = 1;
                 }
@@ -168,6 +168,26 @@ public final class MaintainAssessmentProjectionsActivity
                 throw new TerminalApplicationFailureException("operation must be BOOTSTRAP, VERIFY, or WITHDRAW");
         }
         return ProjectOutcome.advance(drift, enqueued);
+    }
+
+    /// Same rule as expansion: only a project with a marker, or with inherited rows to withdraw, needs a pass.
+    private static boolean canInheritOrHoldsInherited(final Handle handle, final long projectId) {
+        return handle.createQuery(/* language=SQL */ """
+                        SELECT EXISTS (
+                                 SELECT 1 FROM "ASSESSMENT_EMBEDDING" WHERE "TARGET_PROJECT_ID" = :projectId
+                               )
+                            OR EXISTS (
+                                 SELECT 1
+                                   FROM "ANALYSIS" AS a
+                                  INNER JOIN "ASSESSMENT_ORIGIN" AS o
+                                     ON o."ANALYSIS_ID" = a."ID"
+                                  WHERE a."PROJECT_ID" = :projectId
+                                    AND o."OWNER" = 'INHERITED'
+                               )
+                        """)
+                .bind("projectId", projectId)
+                .mapTo(boolean.class)
+                .one();
     }
 
     private int countProjectDrift(final Handle handle, final UUID projectUuid, final long projectId)
