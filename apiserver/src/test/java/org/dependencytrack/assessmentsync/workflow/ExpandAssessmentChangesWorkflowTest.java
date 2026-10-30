@@ -602,10 +602,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
     }
 
     private static ExpandAssessmentChangesArg argument(final long outboxId) {
-        return ExpandAssessmentChangesArg.newBuilder()
-                .setOutboxId(outboxId)
-                .setSchemaVersion(1)
-                .build();
+        return ExpandAssessmentChangesArg.newBuilder().setOutboxId(outboxId).build();
     }
 
     private static WorkRow work(final UUID targetUuid) {

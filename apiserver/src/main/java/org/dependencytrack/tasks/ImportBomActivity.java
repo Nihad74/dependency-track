@@ -391,21 +391,16 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
                     ctx.bomTimestamp);
             new PackageMetadataResolutionDao(handle).seedPending(projectId);
 
-            final Map<String, Object> nameAndVersion = handle.createQuery(/* language=SQL */ """
+            final List<AssessmentChange.LookupKey> lookupKeys = handle.createQuery(/* language=SQL */ """
                             SELECT "NAME", "VERSION"
                               FROM "PROJECT"
                              WHERE "ID" = :projectId
                             """)
                     .bind("projectId", projectId)
-                    .mapToMap()
+                    .map((rs, _) -> AssessmentChange.LookupKey.listOf(rs.getString("NAME"), rs.getString("VERSION")))
                     .one();
-            final String name = (String) nameAndVersion.get("name");
-            final String version = (String) nameAndVersion.get("version");
             AssessmentStructureCapture.rebuildAndRecord(
-                    handle,
-                    ctx.project.getUuid(),
-                    AssessmentChange.Reason.BOM_IMPORT,
-                    AssessmentStructureCapture.keys(name, version, name, version));
+                    handle, ctx.project.getUuid(), AssessmentChange.Reason.BOM_IMPORT, lookupKeys);
         });
     }
 

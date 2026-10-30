@@ -204,27 +204,13 @@ final class AssessmentSyncRelay implements Closeable {
             final List<OutboxEntry> due = outboxDao.pollDue(batchSize);
             final var requests = new ArrayList<CreateWorkflowRunRequest<?>>(due.size());
             final var pending = new ArrayList<OutboxDispatch>(due.size());
-            var blocked = 0;
             for (final OutboxEntry entry : due) {
-                if (entry.schemaVersion() != AssessmentSyncSettings.SUPPORTED_SCHEMA_VERSION) {
-                    outboxDao.recordDispatchAttempt(
-                            entry.id(),
-                            nextDispatchAt(entry.dispatchAttempts()),
-                            AssessmentSyncSettings.UNKNOWN_SCHEMA_VERSION);
-                    LOGGER.warn(
-                            "Retaining assessment outbox row {} with unsupported schema version {}",
-                            entry.id(),
-                            entry.schemaVersion());
-                    blocked++;
-                    continue;
-                }
                 final String instanceId = ExpandAssessmentChangesWorkflow.instanceId(entry.id());
                 final var request = new CreateWorkflowRunRequest<>(ExpandAssessmentChangesWorkflow.class)
                         .withWorkflowInstanceId(instanceId)
                         .withConcurrencyKey(instanceId)
                         .withArgument(ExpandAssessmentChangesArg.newBuilder()
                                 .setOutboxId(entry.id())
-                                .setSchemaVersion(entry.schemaVersion())
                                 .build());
                 requests.add(request);
                 pending.add(new OutboxDispatch(entry.id(), entry.dispatchAttempts(), request.requestId()));
@@ -233,14 +219,14 @@ final class AssessmentSyncRelay implements Closeable {
             var created = 0;
             var active = 0;
             for (final OutboxDispatch dispatch : pending) {
-                outboxDao.recordDispatchAttempt(dispatch.id(), nextDispatchAt(dispatch.attempts()), null);
+                outboxDao.recordDispatchAttempt(dispatch.id(), nextDispatchAt(dispatch.attempts()));
                 if (createdRequestIds.contains(dispatch.requestId())) {
                     created++;
                 } else {
                     active++;
                 }
             }
-            return Scan.completed(created, active, blocked);
+            return Scan.completed(created, active);
         });
     }
 
@@ -277,7 +263,7 @@ final class AssessmentSyncRelay implements Closeable {
                     active++;
                 }
             }
-            return Scan.completed(created, active, 0);
+            return Scan.completed(created, active);
         });
     }
 
@@ -300,7 +286,6 @@ final class AssessmentSyncRelay implements Closeable {
     private void recordDispatches(final DispatchScope scope, final Scan scan) {
         increment(DispatchOutcome.CREATED, scope, scan.created());
         increment(DispatchOutcome.ACTIVE, scope, scan.active());
-        increment(DispatchOutcome.BLOCKED, scope, scan.blocked());
     }
 
     private void increment(final DispatchOutcome outcome, final DispatchScope scope, final int count) {
@@ -326,8 +311,7 @@ final class AssessmentSyncRelay implements Closeable {
 
     private enum DispatchOutcome {
         CREATED,
-        ACTIVE,
-        BLOCKED
+        ACTIVE
     }
 
     private enum DispatchScope {
@@ -335,14 +319,14 @@ final class AssessmentSyncRelay implements Closeable {
         WORK
     }
 
-    private record Scan(boolean skippedLock, int created, int active, int blocked) {
+    private record Scan(boolean skippedLock, int created, int active) {
 
         private static Scan skipped() {
-            return new Scan(true, 0, 0, 0);
+            return new Scan(true, 0, 0);
         }
 
-        private static Scan completed(final int created, final int active, final int blocked) {
-            return new Scan(false, created, active, blocked);
+        private static Scan completed(final int created, final int active) {
+            return new Scan(false, created, active);
         }
     }
 

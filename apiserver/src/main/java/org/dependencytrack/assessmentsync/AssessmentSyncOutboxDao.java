@@ -47,7 +47,6 @@ public final class AssessmentSyncOutboxDao {
 
     private static final String SELECT_ENTRY = /* language=SQL */ """
             SELECT "ID"
-                 , "SCHEMA_VERSION"
                  , "SCOPE"
                  , "PROJECT_UUID"
                  , "COMPONENT_UUID"
@@ -58,7 +57,6 @@ public final class AssessmentSyncOutboxDao {
                  , "CREATED_AT"
                  , "NEXT_DISPATCH_AT"
                  , "DISPATCH_ATTEMPTS"
-                 , "LAST_ERROR_CODE"
               FROM "ASSESSMENT_SYNC_OUTBOX"
             """;
 
@@ -203,20 +201,17 @@ public final class AssessmentSyncOutboxDao {
     }
 
     /// Records a dispatch attempt. False means expansion already deleted the row.
-    public boolean recordDispatchAttempt(
-            final long id, final Instant nextDispatchAt, final @Nullable String lastErrorCode) {
+    public boolean recordDispatchAttempt(final long id, final Instant nextDispatchAt) {
         requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
         requireTransaction();
         final int updated = handle.createUpdate(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_OUTBOX"
                            SET "NEXT_DISPATCH_AT" = :nextDispatchAt
                              , "DISPATCH_ATTEMPTS" = "DISPATCH_ATTEMPTS" + 1
-                             , "LAST_ERROR_CODE" = :lastErrorCode
                          WHERE "ID" = :id
                         """)
                 .bind("id", id)
                 .bind("nextDispatchAt", nextDispatchAt)
-                .bind("lastErrorCode", lastErrorCode)
                 .execute();
         return updated == 1;
     }
@@ -235,7 +230,6 @@ public final class AssessmentSyncOutboxDao {
     private RowMapper<OutboxEntry> entryMapper() {
         return (rs, ctx) -> new OutboxEntry(
                 rs.getLong("ID"),
-                rs.getInt("SCHEMA_VERSION"),
                 new AssessmentChange(
                         Scope.valueOf(rs.getString("SCOPE")),
                         rs.getObject("PROJECT_UUID", UUID.class),
@@ -246,8 +240,7 @@ public final class AssessmentSyncOutboxDao {
                 rs.getObject("FANOUT_CURSOR", UUID.class),
                 readInstant(rs, "CREATED_AT"),
                 readInstant(rs, "NEXT_DISPATCH_AT"),
-                rs.getInt("DISPATCH_ATTEMPTS"),
-                rs.getString("LAST_ERROR_CODE"));
+                rs.getInt("DISPATCH_ATTEMPTS"));
     }
 
     private List<AssessmentChange> coalesce(final Collection<AssessmentChange> changes) {
@@ -312,13 +305,11 @@ public final class AssessmentSyncOutboxDao {
     /// One durable outbox row. {@code change} is the stored invalidation.
     public record OutboxEntry(
             long id,
-            int schemaVersion,
             AssessmentChange change,
             @Nullable UUID fanoutCursor,
             Instant createdAt,
             Instant nextDispatchAt,
-            int dispatchAttempts,
-            @Nullable String lastErrorCode) {
+            int dispatchAttempts) {
 
         public OutboxEntry {
             requireNonNull(change, "change must not be null");

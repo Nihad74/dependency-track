@@ -28,9 +28,6 @@ option java_package = "org.dependencytrack.proto.internal.workflow.v1";
 message ExpandAssessmentChangesArg {
   // Outbox row to expand.
   int64 outbox_id = 1;
-
-  // Schema version stored on that outbox row.
-  int32 schema_version = 2;
 }
 
 // Argument of the synchronize-project-assessments workflow.

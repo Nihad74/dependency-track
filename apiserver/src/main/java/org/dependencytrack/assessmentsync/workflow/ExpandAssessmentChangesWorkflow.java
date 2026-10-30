@@ -98,8 +98,5 @@ public final class ExpandAssessmentChangesWorkflow implements Workflow<ExpandAss
         if (arg == null || arg.getOutboxId() <= 0) {
             throw new TerminalApplicationFailureException("outbox_id must be positive");
         }
-        if (arg.getSchemaVersion() != AssessmentSyncSettings.SUPPORTED_SCHEMA_VERSION) {
-            throw new TerminalApplicationFailureException("unsupported schema_version");
-        }
     }
 }

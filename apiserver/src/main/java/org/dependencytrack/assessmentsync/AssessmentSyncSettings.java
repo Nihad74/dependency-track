@@ -30,13 +30,8 @@ public record AssessmentSyncSettings(
         int reconcileBatchSize,
         int maxBatches) {
 
-    /// Outbox rows this process can expand. Unknown versions stay pending.
-    public static final int SUPPORTED_SCHEMA_VERSION = 1;
-
     /// Distinct from the notification relay lock.
     public static final long RELAY_ADVISORY_LOCK_ID = 418263950172846531L;
-
-    public static final String UNKNOWN_SCHEMA_VERSION = "UNKNOWN_SCHEMA_VERSION";
 
     public AssessmentSyncSettings {
         requirePositive(pollIntervalMillis, ConfigKeys.ASSESSMENT_SYNC_RELAY_POLL_INTERVAL_MS);

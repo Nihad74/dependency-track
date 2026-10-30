@@ -89,14 +89,12 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
         assertThat(rows).hasSize(2);
         final OutboxEntry merged =
                 rows.stream().filter(row -> row.id() == mergedId).findFirst().orElseThrow();
-        assertThat(merged.schemaVersion()).isEqualTo(1);
         assertThat(merged.change().reason()).isEqualTo(Reason.BOM_IMPORT);
         assertThat(merged.change().scope()).isEqualTo(Scope.FINDING);
         assertThat(merged.change().lookupKeys())
                 .containsExactlyInAnyOrder(
                         new LookupKey("before", "1"), new LookupKey("after", "2"), new LookupKey("extra", "4"));
         assertThat(merged.dispatchAttempts()).isZero();
-        assertThat(merged.lastErrorCode()).isNull();
 
         final OutboxEntry separate =
                 rows.stream().filter(row -> row.id() != mergedId).findFirst().orElseThrow();
@@ -220,16 +218,13 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
             assertThat(locked).isNotNull();
             assertThat(locked.fanoutCursor()).isNull();
             assertThat(dao.updateFanoutCursor(id, cursor)).isTrue();
-            assertThat(dao.recordDispatchAttempt(id, nextDispatchAt, "EXPAND_FAILED"))
-                    .isTrue();
-            assertThat(dao.recordDispatchAttempt(id, nextDispatchAt, "EXPAND_FAILED"))
-                    .isTrue();
+            assertThat(dao.recordDispatchAttempt(id, nextDispatchAt)).isTrue();
+            assertThat(dao.recordDispatchAttempt(id, nextDispatchAt)).isTrue();
         });
 
         final OutboxEntry updated = inJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle).lock(id));
         assertThat(updated.fanoutCursor()).isEqualTo(cursor);
         assertThat(updated.dispatchAttempts()).isEqualTo(2);
-        assertThat(updated.lastErrorCode()).isEqualTo("EXPAND_FAILED");
         assertThat(updated.nextDispatchAt()).isEqualTo(nextDispatchAt);
         final List<OutboxEntry> due = inJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle).pollDue(10));
         assertThat(due).isEmpty();
@@ -239,8 +234,7 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
             assertThat(dao.deleteFinished(id)).isTrue();
             assertThat(dao.lock(id)).isNull();
             assertThat(dao.deleteFinished(id)).isFalse();
-            assertThat(dao.recordDispatchAttempt(id, nextDispatchAt, "EXPAND_FAILED"))
-                    .isFalse();
+            assertThat(dao.recordDispatchAttempt(id, nextDispatchAt)).isFalse();
         });
         assertThat(outboxCount()).isZero();
     }
