@@ -28,6 +28,8 @@ import us.springett.parsers.cpe.exceptions.CpeParsingException;
 import us.springett.parsers.cpe.values.LogicalValue;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,21 +46,25 @@ public final class AssessmentMatcher {
     /// Two source components with the same winning identity are ambiguous. Candidates that are
     /// different identities are not collapsed to a winner.
     public static MatchResult match(final ComponentIdentity target, final List<ComponentIdentity> sourceCandidates) {
+        return match(target, Candidates.of(sourceCandidates));
+    }
+
+    /// Same as {@link #match(ComponentIdentity, List)}, against candidates parsed once for many targets.
+    public static MatchResult match(final ComponentIdentity target, final Candidates sourceCandidates) {
         Objects.requireNonNull(target, "target must not be null");
         Objects.requireNonNull(sourceCandidates, "sourceCandidates must not be null");
 
         final var byComponent = new LinkedHashMap<UUID, Classified>();
-        for (final ComponentIdentity candidate : sourceCandidates) {
-            Objects.requireNonNull(candidate, "source candidate must not be null");
+        for (final ParsedCandidate candidate : sourceCandidates.comparableTo(target)) {
             final Classified classified = classify(target, candidate);
             if (classified.relation() == Relation.IGNORE) {
                 continue;
             }
-            final Classified existing = byComponent.get(candidate.uuid());
+            final Classified existing = byComponent.get(candidate.identity().uuid());
             if (existing == null) {
-                byComponent.put(candidate.uuid(), classified);
+                byComponent.put(candidate.identity().uuid(), classified);
             } else if (existing.relation() != classified.relation()) {
-                byComponent.put(candidate.uuid(), existing.asConflict());
+                byComponent.put(candidate.identity().uuid(), existing.asConflict());
             }
         }
 
@@ -100,14 +106,13 @@ public final class AssessmentMatcher {
         return new VulnerabilityMatch.Same();
     }
 
-    private static Classified classify(final ComponentIdentity target, final ComponentIdentity other) {
+    private static Classified classify(final ComponentIdentity target, final ParsedCandidate candidate) {
+        final ComponentIdentity other = candidate.identity();
         final String targetPurl = canonicalVersionedPurl(target.purl());
-        final String candidatePurl = canonicalVersionedPurl(other.purl());
         final boolean hashConflict = hashesConflict(target, other);
-        final boolean comparableConflict = comparableIdentifiersConflict(target, other);
 
         if (targetPurl != null) {
-            if (targetPurl.equals(candidatePurl)) {
+            if (targetPurl.equals(candidate.canonicalPurl())) {
                 // Name, version, and classifier are not a second identity check once the full PURL matches.
                 // Those comparable fields apply to the CPE fallback below. Hashes still conflict.
                 if (hashConflict) {
@@ -119,11 +124,10 @@ public final class AssessmentMatcher {
         }
 
         final Cpe targetCpe = concreteCpe(target.cpe());
-        final Cpe candidateCpe = concreteCpe(other.cpe());
-        if (targetCpe == null || candidateCpe == null || !targetCpe.equals(candidateCpe)) {
+        if (targetCpe == null || !targetCpe.equals(candidate.concreteCpe())) {
             return new Classified(other, Relation.IGNORE);
         }
-        if (parsePurl(other.purl()) != null || hashConflict || comparableConflict) {
+        if (candidate.hasPurl() || hashConflict || comparableIdentifiersConflict(target, other)) {
             return new Classified(other, Relation.CONFLICT);
         }
         return new Classified(other, Relation.MATCH);
@@ -305,6 +309,58 @@ public final class AssessmentMatcher {
             }
         }
     }
+
+    /// Source candidates with PURL and CPE parsed once, indexed by the identity a target can match on.
+    public static final class Candidates {
+
+        private final Map<String, List<ParsedCandidate>> byPurl;
+        private final Map<Cpe, List<ParsedCandidate>> byCpe;
+
+        private Candidates(
+                final Map<String, List<ParsedCandidate>> byPurl, final Map<Cpe, List<ParsedCandidate>> byCpe) {
+            this.byPurl = byPurl;
+            this.byCpe = byCpe;
+        }
+
+        public static Candidates of(final Collection<ComponentIdentity> identities) {
+            Objects.requireNonNull(identities, "identities must not be null");
+            final var byPurl = new HashMap<String, List<ParsedCandidate>>();
+            final var byCpe = new HashMap<Cpe, List<ParsedCandidate>>();
+            for (final ComponentIdentity identity : identities) {
+                Objects.requireNonNull(identity, "source candidate must not be null");
+                final var candidate = new ParsedCandidate(
+                        identity,
+                        canonicalVersionedPurl(identity.purl()),
+                        concreteCpe(identity.cpe()),
+                        parsePurl(identity.purl()) != null);
+                if (candidate.canonicalPurl() != null) {
+                    byPurl.computeIfAbsent(candidate.canonicalPurl(), ignored -> new ArrayList<>())
+                            .add(candidate);
+                }
+                if (candidate.concreteCpe() != null) {
+                    byCpe.computeIfAbsent(candidate.concreteCpe(), ignored -> new ArrayList<>())
+                            .add(candidate);
+                }
+            }
+            return new Candidates(byPurl, byCpe);
+        }
+
+        /// The only candidates {@code classify} does not ignore for this target.
+        private List<ParsedCandidate> comparableTo(final ComponentIdentity target) {
+            final String targetPurl = canonicalVersionedPurl(target.purl());
+            if (targetPurl != null) {
+                return byPurl.getOrDefault(targetPurl, List.of());
+            }
+            final Cpe targetCpe = concreteCpe(target.cpe());
+            return targetCpe == null ? List.of() : byCpe.getOrDefault(targetCpe, List.of());
+        }
+    }
+
+    private record ParsedCandidate(
+            ComponentIdentity identity,
+            @Nullable String canonicalPurl,
+            @Nullable Cpe concreteCpe,
+            boolean hasPurl) {}
 
     private enum Relation {
         MATCH,
