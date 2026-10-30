@@ -22,8 +22,10 @@ import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
@@ -38,6 +40,7 @@ public final class AssessmentEmbeddingDao {
     }
 
     /// Replaces markers and descendants for one target project. A null source UUID is kept.
+    /// Writes nothing when the stored rows already match, so daily verification does not rewrite them.
     public void replaceMembership(final long targetProjectId, final Collection<MarkerMembership> membership) {
         if (targetProjectId <= 0) {
             throw new IllegalArgumentException("targetProjectId must be positive");
@@ -51,6 +54,11 @@ public final class AssessmentEmbeddingDao {
             if (!markers.add(marker.markerComponentId())) {
                 throw new IllegalArgumentException("Duplicate marker component " + marker.markerComponentId());
             }
+        }
+
+        if (storedMarkers(targetProjectId).equals(desiredMarkers(membership))
+                && storedMembers(targetProjectId).equals(desiredMembers(membership))) {
+            return;
         }
 
         handle.createUpdate(/* language=SQL */ """
@@ -206,6 +214,66 @@ public final class AssessmentEmbeddingDao {
                         rs.getLong("TARGET_PROJECT_ID"), rs.getLong("MARKER_COMPONENT_ID"), rs.getLong("COMPONENT_ID")))
                 .list();
     }
+
+    private Set<StoredMarker> storedMarkers(final long targetProjectId) {
+        return new HashSet<>(handle.createQuery(/* language=SQL */ """
+                        SELECT "MARKER_COMPONENT_ID"
+                             , "MARKER_NAME"
+                             , "MARKER_VERSION"
+                             , "SOURCE_PROJECT_UUID"
+                          FROM "ASSESSMENT_EMBEDDING"
+                         WHERE "TARGET_PROJECT_ID" = :targetProjectId
+                        """)
+                .bind("targetProjectId", targetProjectId)
+                .map((rs, ctx) -> new StoredMarker(
+                        rs.getLong("MARKER_COMPONENT_ID"),
+                        rs.getString("MARKER_NAME"),
+                        rs.getString("MARKER_VERSION"),
+                        rs.getObject("SOURCE_PROJECT_UUID", UUID.class)))
+                .list());
+    }
+
+    private Set<StoredMember> storedMembers(final long targetProjectId) {
+        return new HashSet<>(handle.createQuery(/* language=SQL */ """
+                        SELECT "MARKER_COMPONENT_ID"
+                             , "COMPONENT_ID"
+                          FROM "ASSESSMENT_EMBEDDING_MEMBER"
+                         WHERE "TARGET_PROJECT_ID" = :targetProjectId
+                        """)
+                .bind("targetProjectId", targetProjectId)
+                .map((rs, ctx) -> new StoredMember(rs.getLong("MARKER_COMPONENT_ID"), rs.getLong("COMPONENT_ID")))
+                .list());
+    }
+
+    private static Set<StoredMarker> desiredMarkers(final Collection<MarkerMembership> membership) {
+        final var markers = new HashSet<StoredMarker>();
+        for (final MarkerMembership marker : membership) {
+            markers.add(new StoredMarker(
+                    marker.markerComponentId(),
+                    marker.markerName(),
+                    marker.markerVersion(),
+                    marker.sourceProjectUuid()));
+        }
+        return markers;
+    }
+
+    private static Set<StoredMember> desiredMembers(final Collection<MarkerMembership> membership) {
+        final var members = new HashSet<StoredMember>();
+        for (final MarkerMembership marker : membership) {
+            for (final long componentId : dedupeMembers(marker)) {
+                members.add(new StoredMember(marker.markerComponentId(), componentId));
+            }
+        }
+        return members;
+    }
+
+    private record StoredMarker(
+            long markerComponentId,
+            String markerName,
+            String markerVersion,
+            @Nullable UUID sourceProjectUuid) {}
+
+    private record StoredMember(long markerComponentId, long componentId) {}
 
     private static LinkedHashSet<Long> dedupeMembers(final MarkerMembership marker) {
         final var componentIds = new LinkedHashSet<Long>();
