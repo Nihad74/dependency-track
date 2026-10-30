@@ -24,6 +24,8 @@ import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.model.AnalysisState;
+import org.dependencytrack.model.Classifier;
+import org.dependencytrack.model.Component;
 import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.FindingKey;
 import org.dependencytrack.model.Project;
@@ -312,6 +314,25 @@ class ReconcileProjectAssessmentsActivityTest extends PersistenceCapableTest {
         assertThat(findingWork).isNotNull();
         assertThat(findingWork.completedRevision()).isEqualTo(findingWork.requestedRevision());
         assertThat(findingWork.cursorComponentId()).isNull();
+    }
+
+    @Test
+    void fullPassPagesOnlyFindingsThatCanInherit() throws Exception {
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        final var outsider = new Component();
+        outsider.setProject(fixture.target);
+        outsider.setName("app-lib");
+        outsider.setVersion("1.0.0");
+        outsider.setClassifier(Classifier.LIBRARY);
+        qm.addVulnerability(fixture.vulnerability, qm.persist(outsider), "internal");
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+
+        final ReconcileProjectAssessmentsRes result = reconcile(fixture.target.getUuid(), 1);
+
+        assertThat(result.getHasMore()).isFalse();
+        assertThat(result.getApplied()).isEqualTo(1);
+        assertThat(ReconcileFixture.work(fixture.target.getUuid()).completedRevision())
+                .isEqualTo(1);
     }
 
     @Test
