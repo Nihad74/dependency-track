@@ -19,6 +19,7 @@
 package org.dependencytrack.assessmentsync;
 
 import org.dependencytrack.assessmentsync.AssessmentConsensus.Contributor;
+import org.dependencytrack.assessmentsync.AssessmentOriginDao.Origin;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
 import org.dependencytrack.model.AnalysisState;
@@ -39,72 +40,14 @@ import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
 
-/// Target origin, machine fields, and copied source trails. Uses the caller's transaction.
+/// Worker projections: machine fields and copied source trails on target analyses. Ownership records
+/// written by authored writers live in {@link AssessmentOriginDao}. Uses the caller's transaction.
 public final class AssessmentProjectionDao {
 
     private final Handle handle;
 
     public AssessmentProjectionDao(final Handle handle) {
         this.handle = requireNonNull(handle, "handle must not be null");
-    }
-
-    /// Inserts origin or updates it, and clears the worker's last reason. The version moves by one when
-    /// ownership or the decision changes. A missing row is version 0, so a new row starts at 1 when the
-    /// decision changed.
-    public long upsertOrigin(final long analysisId, final AssessmentOwnership owner, final boolean decisionChanged) {
-        requireAnalysisId(analysisId);
-        requireNonNull(owner, "owner must not be null");
-        requireTransaction();
-        return handle.createQuery(/* language=SQL */ """
-                        INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER", "DECISION_VERSION")
-                        VALUES (:analysisId, :owner, CASE WHEN :decisionChanged THEN 1 ELSE 0 END)
-                        ON CONFLICT ("ANALYSIS_ID") DO UPDATE
-                        SET "OWNER" = EXCLUDED."OWNER"
-                          , "LAST_REASON" = NULL
-                          , "DECISION_VERSION" = "ASSESSMENT_ORIGIN"."DECISION_VERSION" + CASE
-                              WHEN :decisionChanged
-                                OR "ASSESSMENT_ORIGIN"."OWNER" IS DISTINCT FROM EXCLUDED."OWNER" THEN 1
-                              ELSE 0
-                            END
-                        RETURNING "DECISION_VERSION"
-                        """)
-                .bind("analysisId", analysisId)
-                .bind("owner", owner.name())
-                .bind("decisionChanged", decisionChanged)
-                .mapTo(long.class)
-                .one();
-    }
-
-    /// Reads the origin row. Null means the analysis predates the feature: protected as local, or as policy
-    /// when a vulnerability policy wrote it.
-    public @Nullable Origin findOrigin(final long analysisId) {
-        requireAnalysisId(analysisId);
-        return handle.createQuery(/* language=SQL */ """
-                        SELECT "OWNER"
-                             , "DECISION_VERSION"
-                             , "LAST_REASON"
-                          FROM "ASSESSMENT_ORIGIN"
-                         WHERE "ANALYSIS_ID" = :analysisId
-                        """)
-                .bind("analysisId", analysisId)
-                .map((rs, ctx) -> new Origin(
-                        AssessmentOwnership.valueOf(rs.getString("OWNER")),
-                        rs.getLong("DECISION_VERSION"),
-                        rs.getString("LAST_REASON")))
-                .findOne()
-                .orElse(null);
-    }
-
-    /// Removes copied source trails. Target comments in ANALYSISCOMMENT are left in place.
-    public void deleteCopiedContributions(final long analysisId) {
-        requireAnalysisId(analysisId);
-        requireTransaction();
-        handle.createUpdate(/* language=SQL */ """
-                        DELETE FROM "ASSESSMENT_SOURCE_CONTRIBUTION"
-                         WHERE "TARGET_ANALYSIS_ID" = :analysisId
-                        """)
-                .bind("analysisId", analysisId)
-                .execute();
     }
 
     /// Applies a worker projection. Local and policy rows, and stale versions, are left unchanged.
@@ -199,72 +142,6 @@ public final class AssessmentProjectionDao {
                 header.details(),
                 header.policyId(),
                 loadContributions(analysisId));
-    }
-
-    /// Labels existing analyses without replacing a row written by a concurrent writer.
-    public @Nullable UUID backfillOrigins(final @Nullable UUID projectUuidKeyset, final int limit) {
-        if (limit <= 0) {
-            throw new IllegalArgumentException("limit must be positive");
-        }
-        requireTransaction();
-        final UUID cursor =
-                projectUuidKeyset == null ? UUID.fromString("00000000-0000-0000-0000-000000000000") : projectUuidKeyset;
-        final BackfillPage page = handle.createQuery(/* language=SQL */ """
-                        WITH projects AS (
-                          SELECT "ID"
-                               , "UUID"
-                            FROM "PROJECT"
-                           WHERE (:hasCursor = FALSE OR "UUID" > :cursor)
-                           ORDER BY "UUID"
-                           LIMIT :limit
-                        ),
-                        inserted AS (
-                          INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER")
-                          SELECT a."ID"
-                               , CASE
-                                   WHEN a."VULNERABILITY_POLICY_ID" IS NOT NULL THEN 'POLICY'
-                                   ELSE 'LOCAL'
-                                 END
-                            FROM "ANALYSIS" AS a
-                           INNER JOIN projects AS p
-                              ON p."ID" = a."PROJECT_ID"
-                          ON CONFLICT ("ANALYSIS_ID") DO NOTHING
-                          RETURNING "ANALYSIS_ID"
-                        )
-                        SELECT (SELECT "UUID" FROM projects ORDER BY "UUID" DESC LIMIT 1) AS next_cursor
-                             , (SELECT COUNT(*) FROM projects) AS project_count
-                             , (SELECT COUNT(*) FROM inserted) AS inserted_count
-                        """)
-                .bind("hasCursor", projectUuidKeyset != null)
-                .bind("cursor", cursor)
-                .bind("limit", limit)
-                .map((rs, ctx) -> new BackfillPage(rs.getObject("next_cursor", UUID.class), rs.getInt("project_count")))
-                .one();
-        if (page.projectCount() < limit) {
-            return null;
-        }
-        return page.nextCursor();
-    }
-
-    /// Labels one project's unlabeled analyses. An existing origin row is left unchanged.
-    public int backfillProjectOrigins(final UUID projectUuid) {
-        requireNonNull(projectUuid, "projectUuid must not be null");
-        requireTransaction();
-        return handle.createUpdate(/* language=SQL */ """
-                        INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER")
-                        SELECT a."ID"
-                             , CASE
-                                 WHEN a."VULNERABILITY_POLICY_ID" IS NOT NULL THEN 'POLICY'
-                                 ELSE 'LOCAL'
-                               END
-                          FROM "ANALYSIS" AS a
-                         INNER JOIN "PROJECT" AS p
-                            ON p."ID" = a."PROJECT_ID"
-                         WHERE p."UUID" = :projectUuid
-                        ON CONFLICT ("ANALYSIS_ID") DO NOTHING
-                        """)
-                .bind("projectUuid", projectUuid)
-                .execute();
     }
 
     /// Resets worker-owned inherited projections on one project to neutral.
@@ -774,17 +651,6 @@ public final class AssessmentProjectionDao {
         }
     }
 
-    /// Ownership sidecar.
-    public record Origin(
-            AssessmentOwnership owner,
-            long decisionVersion,
-            @Nullable String lastReason) {
-
-        public Origin {
-            requireNonNull(owner, "owner must not be null");
-        }
-    }
-
     /// Current stored projection, including copied source trails.
     public record StoredProjection(
             long analysisId,
@@ -901,8 +767,6 @@ public final class AssessmentProjectionDao {
             AssessmentDecision decision,
             @Nullable String details,
             @Nullable Long policyId) {}
-
-    private record BackfillPage(@Nullable UUID nextCursor, int projectCount) {}
 
     private record ContributionKey(UUID sourceProjectUuid, long sourceAnalysisId) {}
 

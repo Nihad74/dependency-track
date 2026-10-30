@@ -376,7 +376,7 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
             final long targetAnalysisId, final String reason, final SourceContributionWrite... contributions) {
         final var written = inJdbiTransaction(handle -> {
             final var dao = new AssessmentProjectionDao(handle);
-            final var origin = dao.findOrigin(targetAnalysisId);
+            final var origin = new AssessmentOriginDao(handle).findOrigin(targetAnalysisId);
             return dao.applyWorkerWrite(new WorkerWrite(
                     targetAnalysisId,
                     AssessmentOwnership.INHERITED,

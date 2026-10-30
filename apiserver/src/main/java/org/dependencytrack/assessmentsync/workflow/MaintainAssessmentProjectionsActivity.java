@@ -23,6 +23,7 @@ import io.micrometer.core.instrument.Meter.MeterProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.dependencytrack.assessmentsync.AssessmentEmbeddingIndexer;
 import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
+import org.dependencytrack.assessmentsync.AssessmentOriginDao;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao;
 import org.dependencytrack.assessmentsync.AssessmentSyncMetrics;
 import org.dependencytrack.assessmentsync.AssessmentSyncMode;
@@ -141,7 +142,7 @@ public final class MaintainAssessmentProjectionsActivity
         var enqueued = 0;
         switch (operation) {
             case ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP -> {
-                new AssessmentProjectionDao(handle).backfillProjectOrigins(projectUuid);
+                new AssessmentOriginDao(handle).backfillProjectOrigins(projectUuid);
                 new AssessmentEmbeddingIndexer(handle).rebuild(projectUuid);
                 if (mode == AssessmentSyncMode.ACTIVE || mode == AssessmentSyncMode.CAPTURE) {
                     new AssessmentSyncWorkDao(handle).requestFull(projectUuid);
