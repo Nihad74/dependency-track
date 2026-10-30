@@ -1469,8 +1469,8 @@ public class ModelConverter {
                 .toList();
     }
 
-    /// CycloneDX has one analysis.detail string. Copy source text only when every authorized
-    /// explanation is that same string, and name those sources. Differing text is omitted.
+    /// CycloneDX has one analysis.detail string. Copy source text only when every authorized source has
+    /// that same string, and name those sources. Differing or missing text is omitted.
     private static ExportedExplanation exportedExplanation(
             final @Nullable Analysis analysis, final Map<Long, Trail> trails) {
         if (analysis == null) {
@@ -1489,7 +1489,7 @@ public class ModelConverter {
         for (final SourceAssessment source : trail.sourceAssessments()) {
             final String text = trimToNull(source.sourceDetails());
             if (text == null) {
-                continue;
+                return ExportedExplanation.none();
             }
             sources.add(new SourceAttribution(source.project().uuid(), sourceLabel(source), text));
         }
