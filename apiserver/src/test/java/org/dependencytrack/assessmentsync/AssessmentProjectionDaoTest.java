@@ -23,6 +23,8 @@ import org.dependencytrack.assessmentsync.AssessmentConsensus.Contributor;
 import org.dependencytrack.assessmentsync.AssessmentOriginDao.Origin;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.SourceCommentWrite;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.SourceContributionWrite;
+import org.dependencytrack.assessmentsync.AssessmentProjectionDao.StoredComment;
+import org.dependencytrack.assessmentsync.AssessmentProjectionDao.StoredContribution;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.StoredProjection;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.WorkerWrite;
 import org.dependencytrack.assessmentsync.AssessmentProjectionDao.WorkerWriteResult;
@@ -433,6 +435,110 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         .origin()
                         .decisionVersion())
                 .isEqualTo(0);
+    }
+
+    @Test
+    void shouldApplyABatchAndReportEachRowSeparately() {
+        final long first = persistAnalysis(AnalysisState.NOT_SET, null);
+        final long second = persistAnalysis(AnalysisState.NOT_SET, null);
+        final long stale = persistAnalysis(AnalysisState.NOT_SET, null);
+        final long local = persistAnalysis(AnalysisState.EXPLOITABLE, null);
+        final long missing = Long.MAX_VALUE;
+        final Contributor kernel = contributor("kernel");
+        final Contributor firmware = contributor("firmware");
+
+        final List<WorkerWriteResult> results = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
+                .applyWorkerWrites(List.of(
+                        new WorkerWrite(
+                                first,
+                                AssessmentOwnership.INHERITED,
+                                richDecision(),
+                                null,
+                                null,
+                                null,
+                                0,
+                                List.of(new SourceContributionWrite(
+                                        kernel,
+                                        "from kernel",
+                                        List.of(new SourceCommentWrite(
+                                                17, "kernel note", "alice", ORIGINAL_TIMESTAMP))))),
+                        new WorkerWrite(
+                                second,
+                                AssessmentOwnership.INHERITED,
+                                richDecision(),
+                                null,
+                                null,
+                                null,
+                                0,
+                                List.of(new SourceContributionWrite(firmware, "from firmware", List.of()))),
+                        write(stale, AssessmentOwnership.INHERITED, richDecision(), null, 5),
+                        write(local, AssessmentOwnership.INHERITED, richDecision(), null, 1),
+                        write(missing, AssessmentOwnership.INHERITED, richDecision(), null, 0))));
+
+        assertThat(results)
+                .extracting(WorkerWriteResult::status)
+                .containsExactly(
+                        WorkerWriteStatus.APPLIED,
+                        WorkerWriteStatus.APPLIED,
+                        WorkerWriteStatus.REJECTED_VERSION,
+                        WorkerWriteStatus.REJECTED_OWNERSHIP,
+                        WorkerWriteStatus.MISSING);
+        assertThat(results.get(0).decisionVersion()).isEqualTo(1);
+        final StoredProjection firstStored = load(first);
+        assertThat(firstStored.decision()).isEqualTo(richDecision());
+        assertThat(firstStored.contributions()).singleElement().satisfies(contribution -> {
+            assertThat(contribution.sourceDetails()).isEqualTo("from kernel");
+            assertThat(contribution.comments())
+                    .extracting(StoredComment::comment)
+                    .containsExactly("kernel note");
+        });
+        assertThat(load(second).contributions())
+                .extracting(StoredContribution::sourceDetails)
+                .containsExactly("from firmware");
+        assertThat(load(stale).decision().state()).isEqualTo(AnalysisState.NOT_SET);
+        assertThat(load(local).decision().state()).isEqualTo(AnalysisState.EXPLOITABLE);
+    }
+
+    @Test
+    void shouldWriteABatchInAFixedNumberOfStatements() {
+        assertThat(statementsFor(4)).isEqualTo(statementsFor(2));
+    }
+
+    private int statementsFor(final int writes) {
+        final var analysisIds = new java.util.ArrayList<Long>();
+        for (int i = 0; i < writes; i++) {
+            analysisIds.add(persistAnalysis(AnalysisState.NOT_SET, null));
+        }
+        final var batch = analysisIds.stream()
+                .map(id -> new WorkerWrite(
+                        id,
+                        AssessmentOwnership.INHERITED,
+                        richDecision(),
+                        null,
+                        null,
+                        null,
+                        0,
+                        List.of(new SourceContributionWrite(
+                                contributor("kernel"),
+                                "from kernel",
+                                List.of(new SourceCommentWrite(17, "kernel note", "alice", ORIGINAL_TIMESTAMP))))))
+                .toList();
+        final var count = new java.util.concurrent.atomic.AtomicInteger();
+        inJdbiTransaction(handle -> {
+            handle.getConfig(org.jdbi.v3.core.statement.SqlStatements.class)
+                    .setSqlLogger(new org.jdbi.v3.core.statement.SqlLogger() {
+                        @Override
+                        public void logAfterExecution(final org.jdbi.v3.core.statement.StatementContext context) {
+                            count.incrementAndGet();
+                        }
+                    });
+            return new AssessmentProjectionDao(handle).applyWorkerWrites(batch);
+        });
+        return count.get();
+    }
+
+    private static StoredProjection load(final long analysisId) {
+        return requireNonNull(withJdbiHandle(handle -> new AssessmentProjectionDao(handle).load(analysisId)));
     }
 
     private long persistAnalysis(final AnalysisState state, final String comment) {

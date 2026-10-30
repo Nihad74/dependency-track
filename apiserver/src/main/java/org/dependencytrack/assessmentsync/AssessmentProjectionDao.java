@@ -28,12 +28,16 @@ import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.statement.SqlStatement;
 import org.jspecify.annotations.Nullable;
 
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -54,51 +58,60 @@ public final class AssessmentProjectionDao {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Applies a worker projection. Local and policy rows, and stale versions, are left unchanged.
-    public WorkerWriteResult applyWorkerWrite(final WorkerWrite write) {
-        requireNonNull(write, "write must not be null");
+    /// Applies worker projections in a fixed number of statements. Returns one result per write, in order.
+    /// Local and policy rows, and stale versions, are left unchanged.
+    public List<WorkerWriteResult> applyWorkerWrites(final List<WorkerWrite> writes) {
         requireTransaction(handle);
-        final LockedAnalysis locked = lockAnalysis(write.analysisId());
-        if (locked == null || locked.owner() == null) {
-            return new WorkerWriteResult(WorkerWriteStatus.MISSING, 0);
+        if (writes.isEmpty()) {
+            return List.of();
         }
-        if (AssessmentOwnership.authored(locked.owner())) {
-            return new WorkerWriteResult(WorkerWriteStatus.REJECTED_OWNERSHIP, locked.decisionVersion());
+        final var analysisIds = new LinkedHashSet<Long>();
+        for (final WorkerWrite write : writes) {
+            if (!analysisIds.add(write.analysisId())) {
+                throw new IllegalArgumentException("Duplicate worker write for analysis " + write.analysisId());
+            }
         }
-        if (locked.decisionVersion() != write.expectedDecisionVersion()) {
-            return new WorkerWriteResult(WorkerWriteStatus.REJECTED_VERSION, locked.decisionVersion());
+        final Map<Long, LockedAnalysis> locked = lockAnalyses(analysisIds);
+
+        final var results = new ArrayList<WorkerWriteResult>(writes.size());
+        final var accepted = new ArrayList<AcceptedWrite>(writes.size());
+        for (final WorkerWrite write : writes) {
+            final LockedAnalysis current = locked.get(write.analysisId());
+            if (current == null || current.owner() == null) {
+                results.add(new WorkerWriteResult(WorkerWriteStatus.MISSING, 0));
+            } else if (AssessmentOwnership.authored(current.owner())) {
+                results.add(new WorkerWriteResult(WorkerWriteStatus.REJECTED_OWNERSHIP, current.decisionVersion()));
+            } else if (current.decisionVersion() != write.expectedDecisionVersion()) {
+                results.add(new WorkerWriteResult(WorkerWriteStatus.REJECTED_VERSION, current.decisionVersion()));
+            } else {
+                final boolean versionBump = current.owner() != write.owner()
+                        || !current.decision().equals(write.decision())
+                        || !Objects.equals(current.details(), write.details());
+                accepted.add(new AcceptedWrite(results.size(), write, versionBump));
+                results.add(null);
+            }
+        }
+        if (accepted.isEmpty()) {
+            return List.copyOf(results);
         }
 
-        final boolean versionBump = locked.owner() != write.owner()
-                || !locked.decision().equals(write.decision())
-                || !Objects.equals(locked.details(), write.details());
-        final int updated = updateMachineFields(write);
-        if (updated != 1) {
-            throw new IllegalStateException("Worker write did not update analysis " + write.analysisId());
+        updateMachineFields(accepted);
+        final Map<Long, Long> versions = updateOrigins(accepted);
+        replaceContributions(accepted);
+        for (final AcceptedWrite write : accepted) {
+            final Long version = versions.get(write.write().analysisId());
+            if (version == null) {
+                throw new IllegalStateException("Worker write lost the origin guard for analysis "
+                        + write.write().analysisId());
+            }
+            results.set(write.index(), new WorkerWriteResult(WorkerWriteStatus.APPLIED, version));
         }
-        final long version = handle.createQuery(/* language=SQL */ """
-                        UPDATE "ASSESSMENT_ORIGIN"
-                           SET "OWNER" = :owner
-                             , "LAST_REASON" = :lastReason
-                             , "DECISION_VERSION" = "DECISION_VERSION" + :versionIncrement
-                         WHERE "ANALYSIS_ID" = :analysisId
-                           AND "OWNER" IN ('INHERITED', 'NEUTRAL')
-                           AND "DECISION_VERSION" = :expectedDecisionVersion
-                        RETURNING "DECISION_VERSION"
-                        """)
-                .bind("analysisId", write.analysisId())
-                .bind("owner", write.owner().name())
-                .bind(
-                        "lastReason",
-                        write.lastReason() == null ? null : write.lastReason().name())
-                .bind("versionIncrement", versionBump ? 1 : 0)
-                .bind("expectedDecisionVersion", write.expectedDecisionVersion())
-                .mapTo(long.class)
-                .findOne()
-                .orElseThrow(() -> new IllegalStateException(
-                        "Worker write lost the origin guard for analysis " + write.analysisId()));
-        replaceContributions(write);
-        return new WorkerWriteResult(WorkerWriteStatus.APPLIED, version);
+        return List.copyOf(results);
+    }
+
+    /// Applies one worker projection. Local and policy rows, and stale versions, are left unchanged.
+    public WorkerWriteResult applyWorkerWrite(final WorkerWrite write) {
+        return applyWorkerWrites(List.of(write)).getFirst();
     }
 
     public @Nullable StoredProjection load(final long analysisId) {
@@ -219,236 +232,6 @@ public final class AssessmentProjectionDao {
                 .one();
     }
 
-    private int updateMachineFields(final WorkerWrite write) {
-        final AssessmentDecision decision = write.decision();
-        return bindDecision(handle.createUpdate(/* language=SQL */ """
-                                UPDATE "ANALYSIS" AS a
-                                   SET "STATE" = :state
-                                     , "JUSTIFICATION" = :justification
-                                     , "RESPONSE" = :response
-                                     , "SUPPRESSED" = :suppressed
-                                     , "SEVERITY" = CAST(:severity AS severity)
-                                     , "CVSSV2VECTOR" = :cvssV2Vector
-                                     , "CVSSV2SCORE" = :cvssV2Score
-                                     , "CVSSV3VECTOR" = :cvssV3Vector
-                                     , "CVSSV3SCORE" = :cvssV3Score
-                                     , "CVSSV4VECTOR" = :cvssV4Vector
-                                     , "CVSSV4SCORE" = :cvssV4Score
-                                     , "OWASPVECTOR" = :owaspVector
-                                     , "OWASPSCORE" = :owaspScore
-                                     , "DETAILS" = :details
-                                     , "VULNERABILITY_POLICY_ID" = :policyId
-                                 WHERE a."ID" = :analysisId
-                                   AND EXISTS (
-                                     SELECT 1
-                                       FROM "ASSESSMENT_ORIGIN" AS o
-                                      WHERE o."ANALYSIS_ID" = a."ID"
-                                        AND o."OWNER" IN ('INHERITED', 'NEUTRAL')
-                                        AND o."DECISION_VERSION" = :expectedDecisionVersion
-                                   )
-                                """), decision)
-                .bind("analysisId", write.analysisId())
-                .bind("details", write.details())
-                .bind("policyId", write.policyId())
-                .bind("expectedDecisionVersion", write.expectedDecisionVersion())
-                .execute();
-    }
-
-    private void replaceContributions(final WorkerWrite write) {
-        final List<SourceContributionWrite> contributions = write.contributions();
-        if (!contributions.isEmpty()) {
-            final var sourceProjects = new UUID[contributions.size()];
-            final var sourceComponents = new UUID[contributions.size()];
-            final var sourceVulnerabilities = new UUID[contributions.size()];
-            final var sourceAnalyses = new long[contributions.size()];
-            final var sourceDetails = new @Nullable String[contributions.size()];
-            for (int i = 0; i < contributions.size(); i++) {
-                final SourceContributionWrite contribution = contributions.get(i);
-                sourceProjects[i] = contribution.contributor().sourceProjectUuid();
-                sourceComponents[i] = contribution.contributor().sourceComponentUuid();
-                sourceVulnerabilities[i] = contribution.contributor().sourceVulnerabilityUuid();
-                sourceAnalyses[i] = contribution.contributor().sourceAnalysisId();
-                sourceDetails[i] = contribution.sourceDetails();
-            }
-            handle.createUpdate(/* language=SQL */ """
-                            INSERT INTO "ASSESSMENT_SOURCE_CONTRIBUTION" (
-                              "TARGET_ANALYSIS_ID"
-                            , "SOURCE_PROJECT_UUID"
-                            , "SOURCE_COMPONENT_UUID"
-                            , "SOURCE_VULNERABILITY_UUID"
-                            , "SOURCE_ANALYSIS_ID"
-                            , "SOURCE_DETAILS"
-                            , "LAST_SYNC_AT"
-                            )
-                            SELECT :analysisId
-                                 , t.source_project
-                                 , t.source_component
-                                 , t.source_vulnerability
-                                 , t.source_analysis
-                                 , t.source_details
-                                 , now()
-                              FROM UNNEST(
-                                     :sourceProjects
-                                   , :sourceComponents
-                                   , :sourceVulnerabilities
-                                   , :sourceAnalyses
-                                   , :sourceDetails
-                                   ) AS t(
-                                     source_project
-                                   , source_component
-                                   , source_vulnerability
-                                   , source_analysis
-                                   , source_details
-                                   )
-                            ON CONFLICT ("TARGET_ANALYSIS_ID", "SOURCE_PROJECT_UUID", "SOURCE_ANALYSIS_ID") DO UPDATE
-                            SET "SOURCE_COMPONENT_UUID" = EXCLUDED."SOURCE_COMPONENT_UUID"
-                              , "SOURCE_VULNERABILITY_UUID" = EXCLUDED."SOURCE_VULNERABILITY_UUID"
-                              , "SOURCE_DETAILS" = EXCLUDED."SOURCE_DETAILS"
-                              , "LAST_SYNC_AT" = now()
-                            """)
-                    .bind("analysisId", write.analysisId())
-                    .bind("sourceProjects", sourceProjects)
-                    .bind("sourceComponents", sourceComponents)
-                    .bind("sourceVulnerabilities", sourceVulnerabilities)
-                    .bind("sourceAnalyses", sourceAnalyses)
-                    .bind("sourceDetails", sourceDetails)
-                    .execute();
-        }
-
-        if (contributions.isEmpty()) {
-            handle.createUpdate(/* language=SQL */ """
-                            DELETE FROM "ASSESSMENT_SOURCE_CONTRIBUTION"
-                             WHERE "TARGET_ANALYSIS_ID" = :analysisId
-                            """)
-                    .bind("analysisId", write.analysisId())
-                    .execute();
-            return;
-        }
-
-        final var keptProjects = new UUID[contributions.size()];
-        final var keptAnalyses = new long[contributions.size()];
-        for (int i = 0; i < contributions.size(); i++) {
-            keptProjects[i] = contributions.get(i).contributor().sourceProjectUuid();
-            keptAnalyses[i] = contributions.get(i).contributor().sourceAnalysisId();
-        }
-        handle.createUpdate(/* language=SQL */ """
-                        DELETE FROM "ASSESSMENT_SOURCE_CONTRIBUTION" AS c
-                         WHERE c."TARGET_ANALYSIS_ID" = :analysisId
-                           AND NOT EXISTS (
-                             SELECT 1
-                               FROM UNNEST(:keptProjects, :keptAnalyses) AS t(source_project, source_analysis)
-                              WHERE t.source_project = c."SOURCE_PROJECT_UUID"
-                                AND t.source_analysis = c."SOURCE_ANALYSIS_ID"
-                           )
-                        """)
-                .bind("analysisId", write.analysisId())
-                .bind("keptProjects", keptProjects)
-                .bind("keptAnalyses", keptAnalyses)
-                .execute();
-
-        final var commentInserts = new ArrayList<CommentInsert>();
-        for (final SourceContributionWrite contribution : contributions) {
-            for (final SourceCommentWrite comment : contribution.comments()) {
-                commentInserts.add(new CommentInsert(
-                        contribution.contributor().sourceProjectUuid(),
-                        contribution.contributor().sourceAnalysisId(),
-                        comment));
-            }
-        }
-        if (commentInserts.isEmpty()) {
-            handle.createUpdate(/* language=SQL */ """
-                            DELETE FROM "ASSESSMENT_SOURCE_COMMENT"
-                             WHERE "TARGET_ANALYSIS_ID" = :analysisId
-                            """)
-                    .bind("analysisId", write.analysisId())
-                    .execute();
-            return;
-        }
-
-        final var commentProjects = new UUID[commentInserts.size()];
-        final var commentAnalyses = new long[commentInserts.size()];
-        final var commentIds = new long[commentInserts.size()];
-        final var commentTexts = new String[commentInserts.size()];
-        final var commenters = new @Nullable String[commentInserts.size()];
-        final var commentTimestamps = new Instant[commentInserts.size()];
-        for (int i = 0; i < commentInserts.size(); i++) {
-            final CommentInsert commentInsert = commentInserts.get(i);
-            commentProjects[i] = commentInsert.sourceProjectUuid();
-            commentAnalyses[i] = commentInsert.sourceAnalysisId();
-            commentIds[i] = commentInsert.comment().sourceCommentId();
-            commentTexts[i] = commentInsert.comment().comment();
-            commenters[i] = commentInsert.comment().commenter();
-            commentTimestamps[i] = commentInsert.comment().originalTimestamp();
-        }
-        handle.createUpdate(/* language=SQL */ """
-                        INSERT INTO "ASSESSMENT_SOURCE_COMMENT" (
-                          "TARGET_ANALYSIS_ID"
-                        , "SOURCE_PROJECT_UUID"
-                        , "SOURCE_ANALYSIS_ID"
-                        , "SOURCE_COMMENT_ID"
-                        , "COMMENT"
-                        , "COMMENTER"
-                        , "ORIGINAL_TIMESTAMP"
-                        )
-                        SELECT :analysisId
-                             , t.source_project
-                             , t.source_analysis
-                             , t.source_comment_id
-                             , t.comment
-                             , t.commenter
-                             , t.original_timestamp
-                          FROM UNNEST(
-                                 :sourceProjects
-                               , :sourceAnalyses
-                               , :sourceCommentIds
-                               , :comments
-                               , :commenters
-                               , :originalTimestamps
-                               ) AS t(
-                                 source_project
-                               , source_analysis
-                               , source_comment_id
-                               , comment
-                               , commenter
-                               , original_timestamp
-                               )
-                        ON CONFLICT (
-                          "TARGET_ANALYSIS_ID"
-                        , "SOURCE_PROJECT_UUID"
-                        , "SOURCE_ANALYSIS_ID"
-                        , "SOURCE_COMMENT_ID"
-                        ) DO UPDATE
-                        SET "COMMENT" = EXCLUDED."COMMENT"
-                          , "COMMENTER" = EXCLUDED."COMMENTER"
-                        """)
-                .registerArrayType(Instant.class, "timestamptz")
-                .bind("analysisId", write.analysisId())
-                .bind("sourceProjects", commentProjects)
-                .bind("sourceAnalyses", commentAnalyses)
-                .bind("sourceCommentIds", commentIds)
-                .bind("comments", commentTexts)
-                .bind("commenters", commenters)
-                .bind("originalTimestamps", commentTimestamps)
-                .execute();
-        handle.createUpdate(/* language=SQL */ """
-                        DELETE FROM "ASSESSMENT_SOURCE_COMMENT" AS c
-                         WHERE c."TARGET_ANALYSIS_ID" = :analysisId
-                           AND NOT EXISTS (
-                             SELECT 1
-                               FROM UNNEST(:sourceProjects, :sourceAnalyses, :sourceCommentIds)
-                                 AS t(source_project, source_analysis, source_comment_id)
-                              WHERE t.source_project = c."SOURCE_PROJECT_UUID"
-                                AND t.source_analysis = c."SOURCE_ANALYSIS_ID"
-                                AND t.source_comment_id = c."SOURCE_COMMENT_ID"
-                           )
-                        """)
-                .bind("analysisId", write.analysisId())
-                .bind("sourceProjects", commentProjects)
-                .bind("sourceAnalyses", commentAnalyses)
-                .bind("sourceCommentIds", commentIds)
-                .execute();
-    }
-
     private List<StoredContribution> loadContributions(final long analysisId) {
         final List<StoredContribution> contributions = handle.createQuery(/* language=SQL */ """
                         SELECT "SOURCE_PROJECT_UUID"
@@ -514,11 +297,13 @@ public final class AssessmentProjectionDao {
                 .toList();
     }
 
-    /// Locks the analysis row. The origin is not locked: every origin writer holds the project lock, as the
+    /// Locks the analysis rows. The origins are not locked: every origin writer holds the project lock, as the
     /// worker does, and the origin update still checks the version it read.
-    private @Nullable LockedAnalysis lockAnalysis(final long analysisId) {
-        return handle.createQuery(/* language=SQL */ """
-                        SELECT a."STATE"
+    private Map<Long, LockedAnalysis> lockAnalyses(final Collection<Long> analysisIds) {
+        final var locked = new LinkedHashMap<Long, LockedAnalysis>();
+        handle.createQuery(/* language=SQL */ """
+                        SELECT a."ID"
+                             , a."STATE"
                              , a."JUSTIFICATION"
                              , a."RESPONSE"
                              , a."SUPPRESSED"
@@ -538,13 +323,356 @@ public final class AssessmentProjectionDao {
                           FROM "ANALYSIS" AS a
                           LEFT JOIN "ASSESSMENT_ORIGIN" AS o
                             ON o."ANALYSIS_ID" = a."ID"
-                         WHERE a."ID" = :analysisId
+                         WHERE a."ID" = ANY(:analysisIds)
+                         ORDER BY a."ID"
                            FOR UPDATE OF a
                         """)
-                .bind("analysisId", analysisId)
-                .map((rs, ctx) -> new LockedAnalysis(readOrigin(rs), readDecision(rs), rs.getString("DETAILS")))
-                .findOne()
-                .orElse(null);
+                .bind(
+                        "analysisIds",
+                        analysisIds.stream().mapToLong(Long::longValue).toArray())
+                .map((rs, ctx) -> Map.entry(
+                        rs.getLong("ID"),
+                        new LockedAnalysis(readOrigin(rs), readDecision(rs), rs.getString("DETAILS"))))
+                .forEach(entry -> locked.put(entry.getKey(), entry.getValue()));
+        return locked;
+    }
+
+    private void updateMachineFields(final List<AcceptedWrite> accepted) {
+        final int n = accepted.size();
+        final var ids = new long[n];
+        final var states = new String[n];
+        final var justifications = new String[n];
+        final var responses = new String[n];
+        final var suppressed = new boolean[n];
+        final var severities = new @Nullable String[n];
+        final var cvssV2Vectors = new @Nullable String[n];
+        final var cvssV2Scores = new @Nullable BigDecimal[n];
+        final var cvssV3Vectors = new @Nullable String[n];
+        final var cvssV3Scores = new @Nullable BigDecimal[n];
+        final var cvssV4Vectors = new @Nullable String[n];
+        final var cvssV4Scores = new @Nullable BigDecimal[n];
+        final var owaspVectors = new @Nullable String[n];
+        final var owaspScores = new @Nullable BigDecimal[n];
+        final var details = new @Nullable String[n];
+        final var policyIds = new @Nullable Long[n];
+        for (int i = 0; i < n; i++) {
+            final WorkerWrite write = accepted.get(i).write();
+            final AssessmentDecision decision = write.decision();
+            ids[i] = write.analysisId();
+            states[i] = decision.state().name();
+            justifications[i] = decision.justification().name();
+            responses[i] = decision.response().name();
+            suppressed[i] = decision.suppressed();
+            severities[i] =
+                    decision.severity() == null ? null : decision.severity().name();
+            cvssV2Vectors[i] = decision.cvssV2Vector();
+            cvssV2Scores[i] = decision.cvssV2Score();
+            cvssV3Vectors[i] = decision.cvssV3Vector();
+            cvssV3Scores[i] = decision.cvssV3Score();
+            cvssV4Vectors[i] = decision.cvssV4Vector();
+            cvssV4Scores[i] = decision.cvssV4Score();
+            owaspVectors[i] = decision.owaspVector();
+            owaspScores[i] = decision.owaspScore();
+            details[i] = write.details();
+            policyIds[i] = write.policyId();
+        }
+        handle.createUpdate(/* language=SQL */ """
+                        UPDATE "ANALYSIS" AS a
+                           SET "STATE" = t.state
+                             , "JUSTIFICATION" = t.justification
+                             , "RESPONSE" = t.response
+                             , "SUPPRESSED" = t.suppressed
+                             , "SEVERITY" = t.severity
+                             , "CVSSV2VECTOR" = t.cvss_v2_vector
+                             , "CVSSV2SCORE" = t.cvss_v2_score
+                             , "CVSSV3VECTOR" = t.cvss_v3_vector
+                             , "CVSSV3SCORE" = t.cvss_v3_score
+                             , "CVSSV4VECTOR" = t.cvss_v4_vector
+                             , "CVSSV4SCORE" = t.cvss_v4_score
+                             , "OWASPVECTOR" = t.owasp_vector
+                             , "OWASPSCORE" = t.owasp_score
+                             , "DETAILS" = t.details
+                             , "VULNERABILITY_POLICY_ID" = t.policy_id
+                          FROM UNNEST(
+                                 :ids
+                               , :states
+                               , :justifications
+                               , :responses
+                               , :suppressed
+                               , CAST(:severities AS severity[])
+                               , :cvssV2Vectors
+                               , :cvssV2Scores
+                               , :cvssV3Vectors
+                               , :cvssV3Scores
+                               , :cvssV4Vectors
+                               , :cvssV4Scores
+                               , :owaspVectors
+                               , :owaspScores
+                               , :details
+                               , :policyIds
+                               ) AS t(
+                                 id
+                               , state
+                               , justification
+                               , response
+                               , suppressed
+                               , severity
+                               , cvss_v2_vector
+                               , cvss_v2_score
+                               , cvss_v3_vector
+                               , cvss_v3_score
+                               , cvss_v4_vector
+                               , cvss_v4_score
+                               , owasp_vector
+                               , owasp_score
+                               , details
+                               , policy_id
+                               )
+                         WHERE a."ID" = t.id
+                        """)
+                .registerArrayType(BigDecimal.class, "numeric")
+                .bind("ids", ids)
+                .bind("states", states)
+                .bind("justifications", justifications)
+                .bind("responses", responses)
+                .bind("suppressed", suppressed)
+                .bind("severities", severities)
+                .bind("cvssV2Vectors", cvssV2Vectors)
+                .bind("cvssV2Scores", cvssV2Scores)
+                .bind("cvssV3Vectors", cvssV3Vectors)
+                .bind("cvssV3Scores", cvssV3Scores)
+                .bind("cvssV4Vectors", cvssV4Vectors)
+                .bind("cvssV4Scores", cvssV4Scores)
+                .bind("owaspVectors", owaspVectors)
+                .bind("owaspScores", owaspScores)
+                .bind("details", details)
+                .bind("policyIds", policyIds)
+                .execute();
+    }
+
+    /// Returns the new version per analysis. A row missing from the result lost the origin guard.
+    private Map<Long, Long> updateOrigins(final List<AcceptedWrite> accepted) {
+        final int n = accepted.size();
+        final var ids = new long[n];
+        final var owners = new String[n];
+        final var reasons = new @Nullable String[n];
+        final var increments = new int[n];
+        final var expectedVersions = new long[n];
+        for (int i = 0; i < n; i++) {
+            final AcceptedWrite accept = accepted.get(i);
+            final WorkerWrite write = accept.write();
+            ids[i] = write.analysisId();
+            owners[i] = write.owner().name();
+            reasons[i] = write.lastReason() == null ? null : write.lastReason().name();
+            increments[i] = accept.versionBump() ? 1 : 0;
+            expectedVersions[i] = write.expectedDecisionVersion();
+        }
+        final var versions = new LinkedHashMap<Long, Long>();
+        handle.createQuery(/* language=SQL */ """
+                        UPDATE "ASSESSMENT_ORIGIN" AS o
+                           SET "OWNER" = t.owner
+                             , "LAST_REASON" = t.reason
+                             , "DECISION_VERSION" = o."DECISION_VERSION" + t.increment
+                          FROM UNNEST(:ids, :owners, :reasons, :increments, :expectedVersions)
+                            AS t(id, owner, reason, increment, expected_version)
+                         WHERE o."ANALYSIS_ID" = t.id
+                           AND o."OWNER" IN ('INHERITED', 'NEUTRAL')
+                           AND o."DECISION_VERSION" = t.expected_version
+                        RETURNING o."ANALYSIS_ID", o."DECISION_VERSION"
+                        """)
+                .bind("ids", ids)
+                .bind("owners", owners)
+                .bind("reasons", reasons)
+                .bind("increments", increments)
+                .bind("expectedVersions", expectedVersions)
+                .map((rs, ctx) -> Map.entry(rs.getLong("ANALYSIS_ID"), rs.getLong("DECISION_VERSION")))
+                .forEach(entry -> versions.put(entry.getKey(), entry.getValue()));
+        return versions;
+    }
+
+    /// Upserts the desired trails of every accepted write, then removes contributions and comments that are no
+    /// longer desired. A write with no contributions clears its trail.
+    private void replaceContributions(final List<AcceptedWrite> accepted) {
+        final long[] targetIds =
+                accepted.stream().mapToLong(write -> write.write().analysisId()).toArray();
+        final var contributionTargets = new ArrayList<Long>();
+        final var sourceProjects = new ArrayList<UUID>();
+        final var sourceComponents = new ArrayList<UUID>();
+        final var sourceVulnerabilities = new ArrayList<UUID>();
+        final var sourceAnalyses = new ArrayList<Long>();
+        final var sourceDetails = new ArrayList<@Nullable String>();
+        final var commentTargets = new ArrayList<Long>();
+        final var commentProjects = new ArrayList<UUID>();
+        final var commentAnalyses = new ArrayList<Long>();
+        final var commentIds = new ArrayList<Long>();
+        final var commentTexts = new ArrayList<String>();
+        final var commenters = new ArrayList<@Nullable String>();
+        final var commentTimestamps = new ArrayList<Instant>();
+        for (final AcceptedWrite accept : accepted) {
+            final long targetId = accept.write().analysisId();
+            for (final SourceContributionWrite contribution : accept.write().contributions()) {
+                final Contributor contributor = contribution.contributor();
+                contributionTargets.add(targetId);
+                sourceProjects.add(contributor.sourceProjectUuid());
+                sourceComponents.add(contributor.sourceComponentUuid());
+                sourceVulnerabilities.add(contributor.sourceVulnerabilityUuid());
+                sourceAnalyses.add(contributor.sourceAnalysisId());
+                sourceDetails.add(contribution.sourceDetails());
+                for (final SourceCommentWrite comment : contribution.comments()) {
+                    commentTargets.add(targetId);
+                    commentProjects.add(contributor.sourceProjectUuid());
+                    commentAnalyses.add(contributor.sourceAnalysisId());
+                    commentIds.add(comment.sourceCommentId());
+                    commentTexts.add(comment.comment());
+                    commenters.add(comment.commenter());
+                    commentTimestamps.add(comment.originalTimestamp());
+                }
+            }
+        }
+
+        if (!contributionTargets.isEmpty()) {
+            handle.createUpdate(/* language=SQL */ """
+                            INSERT INTO "ASSESSMENT_SOURCE_CONTRIBUTION" (
+                              "TARGET_ANALYSIS_ID"
+                            , "SOURCE_PROJECT_UUID"
+                            , "SOURCE_COMPONENT_UUID"
+                            , "SOURCE_VULNERABILITY_UUID"
+                            , "SOURCE_ANALYSIS_ID"
+                            , "SOURCE_DETAILS"
+                            , "LAST_SYNC_AT"
+                            )
+                            SELECT t.target_id
+                                 , t.source_project
+                                 , t.source_component
+                                 , t.source_vulnerability
+                                 , t.source_analysis
+                                 , t.source_details
+                                 , now()
+                              FROM UNNEST(
+                                     :targetIds
+                                   , :sourceProjects
+                                   , :sourceComponents
+                                   , :sourceVulnerabilities
+                                   , :sourceAnalyses
+                                   , :sourceDetails
+                                   ) AS t(
+                                     target_id
+                                   , source_project
+                                   , source_component
+                                   , source_vulnerability
+                                   , source_analysis
+                                   , source_details
+                                   )
+                            ON CONFLICT ("TARGET_ANALYSIS_ID", "SOURCE_PROJECT_UUID", "SOURCE_ANALYSIS_ID") DO UPDATE
+                            SET "SOURCE_COMPONENT_UUID" = EXCLUDED."SOURCE_COMPONENT_UUID"
+                              , "SOURCE_VULNERABILITY_UUID" = EXCLUDED."SOURCE_VULNERABILITY_UUID"
+                              , "SOURCE_DETAILS" = EXCLUDED."SOURCE_DETAILS"
+                              , "LAST_SYNC_AT" = now()
+                            """)
+                    .bind("targetIds", toLongArray(contributionTargets))
+                    .bind("sourceProjects", sourceProjects.toArray(UUID[]::new))
+                    .bind("sourceComponents", sourceComponents.toArray(UUID[]::new))
+                    .bind("sourceVulnerabilities", sourceVulnerabilities.toArray(UUID[]::new))
+                    .bind("sourceAnalyses", toLongArray(sourceAnalyses))
+                    .bind("sourceDetails", sourceDetails.toArray(String[]::new))
+                    .execute();
+        }
+        // Removed contributions take their comments with them through the foreign key.
+        handle.createUpdate(/* language=SQL */ """
+                        DELETE FROM "ASSESSMENT_SOURCE_CONTRIBUTION" AS c
+                         WHERE c."TARGET_ANALYSIS_ID" = ANY(:writtenIds)
+                           AND NOT EXISTS (
+                             SELECT 1
+                               FROM UNNEST(:targetIds, :sourceProjects, :sourceAnalyses)
+                                 AS t(target_id, source_project, source_analysis)
+                              WHERE t.target_id = c."TARGET_ANALYSIS_ID"
+                                AND t.source_project = c."SOURCE_PROJECT_UUID"
+                                AND t.source_analysis = c."SOURCE_ANALYSIS_ID"
+                           )
+                        """)
+                .bind("writtenIds", targetIds)
+                .bind("targetIds", toLongArray(contributionTargets))
+                .bind("sourceProjects", sourceProjects.toArray(UUID[]::new))
+                .bind("sourceAnalyses", toLongArray(sourceAnalyses))
+                .execute();
+
+        if (!commentTargets.isEmpty()) {
+            handle.createUpdate(/* language=SQL */ """
+                            INSERT INTO "ASSESSMENT_SOURCE_COMMENT" (
+                              "TARGET_ANALYSIS_ID"
+                            , "SOURCE_PROJECT_UUID"
+                            , "SOURCE_ANALYSIS_ID"
+                            , "SOURCE_COMMENT_ID"
+                            , "COMMENT"
+                            , "COMMENTER"
+                            , "ORIGINAL_TIMESTAMP"
+                            )
+                            SELECT t.target_id
+                                 , t.source_project
+                                 , t.source_analysis
+                                 , t.source_comment_id
+                                 , t.comment
+                                 , t.commenter
+                                 , t.original_timestamp
+                              FROM UNNEST(
+                                     :targetIds
+                                   , :sourceProjects
+                                   , :sourceAnalyses
+                                   , :sourceCommentIds
+                                   , :comments
+                                   , :commenters
+                                   , :originalTimestamps
+                                   ) AS t(
+                                     target_id
+                                   , source_project
+                                   , source_analysis
+                                   , source_comment_id
+                                   , comment
+                                   , commenter
+                                   , original_timestamp
+                                   )
+                            ON CONFLICT (
+                              "TARGET_ANALYSIS_ID"
+                            , "SOURCE_PROJECT_UUID"
+                            , "SOURCE_ANALYSIS_ID"
+                            , "SOURCE_COMMENT_ID"
+                            ) DO UPDATE
+                            SET "COMMENT" = EXCLUDED."COMMENT"
+                              , "COMMENTER" = EXCLUDED."COMMENTER"
+                            """)
+                    .registerArrayType(Instant.class, "timestamptz")
+                    .bind("targetIds", toLongArray(commentTargets))
+                    .bind("sourceProjects", commentProjects.toArray(UUID[]::new))
+                    .bind("sourceAnalyses", toLongArray(commentAnalyses))
+                    .bind("sourceCommentIds", toLongArray(commentIds))
+                    .bind("comments", commentTexts.toArray(String[]::new))
+                    .bind("commenters", commenters.toArray(String[]::new))
+                    .bind("originalTimestamps", commentTimestamps.toArray(Instant[]::new))
+                    .execute();
+        }
+        handle.createUpdate(/* language=SQL */ """
+                        DELETE FROM "ASSESSMENT_SOURCE_COMMENT" AS c
+                         WHERE c."TARGET_ANALYSIS_ID" = ANY(:writtenIds)
+                           AND NOT EXISTS (
+                             SELECT 1
+                               FROM UNNEST(:targetIds, :sourceProjects, :sourceAnalyses, :sourceCommentIds)
+                                 AS t(target_id, source_project, source_analysis, source_comment_id)
+                              WHERE t.target_id = c."TARGET_ANALYSIS_ID"
+                                AND t.source_project = c."SOURCE_PROJECT_UUID"
+                                AND t.source_analysis = c."SOURCE_ANALYSIS_ID"
+                                AND t.source_comment_id = c."SOURCE_COMMENT_ID"
+                           )
+                        """)
+                .bind("writtenIds", targetIds)
+                .bind("targetIds", toLongArray(commentTargets))
+                .bind("sourceProjects", commentProjects.toArray(UUID[]::new))
+                .bind("sourceAnalyses", toLongArray(commentAnalyses))
+                .bind("sourceCommentIds", toLongArray(commentIds))
+                .execute();
+    }
+
+    private static long[] toLongArray(final List<Long> values) {
+        return values.stream().mapToLong(Long::longValue).toArray();
     }
 
     private static <S extends SqlStatement<S>> S bindDecision(final S statement, final AssessmentDecision decision) {
@@ -722,5 +850,5 @@ public final class AssessmentProjectionDao {
 
     private record ContributionKey(UUID sourceProjectUuid, long sourceAnalysisId) {}
 
-    private record CommentInsert(UUID sourceProjectUuid, long sourceAnalysisId, SourceCommentWrite comment) {}
+    private record AcceptedWrite(int index, WorkerWrite write, boolean versionBump) {}
 }
