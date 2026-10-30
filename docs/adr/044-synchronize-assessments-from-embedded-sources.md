@@ -187,7 +187,7 @@ When more than one eligible source matches, the target inherits only when the wh
 
 A source analysis takes part in the agreement only when it is authored and holds a decision. Authored means a local decision, a vulnerability policy, or a row from before this feature. A row whose structured decision is neutral does not take part, so a comment alone cannot block agreement. A suppressed row in the `NOT_SET` state holds a decision and takes part. An `IN_TRIAGE` row takes part, because it says that the source has not finished its review.
 
-An explicit local decision on the target protects the whole assessment. Ownership is stored for each analysis as local, policy, inherited, or neutral. It is never derived from the values. Existing target analyses are recorded as local, or as policy when a vulnerability policy wrote them. This includes a row whose state is `NOT_SET`. A comment that does not change the decision keeps the current owner. In the diagram below, neutral means the target has no local decision.
+An explicit local decision on the target protects the whole assessment. Ownership is stored for each analysis as local, policy, inherited, or neutral. It is never derived from the values. Existing target analyses are recorded as local, or as policy when a vulnerability policy wrote them. This includes a row whose state is `NOT_SET`. Changing the written explanation on the target is also an explicit local decision, even though explanations do not take part in the agreement between sources. A comment that does not change the decision keeps the current owner. In the diagram below, neutral means the target has no local decision.
 
 Release happens one finding at a time. Version one has no bulk release. Before an operator turns the feature on, they should count the protected rows that hold only comments in the products concerned. A bulk release can follow if that count is large.
 
@@ -203,10 +203,13 @@ stateDiagram-v2
     Neutral --> Policy: local policy applies
     Inherited --> Policy: local policy applies
     Local --> Policy: local policy changes the decision
+    Policy --> Local: explicit target decision
     Policy --> Neutral: policy resets or unassigns
 ```
 
 Source explanations, comments, authors, and identifying provenance require current access to the source and current access to the target.
+
+When the target takes local ownership without changing the inherited decision, the copied source explanations and comments stay with the row as provenance. Changing the decision, or releasing it, removes them, because the source no longer explains the stored decision.
 
 A local vulnerability policy wins over inheritance. It does not change the existing precedence between manual decisions and policies. For a new finding, the existing analysis transaction first applies local policies, then eligible inheritance, and then builds the notification subjects. The first alert therefore sees an inherited suppression. Later changes refresh policy results and metrics through the existing asynchronous model.
 
@@ -240,6 +243,6 @@ The v1 analysis endpoint changes behavior on inherited rows only. Clients that d
 
 Local ownership and source confidentiality add work on the read path. The API must hide source text and provenance when the caller cannot access the source. It must leave a protected local row unchanged.
 
-Rollback removes copies owned by the synchronization worker. The new tables stay while those copies exist. Dropping the tables is not the rollback in that situation.
+Rollback removes copies owned by the synchronization worker, including source text kept as provenance on local rows. The new tables stay while those copies exist. Dropping the tables is not the rollback in that situation.
 
 Operators start with the feature off. Turning it on is a separate operational choice.
