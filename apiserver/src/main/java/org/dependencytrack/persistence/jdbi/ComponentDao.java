@@ -44,6 +44,7 @@ import org.jdbi.v3.sqlobject.customizer.Define;
 import org.jdbi.v3.sqlobject.customizer.DefineNamedBindings;
 import org.jdbi.v3.sqlobject.statement.SqlQuery;
 import org.jdbi.v3.sqlobject.statement.SqlUpdate;
+import org.jdbi.v3.sqlobject.transaction.Transaction;
 import org.jspecify.annotations.Nullable;
 
 import java.sql.ResultSet;
@@ -70,11 +71,8 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
     int deleteComponentRow(@Bind final UUID componentUuid);
 
     /// Deletes a component and records one project invalidation for its owner.
+    @Transaction
     default int deleteComponent(final UUID componentUuid) {
-        if (!getHandle().isInTransaction()) {
-            return getHandle()
-                    .inTransaction(handle -> handle.attach(ComponentDao.class).deleteComponent(componentUuid));
-        }
         final UUID projectUuid = getHandle()
                 .createQuery(/* language=SQL */ """
                         SELECT project."UUID"

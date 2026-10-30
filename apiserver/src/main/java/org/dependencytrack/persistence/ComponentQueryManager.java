@@ -43,17 +43,18 @@ import org.dependencytrack.pkgmetadata.PackageMetadata;
 import org.dependencytrack.pkgmetadata.PackageMetadataDao;
 import org.dependencytrack.resources.v1.vo.DependencyGraphResponse;
 import org.dependencytrack.util.PurlUtil;
+import org.jspecify.annotations.Nullable;
 
 import javax.jdo.PersistenceManager;
 import javax.jdo.Query;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -435,22 +436,10 @@ final class ComponentQueryManager extends QueryManager {
             return callInTransaction(() -> createComponent(component, commitIndex));
         }
         final Project project = component.getProject();
-        if (project != null && project.getUuid() != null) {
-            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
-        }
+        lockProjectOf(project);
         final Component result = persist(component);
         seedPackageMetadataResolution(result);
-        if (project != null && project.getUuid() != null) {
-            final String projectName = project.getName();
-            final String projectVersion = project.getVersion();
-            useJdbiHandle(
-                    this,
-                    handle -> AssessmentStructureCapture.rebuildAndRecord(
-                            handle,
-                            project.getUuid(),
-                            AssessmentChange.Reason.COMPONENT_CHANGED,
-                            AssessmentChange.LookupKey.listOf(projectName, projectVersion)));
-        }
+        recordComponentChange(project);
         return result;
     }
 
@@ -470,53 +459,62 @@ final class ComponentQueryManager extends QueryManager {
             return null;
         }
         final Project project = component.getProject();
-        if (project != null && project.getUuid() != null) {
-            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
-        }
-        final String structureBefore = structuralSignature(component);
+        lockProjectOf(project);
+        final List<Object> structureBefore = structure(component);
         update.accept(component);
         final Component result = persist(component);
         seedPackageMetadataResolution(result);
-        if (project != null && project.getUuid() != null && !structureBefore.equals(structuralSignature(result))) {
-            useJdbiHandle(
-                    this,
-                    handle -> AssessmentStructureCapture.rebuildAndRecord(
-                            handle,
-                            project.getUuid(),
-                            AssessmentChange.Reason.COMPONENT_CHANGED,
-                            AssessmentChange.LookupKey.listOf(project.getName(), project.getVersion())));
+        if (!structureBefore.equals(structure(result))) {
+            recordComponentChange(project);
         }
         return result;
     }
 
-    private static String structuralSignature(final Component component) {
+    private void lockProjectOf(final @Nullable Project project) {
+        if (project != null && project.getUuid() != null) {
+            useJdbiHandle(this, handle -> AssessmentMutationGuard.lockProject(handle, project.getUuid()));
+        }
+    }
+
+    private void recordComponentChange(final @Nullable Project project) {
+        if (project == null || project.getUuid() == null) {
+            return;
+        }
+        final UUID projectUuid = project.getUuid();
+        final List<AssessmentChange.LookupKey> keys =
+                AssessmentChange.LookupKey.listOf(project.getName(), project.getVersion());
+        useJdbiHandle(
+                this,
+                handle -> AssessmentStructureCapture.rebuildAndRecord(
+                        handle, projectUuid, AssessmentChange.Reason.COMPONENT_CHANGED, keys));
+    }
+
+    /// Fields that decide marker membership and matching. Compared before and after an update.
+    private static List<Object> structure(final Component component) {
         final Project project = component.getProject();
-        return String.join(
-                "\0",
-                project == null || project.getUuid() == null
-                        ? ""
-                        : project.getUuid().toString(),
-                Objects.toString(component.getName(), ""),
-                Objects.toString(component.getVersion(), ""),
-                Objects.toString(component.getGroup(), ""),
-                Objects.toString(component.getClassifier(), ""),
-                component.getPurl() == null ? "" : component.getPurl().canonicalize(),
-                Objects.toString(component.getCpe(), ""),
-                Objects.toString(component.getDirectDependencies(), ""),
-                Objects.toString(component.getMd5(), ""),
-                Objects.toString(component.getSha1(), ""),
-                Objects.toString(component.getSha256(), ""),
-                Objects.toString(component.getSha384(), ""),
-                Objects.toString(component.getSha512(), ""),
-                Objects.toString(component.getSha3_256(), ""),
-                Objects.toString(component.getSha3_384(), ""),
-                Objects.toString(component.getSha3_512(), ""),
-                Objects.toString(component.getBlake2b_256(), ""),
-                Objects.toString(component.getBlake2b_384(), ""),
-                Objects.toString(component.getBlake2b_512(), ""),
-                Objects.toString(component.getBlake3(), ""),
-                Objects.toString(component.getStreebog_256(), ""),
-                Objects.toString(component.getStreebog_512(), ""));
+        return Arrays.asList(
+                project == null ? null : project.getUuid(),
+                component.getName(),
+                component.getVersion(),
+                component.getGroup(),
+                component.getClassifier(),
+                component.getPurl() == null ? null : component.getPurl().canonicalize(),
+                component.getCpe(),
+                component.getDirectDependencies(),
+                component.getMd5(),
+                component.getSha1(),
+                component.getSha256(),
+                component.getSha384(),
+                component.getSha512(),
+                component.getSha3_256(),
+                component.getSha3_384(),
+                component.getSha3_512(),
+                component.getBlake2b_256(),
+                component.getBlake2b_384(),
+                component.getBlake2b_512(),
+                component.getBlake3(),
+                component.getStreebog_256(),
+                component.getStreebog_512());
     }
 
     /// @since 5.1.0

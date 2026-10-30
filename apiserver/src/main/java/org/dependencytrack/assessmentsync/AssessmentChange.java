@@ -25,7 +25,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-/// Finding or project invalidation. Scope-key derivation is pure and does not write SQL.
+/// Finding or project invalidation.
 public record AssessmentChange(
         Scope scope,
         UUID projectUuid,
@@ -52,6 +52,33 @@ public record AssessmentChange(
                 }
             }
         }
+    }
+
+    /// A change to a whole project, keyed by the project's name and version when both are known.
+    public static AssessmentChange project(
+            final UUID projectUuid,
+            final Reason reason,
+            final @Nullable String projectName,
+            final @Nullable String projectVersion) {
+        return new AssessmentChange(
+                Scope.PROJECT, projectUuid, null, null, reason, LookupKey.listOf(projectName, projectVersion));
+    }
+
+    /// A change to one finding, keyed by its project's name and version when both are known.
+    public static AssessmentChange finding(
+            final UUID projectUuid,
+            final UUID componentUuid,
+            final UUID vulnerabilityUuid,
+            final Reason reason,
+            final @Nullable String projectName,
+            final @Nullable String projectVersion) {
+        return new AssessmentChange(
+                Scope.FINDING,
+                projectUuid,
+                componentUuid,
+                vulnerabilityUuid,
+                reason,
+                LookupKey.listOf(projectName, projectVersion));
     }
 
     /// {@code project:<uuid>} or {@code finding:<project>:<component>:<vulnerability>}.

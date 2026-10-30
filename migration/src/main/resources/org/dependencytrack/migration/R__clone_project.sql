@@ -439,6 +439,16 @@ BEGIN
             FROM source_analysis
            INNER JOIN target_analysis_ranked
               ON target_analysis_ranked.rn = source_analysis.rn
+        ),
+        -- A clone is a new decision line, so its owner carries over at version 0. Rows without an
+        -- origin stay unlabeled and are labeled by the maintenance backfill, as on the source.
+        target_origin AS (
+          INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER")
+          SELECT analysis_mapping.target_id
+               , origin."OWNER"
+            FROM analysis_mapping
+           INNER JOIN "ASSESSMENT_ORIGIN" AS origin
+              ON origin."ANALYSIS_ID" = analysis_mapping.source_id
         )
         INSERT INTO "ANALYSISCOMMENT" ("ANALYSIS_ID", "COMMENT", "COMMENTER", "TIMESTAMP")
         SELECT analysis_mapping.target_id
