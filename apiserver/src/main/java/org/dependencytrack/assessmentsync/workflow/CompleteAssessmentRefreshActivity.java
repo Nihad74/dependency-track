@@ -22,7 +22,7 @@ import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
-import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
+import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.dependencytrack.proto.internal.workflow.v1.RefreshSynchronizedAssessmentsArg;
 import org.jspecify.annotations.Nullable;
 
@@ -41,25 +41,11 @@ public final class CompleteAssessmentRefreshActivity implements Activity<Refresh
             final ActivityContext ctx, final @Nullable RefreshSynchronizedAssessmentsArg argument) {
         final RefreshSynchronizedAssessmentsArg arg = AssessmentSyncArguments.require(argument);
         final UUID targetUuid = AssessmentSyncArguments.projectUuid(arg.getProjectUuid());
-        final long capturedRefresh = arg.getRefreshRevision();
-        if (capturedRefresh <= 0) {
-            throw new TerminalApplicationFailureException("refresh_revision must be positive");
-        }
+        final long capturedRefresh = AssessmentSyncArguments.positive("refresh_revision", arg.getRefreshRevision());
         useJdbiTransaction(handle -> {
-            final boolean projectExists = handle.createQuery(/* language=SQL */ """
-                            SELECT 1
-                              FROM "PROJECT"
-                             WHERE "UUID" = :targetUuid
-                            """)
-                    .bind("targetUuid", targetUuid)
-                    .mapTo(int.class)
-                    .findOne()
-                    .isPresent();
             final var workDao = new AssessmentSyncWorkDao(handle);
-            if (workDao.find(targetUuid) == null) {
-                if (projectExists) {
-                    throw new IllegalStateException("No assessment sync work for " + targetUuid);
-                }
+            // A deleted target's row may already be gone; that refresh has nothing left to acknowledge.
+            if (handle.attach(ProjectDao.class).getProjectId(targetUuid) == null && workDao.find(targetUuid) == null) {
                 return;
             }
             workDao.acknowledgeRefresh(targetUuid, capturedRefresh);

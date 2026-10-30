@@ -118,12 +118,6 @@ public final class AssessmentSyncFanoutDao {
                   ON vulnerability."UUID" = event.source_vulnerability_uuid
                WHERE EXISTS (
                        SELECT 1
-                         FROM "ASSESSMENT_EMBEDDING" AS own_embedding
-                        WHERE own_embedding."TARGET_PROJECT_ID" = project."ID"
-                          AND own_embedding."MARKER_COMPONENT_ID" = component."ID"
-                     )
-                  OR EXISTS (
-                       SELECT 1
                          FROM "ASSESSMENT_EMBEDDING_MEMBER" AS own_member
                         WHERE own_member."TARGET_PROJECT_ID" = project."ID"
                           AND own_member."COMPONENT_ID" = component."ID"
@@ -138,6 +132,9 @@ public final class AssessmentSyncFanoutDao {
                           AND own_origin."OWNER" = 'INHERITED'
                      )
               UNION
+              -- Every member with the vulnerability is listed, not only the one matching the changed source
+              -- component: matching compares canonical PURL and CPE in Java. A target with more keys than one
+              -- reconcile batch gets a full pass instead.
               SELECT project."UUID"
                    , member."COMPONENT_ID"
                    , vulnerability."ID"

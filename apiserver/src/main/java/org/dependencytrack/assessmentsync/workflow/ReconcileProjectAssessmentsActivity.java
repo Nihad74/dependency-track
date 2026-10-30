@@ -30,6 +30,7 @@ import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
 import org.dependencytrack.model.FindingKey;
+import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.dependencytrack.proto.internal.workflow.v1.ReconcileProjectAssessmentsRes;
 import org.dependencytrack.proto.internal.workflow.v1.SynchronizeProjectAssessmentsArg;
 import org.jdbi.v3.core.Handle;
@@ -104,15 +105,7 @@ public final class ReconcileProjectAssessmentsActivity
     private ReconcileProjectAssessmentsRes reconcile(final Handle handle, final UUID targetUuid) {
         AssessmentMutationGuard.lockProject(handle, targetUuid);
         final var workDao = new AssessmentSyncWorkDao(handle);
-        final Long projectId = handle.createQuery(/* language=SQL */ """
-                        SELECT "ID"
-                          FROM "PROJECT"
-                         WHERE "UUID" = :targetUuid
-                        """)
-                .bind("targetUuid", targetUuid)
-                .mapTo(long.class)
-                .findOne()
-                .orElse(null);
+        final Long projectId = handle.attach(ProjectDao.class).getProjectId(targetUuid);
         if (projectId == null) {
             workDao.acknowledgeCancellation(targetUuid);
             return ReconcileProjectAssessmentsRes.newBuilder()

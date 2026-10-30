@@ -24,6 +24,7 @@ import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
+import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.dependencytrack.proto.internal.workflow.v1.AssessmentSyncPendingRes;
 import org.dependencytrack.proto.internal.workflow.v1.SynchronizeProjectAssessmentsArg;
 import org.jspecify.annotations.Nullable;
@@ -45,16 +46,7 @@ public final class ReadAssessmentSyncPendingActivity
         final UUID targetUuid = AssessmentSyncArguments.projectUuid(
                 AssessmentSyncArguments.require(argument).getProjectUuid());
         return inJdbiTransaction(handle -> {
-            final boolean projectExists = handle.createQuery(/* language=SQL */ """
-                            SELECT 1
-                              FROM "PROJECT"
-                             WHERE "UUID" = :targetUuid
-                            """)
-                    .bind("targetUuid", targetUuid)
-                    .mapTo(int.class)
-                    .findOne()
-                    .isPresent();
-            if (!projectExists) {
+            if (handle.attach(ProjectDao.class).getProjectId(targetUuid) == null) {
                 return AssessmentSyncPendingRes.newBuilder()
                         .setTargetDeleted(true)
                         .build();

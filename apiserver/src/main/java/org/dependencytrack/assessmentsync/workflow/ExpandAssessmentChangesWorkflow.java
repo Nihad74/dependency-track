@@ -18,8 +18,6 @@
  */
 package org.dependencytrack.assessmentsync.workflow;
 
-import org.dependencytrack.assessmentsync.AssessmentSyncSettings;
-import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.api.ActivityCallOptions;
 import org.dependencytrack.dex.api.ContinueAsNewOptions;
 import org.dependencytrack.dex.api.RetryPolicy;
@@ -29,13 +27,9 @@ import org.dependencytrack.dex.api.WorkflowSpec;
 import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesArg;
 import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesRes;
-import org.eclipse.microprofile.config.ConfigProvider;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
-
-import static java.util.Objects.requireNonNull;
-import static org.dependencytrack.dex.api.payload.PayloadConverters.stringConverter;
 
 /// Expands one outbox row into target work. The activity owns the cursor.
 @WorkflowSpec(name = ExpandAssessmentChangesWorkflow.NAME)
@@ -57,15 +51,9 @@ public final class ExpandAssessmentChangesWorkflow implements Workflow<ExpandAss
     @Override
     public @Nullable Void execute(
             final WorkflowContext<ExpandAssessmentChangesArg> ctx, final @Nullable ExpandAssessmentChangesArg arg) {
-        requireArgument(arg);
-        final int maxBatches = Integer.parseInt(requireNonNull(
-                ctx.executeSideEffect(
-                                "max-batches",
-                                stringConverter(),
-                                () -> Integer.toString(AssessmentSyncSettings.positiveInt(
-                                        ConfigProvider.getConfig(), ConfigKeys.ASSESSMENT_SYNC_WORKFLOW_MAX_BATCHES)))
-                        .await(),
-                "max-batches"));
+        AssessmentSyncArguments.positive(
+                "outbox_id", AssessmentSyncArguments.require(arg).getOutboxId());
+        final int maxBatches = AssessmentSyncArguments.maxBatches(ctx);
 
         var completedBatches = 0;
         while (true) {
@@ -91,12 +79,6 @@ public final class ExpandAssessmentChangesWorkflow implements Workflow<ExpandAss
             if (result.getAlreadyCompleted() || !result.getHasMore()) {
                 return null;
             }
-        }
-    }
-
-    static void requireArgument(final @Nullable ExpandAssessmentChangesArg arg) {
-        if (arg == null || arg.getOutboxId() <= 0) {
-            throw new TerminalApplicationFailureException("outbox_id must be positive");
         }
     }
 }

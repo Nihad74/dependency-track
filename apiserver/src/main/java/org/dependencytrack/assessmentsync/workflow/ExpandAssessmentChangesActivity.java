@@ -78,8 +78,9 @@ public final class ExpandAssessmentChangesActivity
             throw new InterruptedException("Interrupted before assessment expansion");
         }
         beforeExpand.run();
-        ExpandAssessmentChangesWorkflow.requireArgument(argument);
-        return inJdbiTransaction(handle -> expand(handle, requireNonNull(argument)));
+        final ExpandAssessmentChangesArg arg = AssessmentSyncArguments.require(argument);
+        AssessmentSyncArguments.positive("outbox_id", arg.getOutboxId());
+        return inJdbiTransaction(handle -> expand(handle, arg));
     }
 
     private ExpandAssessmentChangesRes expand(final Handle handle, final ExpandAssessmentChangesArg argument) {

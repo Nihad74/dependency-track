@@ -42,6 +42,7 @@ import org.dependencytrack.notification.JdbiNotificationEmitter;
 import org.dependencytrack.notification.NotificationGroup;
 import org.dependencytrack.notification.NotificationSubjectDao;
 import org.dependencytrack.notification.proto.v1.Notification;
+import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.Nullable;
 
@@ -86,7 +87,7 @@ public final class AssessmentSynchronizer {
             return new BatchResult(0, 0, 0, 0, false);
         }
 
-        final Long projectId = projectId(handle, targetUuid);
+        final Long projectId = handle.attach(ProjectDao.class).getProjectId(targetUuid);
         if (projectId == null) {
             return new BatchResult(0, 0, keys.size(), 0, false);
         }
@@ -200,7 +201,7 @@ public final class AssessmentSynchronizer {
         if (keys.isEmpty()) {
             return 0;
         }
-        final Long projectId = projectId(handle, targetUuid);
+        final Long projectId = handle.attach(ProjectDao.class).getProjectId(targetUuid);
         if (projectId == null) {
             return 0;
         }
@@ -527,18 +528,6 @@ public final class AssessmentSynchronizer {
                 .list();
     }
 
-    private static @Nullable Long projectId(final Handle handle, final UUID targetUuid) {
-        return handle.createQuery(/* language=SQL */ """
-                        SELECT "ID"
-                          FROM "PROJECT"
-                         WHERE "UUID" = :targetUuid
-                        """)
-                .bind("targetUuid", targetUuid)
-                .mapTo(long.class)
-                .findOne()
-                .orElse(null);
-    }
-
     private static Map<FindingKey, TargetRow> loadTargets(
             final Handle handle, final long projectId, final List<FindingKey> keys) {
         final Map<FindingKey, TargetRow> targets = new LinkedHashMap<>();
@@ -662,16 +651,9 @@ public final class AssessmentSynchronizer {
                              , e."MARKER_VERSION" AS marker_version
                           FROM "ASSESSMENT_EMBEDDING" AS e
                          INNER JOIN (
+                               -- Only components strictly below a marker are in scope, not the marker (ADR 044).
                                SELECT "MARKER_COMPONENT_ID" AS marker_component_id
-                                    , "MARKER_COMPONENT_ID" AS component_id
-                                 FROM "ASSESSMENT_EMBEDDING"
-                                WHERE "TARGET_PROJECT_ID" = :projectId
-                                  AND "MARKER_COMPONENT_ID" IN (
-                                    SELECT component_id FROM UNNEST(:componentIds) AS page(component_id)
-                                  )
-                               UNION
-                               SELECT "MARKER_COMPONENT_ID"
-                                    , "COMPONENT_ID"
+                                    , "COMPONENT_ID" AS component_id
                                  FROM "ASSESSMENT_EMBEDDING_MEMBER"
                                 WHERE "TARGET_PROJECT_ID" = :projectId
                                   AND "COMPONENT_ID" IN (

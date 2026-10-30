@@ -390,7 +390,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
     }
 
     @Test
-    void ownFindingOnAMarkerOrMemberRequestsWorkForTheProject() throws Exception {
+    void ownFindingOnAMemberRequestsWorkAndOneOnTheMarkerDoesNot() throws Exception {
         start(100, 200);
         final Project project = project("product", "1.0.0", null);
         final Component marker = component(project, "os", "1", Classifier.OPERATING_SYSTEM);
@@ -414,7 +414,7 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
 
         assertThat(pendingFindings(project.getUuid()))
                 .extracting(PendingFinding::componentId)
-                .containsExactlyInAnyOrder(marker.getId(), member.getId());
+                .containsExactly(member.getId());
     }
 
     @Test
