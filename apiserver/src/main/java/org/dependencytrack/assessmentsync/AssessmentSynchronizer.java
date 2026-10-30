@@ -21,6 +21,7 @@ package org.dependencytrack.assessmentsync;
 import org.dependencytrack.assessmentsync.AssessmentConsensus.Contributor;
 import org.dependencytrack.assessmentsync.AssessmentConsensus.Result;
 import org.dependencytrack.assessmentsync.AssessmentConsensus.SourceAssessment;
+import org.dependencytrack.assessmentsync.AssessmentMatcher.Candidates;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.ComponentIdentity;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.HashAlgorithm;
 import org.dependencytrack.assessmentsync.AssessmentMatcher.VulnerabilityIdentity;
@@ -51,6 +52,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -93,6 +95,7 @@ public final class AssessmentSynchronizer {
         final Map<Long, List<UUID>> sourcesByComponent = sourceProjects(handle, targetUuid, projectId, keys);
         final Map<UUID, Map<UUID, SourceComponent>> componentsBySource =
                 loadSourceComponents(handle, sourcesByComponent, keys);
+        final Map<UUID, Candidates> candidatesBySource = candidates(componentsBySource);
         final Map<Long, List<CopiedTrail>> trailsByAnalysis = loadTrails(handle, targets);
 
         var applied = 0;
@@ -109,7 +112,7 @@ public final class AssessmentSynchronizer {
                 skipped++;
                 continue;
             }
-            final Decision decision = decide(target, sourcesByComponent, componentsBySource);
+            final Decision decision = decide(target, sourcesByComponent, componentsBySource, candidatesBySource);
             final Result consensus = decision.consensus();
             if (consensus instanceof AssessmentConsensus.Conflict) {
                 conflicts++;
@@ -206,6 +209,7 @@ public final class AssessmentSynchronizer {
         final Map<Long, List<UUID>> sourcesByComponent = sourceProjects(handle, targetUuid, projectId, keys);
         final Map<UUID, Map<UUID, SourceComponent>> componentsBySource =
                 loadSourceComponents(handle, sourcesByComponent, keys);
+        final Map<UUID, Candidates> candidatesBySource = candidates(componentsBySource);
         final Map<Long, List<CopiedTrail>> trailsByAnalysis = loadTrails(handle, targets);
 
         var drift = 0;
@@ -214,7 +218,7 @@ public final class AssessmentSynchronizer {
             if (target == null || (target.analysisId() != null && target.owner() == null)) {
                 continue;
             }
-            final Decision decision = decide(target, sourcesByComponent, componentsBySource);
+            final Decision decision = decide(target, sourcesByComponent, componentsBySource, candidatesBySource);
             if (target.analysisId() == null) {
                 if (decision.consensus() instanceof AssessmentConsensus.Agreed) {
                     drift++;
@@ -252,7 +256,8 @@ public final class AssessmentSynchronizer {
     private static Decision decide(
             final TargetRow target,
             final Map<Long, List<UUID>> sourcesByComponent,
-            final Map<UUID, Map<UUID, SourceComponent>> componentsBySource) {
+            final Map<UUID, Map<UUID, SourceComponent>> componentsBySource,
+            final Map<UUID, Candidates> candidatesBySource) {
         if (!target.vulnerability().attributionActive()) {
             return new Decision(new AssessmentConsensus.Unavailable(AssessmentReason.FINDING_INACTIVE), List.of());
         }
@@ -260,9 +265,9 @@ public final class AssessmentSynchronizer {
         final var writesByContributor = new LinkedHashMap<Contributor, SourceContributionWrite>();
         for (final UUID sourceProjectUuid : sourcesByComponent.getOrDefault(target.componentId(), List.of())) {
             final Map<UUID, SourceComponent> components = componentsBySource.getOrDefault(sourceProjectUuid, Map.of());
-            final var candidates = new ArrayList<ComponentIdentity>(components.size());
-            for (final SourceComponent component : components.values()) {
-                candidates.add(component.identity());
+            final Candidates candidates = candidatesBySource.get(sourceProjectUuid);
+            if (candidates == null) {
+                continue;
             }
             switch (AssessmentMatcher.match(target.identity(), candidates)) {
                 case AssessmentMatcher.MatchResult.Unavailable unavailable -> {
@@ -289,6 +294,19 @@ public final class AssessmentSynchronizer {
             writes.add(write);
         }
         return new Decision(consensus, writes);
+    }
+
+    /// Parses each source's components once per batch instead of once per target finding.
+    private static Map<UUID, Candidates> candidates(final Map<UUID, Map<UUID, SourceComponent>> componentsBySource) {
+        final var candidates = new HashMap<UUID, Candidates>(componentsBySource.size());
+        for (final var source : componentsBySource.entrySet()) {
+            candidates.put(
+                    source.getKey(),
+                    Candidates.of(source.getValue().values().stream()
+                            .map(SourceComponent::identity)
+                            .toList()));
+        }
+        return candidates;
     }
 
     private static void addVoter(
