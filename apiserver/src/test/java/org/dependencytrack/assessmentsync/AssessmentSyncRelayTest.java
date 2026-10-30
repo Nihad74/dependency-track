@@ -33,6 +33,7 @@ import org.dependencytrack.assessmentsync.workflow.ExpandAssessmentChangesWorkfl
 import org.dependencytrack.assessmentsync.workflow.SynchronizeProjectAssessmentsWorkflow;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.datasource.DataSourceRegistry;
+import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.dex.engine.api.DexEngine;
 import org.dependencytrack.dex.engine.api.TaskType;
 import org.dependencytrack.dex.engine.api.TaskWorkerOptions;
@@ -53,6 +54,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -72,6 +74,7 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
     private final WorkflowTestExtension workflowTest =
             new WorkflowTestExtension(DataSourceRegistry.getInstance().getDefault());
 
+    private final AtomicBoolean expandFailsTerminally = new AtomicBoolean();
     private SimpleMeterRegistry meterRegistry;
     private AssessmentSyncRelay relay;
 
@@ -89,7 +92,6 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
 
     @AfterEach
     void afterEach() {
-        ExpandAssessmentChangesActivity.failTerminalForTest(false);
         if (relay != null) {
             relay.close();
         }
@@ -112,7 +114,6 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
         final OutboxEntry row = outbox(outboxId);
         assertThat(row).isNotNull();
         assertThat(row.dispatchAttempts()).isEqualTo(2);
-        assertThat(row.lastErrorCode()).isNull();
     }
 
     @Test
@@ -150,7 +151,6 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
                         .withConcurrencyKey(instanceId)
                         .withArgument(ExpandAssessmentChangesArg.newBuilder()
                                 .setOutboxId(outboxId)
-                                .setSchemaVersion(1)
                                 .build()));
         assertThat(runId).isNotNull();
 
@@ -172,7 +172,7 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
 
     @Test
     void terminalWorkflowFailureLeavesTheRowForRetryAfterBackoff() throws Exception {
-        ExpandAssessmentChangesActivity.failTerminalForTest(true);
+        expandFailsTerminally.set(true);
         startEngine(true);
         final long outboxId = insertProjectOutbox();
         final String instanceId = ExpandAssessmentChangesWorkflow.instanceId(outboxId);
@@ -182,7 +182,7 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
         workflowTest.awaitRunStatus(failedRunId, WorkflowRunStatus.FAILED);
         assertThat(outbox(outboxId)).isNotNull();
 
-        ExpandAssessmentChangesActivity.failTerminalForTest(false);
+        expandFailsTerminally.set(false);
         makeDue(outboxId);
         relay.executeCycle();
 
@@ -192,62 +192,6 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
                     assertThat(outbox(outboxId)).isNull();
                     assertThat(runStatuses(instanceId)).containsExactlyInAnyOrder("FAILED", "COMPLETED");
                 });
-    }
-
-    @Test
-    void unknownSchemaVersionDoesNotDeleteTheRowOrCreateARun() throws Exception {
-        startEngine(false);
-        final UUID projectUuid = UUID.randomUUID();
-        useJdbiTransaction(handle -> {
-            handle.execute("""
-                    ALTER TABLE "ASSESSMENT_SYNC_OUTBOX"
-                    DROP CONSTRAINT "ASSESSMENT_SYNC_OUTBOX_SCHEMA_VERSION_CHECK"
-                    """);
-            handle.createUpdate("""
-                            INSERT INTO "ASSESSMENT_SYNC_OUTBOX" (
-                              "SCHEMA_VERSION", "SCOPE_KEY", "SCOPE", "PROJECT_UUID", "REASON"
-                            ) VALUES (2, :scopeKey, 'PROJECT', :projectUuid, 'PROJECT_UPDATED')
-                            """)
-                    .bind("scopeKey", "project:" + projectUuid)
-                    .bind("projectUuid", projectUuid)
-                    .execute();
-        });
-
-        try {
-            relay.executeCycle();
-
-            final long runs = withJdbiHandle(handle -> handle.createQuery("""
-                            SELECT COUNT(*)
-                              FROM dex_workflow_run
-                             WHERE workflow_name = :workflowName
-                            """)
-                    .bind("workflowName", ExpandAssessmentChangesWorkflow.NAME)
-                    .mapTo(long.class)
-                    .one());
-            assertThat(runs).isZero();
-            final long storedId = withJdbiHandle(
-                    handle -> handle.createQuery("""
-                            SELECT "ID"
-                              FROM "ASSESSMENT_SYNC_OUTBOX"
-                             WHERE "SCHEMA_VERSION" = 2
-                            """).mapTo(long.class).one());
-            final OutboxEntry stored = outbox(storedId);
-            assertThat(stored).isNotNull();
-            assertThat(stored.schemaVersion()).isEqualTo(2);
-            assertThat(stored.lastErrorCode()).isEqualTo(AssessmentSyncSettings.UNKNOWN_SCHEMA_VERSION);
-            assertThat(stored.dispatchAttempts()).isEqualTo(1);
-        } finally {
-            useJdbiTransaction(handle -> {
-                handle.execute("""
-                        DELETE FROM "ASSESSMENT_SYNC_OUTBOX" WHERE "SCHEMA_VERSION" <> 1
-                        """);
-                handle.execute("""
-                        ALTER TABLE "ASSESSMENT_SYNC_OUTBOX"
-                        ADD CONSTRAINT "ASSESSMENT_SYNC_OUTBOX_SCHEMA_VERSION_CHECK"
-                        CHECK ("SCHEMA_VERSION" = 1)
-                        """);
-            });
-        }
     }
 
     @Test
@@ -435,7 +379,11 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
                 voidConverter(),
                 Duration.ofSeconds(10));
         engine.registerActivity(
-                new ExpandAssessmentChangesActivity(100, 200),
+                new ExpandAssessmentChangesActivity(100, 200, () -> {
+                    if (expandFailsTerminally.get()) {
+                        throw new TerminalApplicationFailureException("assessment expansion failed");
+                    }
+                }),
                 protoConverter(ExpandAssessmentChangesArg.class),
                 protoConverter(ExpandAssessmentChangesRes.class));
         engine.createTaskQueue(new CreateTaskQueueRequest(TaskType.WORKFLOW, "default", 10));

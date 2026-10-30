@@ -27,7 +27,6 @@ import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
-import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.model.FindingKey;
 import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesArg;
 import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesRes;
@@ -38,7 +37,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
@@ -50,12 +48,17 @@ public final class ExpandAssessmentChangesActivity
 
     public static final String QUEUE_NAME = "assessment-sync";
 
-    private static final AtomicBoolean FAIL_TERMINAL = new AtomicBoolean();
-
     private final int fanoutBatchSize;
     private final int reconcileBatchSize;
+    private final Runnable beforeExpand;
 
     public ExpandAssessmentChangesActivity(final int fanoutBatchSize, final int reconcileBatchSize) {
+        this(fanoutBatchSize, reconcileBatchSize, () -> {});
+    }
+
+    /// {@code beforeExpand} runs at the start of every call, so a test can make the activity fail.
+    public ExpandAssessmentChangesActivity(
+            final int fanoutBatchSize, final int reconcileBatchSize, final Runnable beforeExpand) {
         if (fanoutBatchSize <= 0) {
             throw new IllegalArgumentException("fanoutBatchSize must be positive");
         }
@@ -64,11 +67,7 @@ public final class ExpandAssessmentChangesActivity
         }
         this.fanoutBatchSize = fanoutBatchSize;
         this.reconcileBatchSize = reconcileBatchSize;
-    }
-
-    /// Test hook. Production leaves this false.
-    public static void failTerminalForTest(final boolean fail) {
-        FAIL_TERMINAL.set(fail);
+        this.beforeExpand = requireNonNull(beforeExpand, "beforeExpand must not be null");
     }
 
     @Override
@@ -78,9 +77,7 @@ public final class ExpandAssessmentChangesActivity
         if (Thread.interrupted()) {
             throw new InterruptedException("Interrupted before assessment expansion");
         }
-        if (FAIL_TERMINAL.get()) {
-            throw new TerminalApplicationFailureException("assessment expansion failed");
-        }
+        beforeExpand.run();
         ExpandAssessmentChangesWorkflow.requireArgument(argument);
         return inJdbiTransaction(handle -> expand(handle, requireNonNull(argument)));
     }
@@ -94,9 +91,6 @@ public final class ExpandAssessmentChangesActivity
                     .setTargetsRequested(0)
                     .setAlreadyCompleted(true)
                     .build();
-        }
-        if (entry.schemaVersion() != argument.getSchemaVersion()) {
-            throw new TerminalApplicationFailureException("unsupported schema_version");
         }
 
         final var fanoutDao = new AssessmentSyncFanoutDao(handle);

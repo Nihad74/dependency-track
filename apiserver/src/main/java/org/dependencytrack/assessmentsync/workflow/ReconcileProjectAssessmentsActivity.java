@@ -39,8 +39,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
 
+import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 
 /// One reconciliation batch for a target project. The work row holds the cursor.
@@ -50,12 +50,18 @@ public final class ReconcileProjectAssessmentsActivity
 
     public static final String QUEUE_NAME = ExpandAssessmentChangesActivity.QUEUE_NAME;
 
-    private static final AtomicBoolean FAIL_AFTER_WRITE = new AtomicBoolean();
-
     private final int reconcileBatchSize;
     private final Duration inactiveBackoff;
+    private final Runnable afterWrite;
 
     public ReconcileProjectAssessmentsActivity(final int reconcileBatchSize, final Duration inactiveBackoff) {
+        this(reconcileBatchSize, inactiveBackoff, () -> {});
+    }
+
+    /// {@code afterWrite} runs inside the batch transaction after the batch is written, so a test can
+    /// make the batch fail and roll back.
+    ReconcileProjectAssessmentsActivity(
+            final int reconcileBatchSize, final Duration inactiveBackoff, final Runnable afterWrite) {
         if (reconcileBatchSize <= 0) {
             throw new IllegalArgumentException("reconcileBatchSize must be positive");
         }
@@ -64,11 +70,7 @@ public final class ReconcileProjectAssessmentsActivity
         }
         this.reconcileBatchSize = reconcileBatchSize;
         this.inactiveBackoff = inactiveBackoff;
-    }
-
-    /// Test hook. Production leaves this false. The failure is raised inside the batch transaction.
-    public static void failAfterWriteForTest(final boolean fail) {
-        FAIL_AFTER_WRITE.set(fail);
+        this.afterWrite = requireNonNull(afterWrite, "afterWrite must not be null");
     }
 
     @Override
@@ -142,9 +144,7 @@ public final class ReconcileProjectAssessmentsActivity
         final boolean moreInPass = fetched.size() > reconcileBatchSize;
         final List<FindingKey> page = moreInPass ? fetched.subList(0, reconcileBatchSize) : fetched;
         final BatchResult batch = new AssessmentSynchronizer().reconcileBatch(handle, targetUuid, page);
-        if (FAIL_AFTER_WRITE.get()) {
-            throw new IllegalStateException("forced assessment reconciliation failure");
-        }
+        afterWrite.run();
 
         final long refreshRevision = batch.machineFieldsChanged() ? workDao.requestRefresh(targetUuid) : 0;
         if (moreInPass) {
