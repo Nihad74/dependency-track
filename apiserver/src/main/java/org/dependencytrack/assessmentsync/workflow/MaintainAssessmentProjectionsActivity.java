@@ -144,7 +144,7 @@ public final class MaintainAssessmentProjectionsActivity
             case ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP -> {
                 new AssessmentOriginDao(handle).backfillProjectOrigins(projectUuid);
                 new AssessmentEmbeddingIndexer(handle).rebuild(projectUuid);
-                if (mode == AssessmentSyncMode.ACTIVE || mode == AssessmentSyncMode.CAPTURE) {
+                if (mode.recordsOutbox()) {
                     new AssessmentSyncWorkDao(handle).requestFull(projectUuid);
                     enqueued = 1;
                 }
@@ -152,7 +152,7 @@ public final class MaintainAssessmentProjectionsActivity
             case ASSESSMENT_MAINTENANCE_OPERATION_VERIFY -> {
                 new AssessmentEmbeddingIndexer(handle).rebuild(projectUuid);
                 drift = countProjectDrift(handle, projectUuid, projectId);
-                if (drift > 0 && (mode == AssessmentSyncMode.ACTIVE || mode == AssessmentSyncMode.CAPTURE)) {
+                if (drift > 0 && mode.recordsOutbox()) {
                     new AssessmentSyncWorkDao(handle).requestFull(projectUuid);
                     enqueued = 1;
                 }
@@ -198,7 +198,7 @@ public final class MaintainAssessmentProjectionsActivity
     private static boolean allows(final AssessmentMaintenanceOperation operation, final AssessmentSyncMode mode) {
         return switch (operation) {
             case ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP, ASSESSMENT_MAINTENANCE_OPERATION_VERIFY ->
-                mode == AssessmentSyncMode.CAPTURE || mode == AssessmentSyncMode.ACTIVE;
+                mode.recordsOutbox();
             case ASSESSMENT_MAINTENANCE_OPERATION_WITHDRAW -> mode == AssessmentSyncMode.WITHDRAW;
             case ASSESSMENT_MAINTENANCE_OPERATION_UNSPECIFIED, UNRECOGNIZED -> false;
         };

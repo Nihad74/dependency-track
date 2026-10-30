@@ -20,7 +20,6 @@ package org.dependencytrack.assessmentsync;
 
 import org.dependencytrack.assessmentsync.AssessmentChange.LookupKey;
 import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
-import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.statement.SqlStatements;
 import org.jspecify.annotations.Nullable;
@@ -29,8 +28,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
-
-import static java.util.Objects.requireNonNull;
 
 /// Records project and finding invalidations on the caller's handle.
 ///
@@ -54,18 +51,14 @@ public final class AssessmentStructureCapture {
     /// One project invalidation. Does not rebuild embeddings.
     public static void recordProject(
             final Handle handle, final UUID projectUuid, final Reason reason, final List<LookupKey> lookupKeys) {
-        requireNonNull(handle, "handle must not be null");
-        requireNonNull(projectUuid, "projectUuid must not be null");
-        requireNonNull(reason, "reason must not be null");
-        requireNonNull(lookupKeys, "lookupKeys must not be null");
         new AssessmentChangeRecorder(handle)
-                .record(new AssessmentChange(Scope.PROJECT, projectUuid, null, null, reason, lookupKeys));
+                .record(new AssessmentChange(
+                        AssessmentChange.Scope.PROJECT, projectUuid, null, null, reason, lookupKeys));
     }
 
     /// Replaces the project's embedding index and records one project invalidation.
     public static void rebuildAndRecord(
             final Handle handle, final UUID projectUuid, final Reason reason, final List<LookupKey> lookupKeys) {
-        requireNonNull(handle, "handle must not be null");
         if (!AssessmentSyncMode.current().recordsOutbox()) {
             return;
         }
@@ -73,14 +66,47 @@ public final class AssessmentStructureCapture {
         recordProject(handle, projectUuid, reason, lookupKeys);
     }
 
-    public static void recordProjects(final Handle handle, final Collection<AssessmentChange> changes) {
-        requireNonNull(handle, "handle must not be null");
-        requireNonNull(changes, "changes must not be null");
+    /// Records one finding change for each component and vulnerability pair of the project whose attribution
+    /// was added or removed. Pairs whose component or vulnerability is gone are skipped.
+    public static void recordAttributionChanges(
+            final Handle handle, final UUID projectUuid, final Collection<FindingRef> findings) {
+        if (findings.isEmpty() || !AssessmentSyncMode.current().recordsOutbox()) {
+            return;
+        }
+        final var componentIds = new long[findings.size()];
+        final var vulnerabilityIds = new long[findings.size()];
+        int i = 0;
+        for (final FindingRef finding : findings) {
+            componentIds[i] = finding.componentId();
+            vulnerabilityIds[i] = finding.vulnerabilityId();
+            i++;
+        }
+        final List<AssessmentChange> changes = handle.createQuery(/* language=SQL */ """
+                        SELECT DISTINCT p."NAME"
+                             , p."VERSION"
+                             , c."UUID" AS component_uuid
+                             , v."UUID" AS vulnerability_uuid
+                          FROM UNNEST(:componentIds, :vulnerabilityIds) AS t(component_id, vulnerability_id)
+                         INNER JOIN "COMPONENT" AS c
+                            ON c."ID" = t.component_id
+                         INNER JOIN "PROJECT" AS p
+                            ON p."ID" = c."PROJECT_ID"
+                         INNER JOIN "VULNERABILITY" AS v
+                            ON v."ID" = t.vulnerability_id
+                         WHERE p."UUID" = :projectUuid
+                        """)
+                .bind("componentIds", componentIds)
+                .bind("vulnerabilityIds", vulnerabilityIds)
+                .bind("projectUuid", projectUuid)
+                .map((rs, ctx) -> AssessmentChange.finding(
+                        projectUuid,
+                        rs.getObject("component_uuid", UUID.class),
+                        rs.getObject("vulnerability_uuid", UUID.class),
+                        Reason.ATTRIBUTION,
+                        rs.getString("NAME"),
+                        rs.getString("VERSION")))
+                .list();
         new AssessmentChangeRecorder(handle).recordAll(changes);
-    }
-
-    public static void recordFindings(final Handle handle, final Collection<AssessmentChange> changes) {
-        recordProjects(handle, changes);
     }
 
     /// Records the projects and all their descendants, because access through a parent counts.
@@ -88,8 +114,6 @@ public final class AssessmentStructureCapture {
     /// Source eligibility depends on team access (ADR 044). Each event reaches the project as a target,
     /// the targets that embed it, and the targets whose marker names it, so all affected pairs re-index.
     public static void recordAccessChange(final Handle handle, final Collection<UUID> projectUuids) {
-        requireNonNull(handle, "handle must not be null");
-        requireNonNull(projectUuids, "projectUuids must not be null");
         if (projectUuids.isEmpty() || !AssessmentSyncMode.current().recordsOutbox()) {
             return;
         }
@@ -105,15 +129,17 @@ public final class AssessmentStructureCapture {
                          WHERE root."UUID" = ANY(:projectUuids)
                         """)
                 .bindArray("projectUuids", UUID.class, projectUuids.toArray(UUID[]::new))
-                .map((rs, ctx) ->
-                        accessChange(rs.getObject("UUID", UUID.class), rs.getString("NAME"), rs.getString("VERSION")))
+                .map((rs, ctx) -> AssessmentChange.project(
+                        rs.getObject("UUID", UUID.class),
+                        Reason.ACCESS_CHANGED,
+                        rs.getString("NAME"),
+                        rs.getString("VERSION")))
                 .list();
         new AssessmentChangeRecorder(handle).recordAll(changes);
     }
 
     /// Records every project that a team can access, before the team is deleted.
     public static void recordTeamAccessRemoved(final Handle handle, final long teamId) {
-        requireNonNull(handle, "handle must not be null");
         if (!AssessmentSyncMode.current().recordsOutbox()) {
             return;
         }
@@ -134,7 +160,6 @@ public final class AssessmentStructureCapture {
     ///
     /// Every source-target pair has a target with an embedding row, so target events cover all pairs.
     public static void recordAccessControlToggled(final Handle handle) {
-        requireNonNull(handle, "handle must not be null");
         if (!AssessmentSyncMode.current().recordsOutbox()) {
             return;
         }
@@ -147,15 +172,12 @@ public final class AssessmentStructureCapture {
                 // Request-scoped handles bind pagination to every statement. This query declares no
                 // parameters, and JDBI rejects unused bindings only in that case.
                 .configure(SqlStatements.class, config -> config.setUnusedBindingAllowed(true))
-                .map((rs, ctx) -> new AssessmentChange(
-                        Scope.PROJECT, rs.getObject("UUID", UUID.class), null, null, Reason.ACCESS_CHANGED, List.of()))
+                .map((rs, ctx) ->
+                        AssessmentChange.project(rs.getObject("UUID", UUID.class), Reason.ACCESS_CHANGED, null, null))
                 .list();
         new AssessmentChangeRecorder(handle).recordAll(changes);
     }
 
-    private static AssessmentChange accessChange(
-            final UUID projectUuid, final @Nullable String name, final @Nullable String version) {
-        return new AssessmentChange(
-                Scope.PROJECT, projectUuid, null, null, Reason.ACCESS_CHANGED, LookupKey.listOf(name, version));
-    }
+    /// A finding by database ids.
+    public record FindingRef(long componentId, long vulnerabilityId) {}
 }
