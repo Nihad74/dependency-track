@@ -53,8 +53,7 @@ public final class AssessmentSyncWorkDao {
             rs.getLong("REFRESH_COMPLETED"),
             readInstant(rs, "NEXT_DISPATCH_AT"),
             rs.getInt("DISPATCH_ATTEMPTS"),
-            readNullableInstant(rs, "LAST_SUCCESS_AT"),
-            rs.getString("LAST_ERROR_CODE"));
+            readNullableInstant(rs, "LAST_SUCCESS_AT"));
 
     private final Handle handle;
 
@@ -295,7 +294,6 @@ public final class AssessmentSyncWorkDao {
                              , "CURSOR_VULNERABILITY_ID" = NULL
                              , "LAST_SUCCESS_AT" = now()
                              , "DISPATCH_ATTEMPTS" = 0
-                             , "LAST_ERROR_CODE" = NULL
                              , "PENDING_SINCE" = NULL
                          WHERE "TARGET_UUID" = :targetUuid
                         """)
@@ -407,20 +405,17 @@ public final class AssessmentSyncWorkDao {
         return updated == 1;
     }
 
-    public boolean scheduleDispatch(
-            final UUID targetUuid, final Instant nextDispatchAt, final @Nullable String lastErrorCode) {
+    public boolean scheduleDispatch(final UUID targetUuid, final Instant nextDispatchAt) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
         requireTransaction();
         final int updated = handle.createUpdate(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_WORK"
                            SET "NEXT_DISPATCH_AT" = :nextDispatchAt
-                             , "LAST_ERROR_CODE" = :lastErrorCode
                          WHERE "TARGET_UUID" = :targetUuid
                         """)
                 .bind("targetUuid", targetUuid)
                 .bind("nextDispatchAt", nextDispatchAt)
-                .bind("lastErrorCode", lastErrorCode)
                 .execute();
         return updated == 1;
     }
@@ -478,7 +473,6 @@ public final class AssessmentSyncWorkDao {
                      , "NEXT_DISPATCH_AT"
                      , "DISPATCH_ATTEMPTS"
                      , "LAST_SUCCESS_AT"
-                     , "LAST_ERROR_CODE"
                   FROM "ASSESSMENT_SYNC_WORK"
                 """;
     }
@@ -526,8 +520,7 @@ public final class AssessmentSyncWorkDao {
             long refreshCompleted,
             Instant nextDispatchAt,
             int dispatchAttempts,
-            @Nullable Instant lastSuccessAt,
-            @Nullable String lastErrorCode) {
+            @Nullable Instant lastSuccessAt) {
 
         public WorkRow {
             requireNonNull(targetUuid, "targetUuid must not be null");
