@@ -289,7 +289,7 @@ public final class TaskSchedulerInitializer implements ServletContextListener {
                         () -> new SessionTokenService().deleteExpiredSessions()),
                 recurringTask(
                         "Assessment Projection Maintenance",
-                        getCronScheduleFromConfig(config, ConfigKeys.ASSESSMENT_SYNC_VERIFY_CRON),
+                        getCronScheduleFromConfig(config, ConfigKeys.ASSESSMENT_SYNC_MAINTENANCE_CRON),
                         () -> {
                             final var request = MaintainAssessmentProjectionsWorkflow.scheduledRun();
                             if (request != null) {

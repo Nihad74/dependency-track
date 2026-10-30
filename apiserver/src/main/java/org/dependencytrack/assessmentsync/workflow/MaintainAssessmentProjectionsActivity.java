@@ -32,8 +32,8 @@ import org.dependencytrack.assessmentsync.AssessmentSynchronizer;
 import org.dependencytrack.dex.api.Activity;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.dex.api.ActivitySpec;
-import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.model.FindingKey;
+import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.dependencytrack.proto.internal.workflow.v1.AssessmentMaintenanceOperation;
 import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjectionsArg;
 import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjectionsRes;
@@ -57,7 +57,6 @@ public final class MaintainAssessmentProjectionsActivity
     public static final String QUEUE_NAME = ExpandAssessmentChangesActivity.QUEUE_NAME;
 
     private static final String OPERATION_TAG = "operation";
-    private static final UUID ZERO_CURSOR = UUID.fromString("00000000-0000-0000-0000-000000000000");
 
     private final int projectBatchSize;
     private final int findingBatchSize;
@@ -74,9 +73,7 @@ public final class MaintainAssessmentProjectionsActivity
         requireNonNull(meterRegistry, "meterRegistry must not be null");
         this.projectBatchSize = projectBatchSize;
         this.findingBatchSize = findingBatchSize;
-        this.driftCounter = Counter.builder(AssessmentSyncMetrics.DRIFT)
-                .description("Findings whose maintained projection differed from current source consensus")
-                .withRegistry(meterRegistry);
+        this.driftCounter = AssessmentSyncMetrics.driftCounter(meterRegistry);
     }
 
     @Override
@@ -86,12 +83,9 @@ public final class MaintainAssessmentProjectionsActivity
         if (Thread.interrupted()) {
             throw new InterruptedException("Interrupted before assessment maintenance");
         }
-        if (argument == null) {
-            throw new TerminalApplicationFailureException("operation must be BOOTSTRAP, VERIFY, or WITHDRAW");
-        }
-        final AssessmentMaintenanceOperation operation = requireOperation(argument);
-        final UUID cursor = cursor(argument);
-        if (!allows(operation, AssessmentSyncMode.current())) {
+        final AssessmentMaintenanceOperation operation = MaintenanceOperations.require(argument);
+        final UUID cursor = cursor(requireNonNull(argument));
+        if (!MaintenanceOperations.runsIn(operation, AssessmentSyncMode.current())) {
             return result(cursor, false, 0, 0, 0);
         }
 
@@ -104,7 +98,7 @@ public final class MaintainAssessmentProjectionsActivity
             if (Thread.interrupted()) {
                 throw new InterruptedException("Interrupted during assessment maintenance");
             }
-            if (!allows(operation, AssessmentSyncMode.current())) {
+            if (!MaintenanceOperations.runsIn(operation, AssessmentSyncMode.current())) {
                 return result(next, false, scanned, drift, enqueued);
             }
             final ProjectOutcome outcome = inJdbiTransaction(handle -> processProject(handle, operation, projectUuid));
@@ -118,7 +112,7 @@ public final class MaintainAssessmentProjectionsActivity
         }
         if (drift > 0) {
             driftCounter
-                    .withTag(OPERATION_TAG, MaintainAssessmentProjectionsWorkflow.operationName(operation))
+                    .withTag(OPERATION_TAG, MaintenanceOperations.name(operation))
                     .increment(drift);
         }
         final boolean hasMore = projects.size() == projectBatchSize;
@@ -129,11 +123,11 @@ public final class MaintainAssessmentProjectionsActivity
             final Handle handle, final AssessmentMaintenanceOperation operation, final UUID projectUuid)
             throws InterruptedException {
         final AssessmentSyncMode mode = AssessmentSyncMode.current();
-        if (!allows(operation, mode)) {
+        if (!MaintenanceOperations.runsIn(operation, mode)) {
             return ProjectOutcome.halt();
         }
         AssessmentMutationGuard.lockProject(handle, projectUuid);
-        final Long projectId = projectId(handle, projectUuid);
+        final Long projectId = handle.attach(ProjectDao.class).getProjectId(projectUuid);
         if (projectId == null) {
             return ProjectOutcome.advance(0, 0);
         }
@@ -164,8 +158,7 @@ public final class MaintainAssessmentProjectionsActivity
                     enqueued = 1;
                 }
             }
-            case ASSESSMENT_MAINTENANCE_OPERATION_UNSPECIFIED, UNRECOGNIZED ->
-                throw new TerminalApplicationFailureException("operation must be BOOTSTRAP, VERIFY, or WITHDRAW");
+            case ASSESSMENT_MAINTENANCE_OPERATION_UNSPECIFIED, UNRECOGNIZED -> MaintenanceOperations.name(operation);
         }
         return ProjectOutcome.advance(drift, enqueued);
     }
@@ -215,41 +208,19 @@ public final class MaintainAssessmentProjectionsActivity
         }
     }
 
-    private static boolean allows(final AssessmentMaintenanceOperation operation, final AssessmentSyncMode mode) {
-        return switch (operation) {
-            case ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP, ASSESSMENT_MAINTENANCE_OPERATION_VERIFY ->
-                mode.recordsOutbox();
-            case ASSESSMENT_MAINTENANCE_OPERATION_WITHDRAW -> mode == AssessmentSyncMode.WITHDRAW;
-            case ASSESSMENT_MAINTENANCE_OPERATION_UNSPECIFIED, UNRECOGNIZED -> false;
-        };
-    }
-
     private static List<UUID> listProjects(final Handle handle, final @Nullable UUID cursor, final int limit) {
-        final boolean hasCursor = cursor != null;
         return handle.createQuery(/* language=SQL */ """
                         SELECT "UUID"
                           FROM "PROJECT"
-                         WHERE (:hasCursor = FALSE OR "UUID" > :cursor)
+                         WHERE CAST(:cursor AS uuid) IS NULL
+                            OR "UUID" > CAST(:cursor AS uuid)
                          ORDER BY "UUID"
                          LIMIT :limit
                         """)
-                .bind("hasCursor", hasCursor)
-                .bind("cursor", hasCursor ? cursor : ZERO_CURSOR)
+                .bind("cursor", cursor == null ? null : cursor.toString())
                 .bind("limit", limit)
                 .map((rs, ctx) -> requireNonNull(rs.getObject("UUID", UUID.class)))
                 .list();
-    }
-
-    private static @Nullable Long projectId(final Handle handle, final UUID projectUuid) {
-        return handle.createQuery(/* language=SQL */ """
-                        SELECT "ID"
-                          FROM "PROJECT"
-                         WHERE "UUID" = :projectUuid
-                        """)
-                .bind("projectUuid", projectUuid)
-                .mapTo(long.class)
-                .findOne()
-                .orElse(null);
     }
 
     private static MaintainAssessmentProjectionsRes result(
@@ -269,29 +240,11 @@ public final class MaintainAssessmentProjectionsActivity
         return builder.build();
     }
 
-    private static AssessmentMaintenanceOperation requireOperation(
-            final @Nullable MaintainAssessmentProjectionsArg argument) {
-        if (argument == null) {
-            throw new TerminalApplicationFailureException("operation must be BOOTSTRAP, VERIFY, or WITHDRAW");
-        }
-        return switch (argument.getOperation()) {
-            case ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP,
-                    ASSESSMENT_MAINTENANCE_OPERATION_VERIFY,
-                    ASSESSMENT_MAINTENANCE_OPERATION_WITHDRAW -> argument.getOperation();
-            case ASSESSMENT_MAINTENANCE_OPERATION_UNSPECIFIED, UNRECOGNIZED ->
-                throw new TerminalApplicationFailureException("operation must be BOOTSTRAP, VERIFY, or WITHDRAW");
-        };
-    }
-
     private static @Nullable UUID cursor(final MaintainAssessmentProjectionsArg argument) {
         if (!argument.hasProjectUuidCursor() || argument.getProjectUuidCursor().isBlank()) {
             return null;
         }
-        try {
-            return UUID.fromString(argument.getProjectUuidCursor());
-        } catch (IllegalArgumentException e) {
-            throw new TerminalApplicationFailureException("project_uuid_cursor must be a UUID", e);
-        }
+        return AssessmentSyncArguments.uuid("project_uuid_cursor", argument.getProjectUuidCursor());
     }
 
     private record ProjectOutcome(int drift, int enqueued, boolean halted) {

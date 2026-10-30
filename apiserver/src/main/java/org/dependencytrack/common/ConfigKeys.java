@@ -105,7 +105,7 @@ public final class ConfigKeys {
     public static final String ASSESSMENT_SYNC_FANOUT_BATCH_SIZE = "dt.assessment-sync.fanout.batch-size";
     public static final String ASSESSMENT_SYNC_RECONCILE_BATCH_SIZE = "dt.assessment-sync.reconcile.batch-size";
     public static final String ASSESSMENT_SYNC_WORKFLOW_MAX_BATCHES = "dt.assessment-sync.workflow.max-batches";
-    public static final String ASSESSMENT_SYNC_VERIFY_CRON = "dt.assessment-sync.verify.cron";
+    public static final String ASSESSMENT_SYNC_MAINTENANCE_CRON = "dt.assessment-sync.maintenance.cron";
 
     public static final String TELEMETRY_SUBMISSION_DEFAULT_ENABLED = "dt.telemetry.submission.default-enabled";
 

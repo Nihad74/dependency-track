@@ -47,18 +47,13 @@ public final class MaintainAssessmentProjectionsWorkflow implements Workflow<Mai
 
     /// Instance id and concurrency key for one maintenance operation.
     public static String instanceId(final AssessmentMaintenanceOperation operation) {
-        return "assessment-maintenance:" + operationName(operation);
+        return "assessment-maintenance:" + MaintenanceOperations.name(operation);
     }
 
     /// Daily run selected from the current mode. {@code OFF} starts nothing.
     public static @Nullable CreateWorkflowRunRequest<MaintainAssessmentProjectionsArg> scheduledRun() {
         final AssessmentMaintenanceOperation operation =
-                switch (AssessmentSyncMode.current()) {
-                    case CAPTURE -> AssessmentMaintenanceOperation.ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP;
-                    case ACTIVE -> AssessmentMaintenanceOperation.ASSESSMENT_MAINTENANCE_OPERATION_VERIFY;
-                    case WITHDRAW -> AssessmentMaintenanceOperation.ASSESSMENT_MAINTENANCE_OPERATION_WITHDRAW;
-                    case OFF -> null;
-                };
+                MaintenanceOperations.scheduledFor(AssessmentSyncMode.current());
         if (operation == null) {
             return null;
         }
@@ -71,21 +66,11 @@ public final class MaintainAssessmentProjectionsWorkflow implements Workflow<Mai
                         .build());
     }
 
-    static String operationName(final AssessmentMaintenanceOperation operation) {
-        return switch (operation) {
-            case ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP -> "BOOTSTRAP";
-            case ASSESSMENT_MAINTENANCE_OPERATION_VERIFY -> "VERIFY";
-            case ASSESSMENT_MAINTENANCE_OPERATION_WITHDRAW -> "WITHDRAW";
-            case ASSESSMENT_MAINTENANCE_OPERATION_UNSPECIFIED, UNRECOGNIZED ->
-                throw new IllegalArgumentException("operation must be BOOTSTRAP, VERIFY, or WITHDRAW");
-        };
-    }
-
     @Override
     public @Nullable Void execute(
             final WorkflowContext<MaintainAssessmentProjectionsArg> ctx,
             final @Nullable MaintainAssessmentProjectionsArg argument) {
-        requireOperation(argument);
+        MaintenanceOperations.require(argument);
         final MaintainAssessmentProjectionsArg initial = requireNonNull(argument);
         final int maxBatches = AssessmentSyncArguments.maxBatches(ctx);
 
@@ -121,17 +106,6 @@ public final class MaintainAssessmentProjectionsWorkflow implements Workflow<Mai
                 ctx.continueAsNew(new ContinueAsNewOptions<MaintainAssessmentProjectionsArg>().withArgument(current));
                 return null;
             }
-        }
-    }
-
-    private static void requireOperation(final @Nullable MaintainAssessmentProjectionsArg argument) {
-        if (argument == null) {
-            throw new TerminalApplicationFailureException("operation must be BOOTSTRAP, VERIFY, or WITHDRAW");
-        }
-        try {
-            operationName(argument.getOperation());
-        } catch (IllegalArgumentException e) {
-            throw new TerminalApplicationFailureException("operation must be BOOTSTRAP, VERIFY, or WITHDRAW", e);
         }
     }
 }

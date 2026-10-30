@@ -18,7 +18,9 @@
  */
 package org.dependencytrack.assessmentsync;
 
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.Meter.MeterProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +45,13 @@ public final class AssessmentSyncMetrics {
     private static final String MODE_TAG = "mode";
 
     private AssessmentSyncMetrics() {}
+
+    /// Findings verification found out of line with current source consensus, tagged by operation.
+    public static MeterProvider<Counter> driftCounter(final MeterRegistry registry) {
+        return Counter.builder(DRIFT)
+                .description("Findings whose maintained projection differed from current source consensus")
+                .withRegistry(registry);
+    }
 
     /// Registers gauges on {@code registry}. A second call with the same registry does nothing.
     public static void bind(final MeterRegistry registry) {

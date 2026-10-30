@@ -48,7 +48,7 @@ Turning `access-management` / `acl.enabled` on or off queues a full pass for eve
 
 ## Repair
 
-The maintenance task runs on `dt.assessment-sync.verify.cron` (default `0 3 * * *`, UTC). What it does depends on the mode: `CAPTURE` runs backfill, `ACTIVE` runs verification, and `WITHDRAW` runs withdrawal. Nothing starts when the mode changes; the next scheduled run picks up the new mode.
+The maintenance task runs on `dt.assessment-sync.maintenance.cron` (default `0 3 * * *`, UTC). What it does depends on the mode: `CAPTURE` runs backfill, `ACTIVE` runs verification, and `WITHDRAW` runs withdrawal. Nothing starts when the mode changes; the next scheduled run picks up the new mode.
 
 Verification rebuilds each project's embedding index, compares findings with the same match, consensus, and diff as reconciliation, and enqueues a full target pass when the stored projection differs. It does not promote a row to `INHERITED` and it does not reset local ownership. An analysis with no origin stays protected.
 
