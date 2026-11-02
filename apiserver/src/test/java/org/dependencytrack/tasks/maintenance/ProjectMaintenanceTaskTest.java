@@ -212,13 +212,13 @@ class ProjectMaintenanceTaskTest extends PersistenceCapableTest {
 
     @Test
     void retentionDeleteRecordsDescendant() {
-        qm.createConfigProperty(
+        createConfigProperty(
                 MAINTENANCE_PROJECTS_RETENTION_TYPE.getGroupName(),
                 MAINTENANCE_PROJECTS_RETENTION_TYPE.getPropertyName(),
                 "AGE",
                 MAINTENANCE_PROJECTS_RETENTION_TYPE.getPropertyType(),
                 MAINTENANCE_PROJECTS_RETENTION_TYPE.getDescription());
-        qm.createConfigProperty(
+        createConfigProperty(
                 MAINTENANCE_PROJECTS_RETENTION_DAYS.getGroupName(),
                 MAINTENANCE_PROJECTS_RETENTION_DAYS.getPropertyName(),
                 MAINTENANCE_PROJECTS_RETENTION_DAYS.getDefaultPropertyValue(),

@@ -34,7 +34,6 @@ import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.common.ConfigKeys;
-import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.persistence.DatabaseSeedingInitTask;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;

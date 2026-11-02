@@ -39,8 +39,8 @@ import org.dependencytrack.persistence.jdbi.ConfigPropertyDao.ConfigPropertyRow;
 import org.dependencytrack.resources.v1.vo.ConfigPropertyResponse;
 import org.dependencytrack.resources.v1.vo.UpdateConfigPropertyRequest;
 import org.dependencytrack.secret.management.SecretManager;
-
 import org.jspecify.annotations.Nullable;
+
 import jakarta.inject.Inject;
 import jakarta.validation.Validator;
 import jakarta.ws.rs.ClientErrorException;
@@ -275,7 +275,8 @@ public class ConfigPropertyResource extends AbstractConfigPropertyResource {
             return e.getResponse();
         }
 
-        final boolean aclBefore = isAclEnabledValue(property.groupName(), property.propertyName(), property.propertyValue());
+        final boolean aclBefore =
+                isAclEnabledValue(property.groupName(), property.propertyName(), property.propertyValue());
         dao.setValue(property.groupName(), property.propertyName(), value);
         if (aclBefore != isAclEnabledValue(property.groupName(), property.propertyName(), value)) {
             // Source eligibility depends on portfolio access control (ADR 044).

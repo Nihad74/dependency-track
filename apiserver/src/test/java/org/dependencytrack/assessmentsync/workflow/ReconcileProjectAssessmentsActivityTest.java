@@ -46,9 +46,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-import static org.dependencytrack.persistence.jdbi.ConfigPropertyTestUtil.createConfigProperty;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.dependencytrack.persistence.jdbi.ConfigPropertyTestUtil.createConfigProperty;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
