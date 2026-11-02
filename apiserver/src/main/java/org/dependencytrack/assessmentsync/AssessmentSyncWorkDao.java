@@ -24,6 +24,7 @@ import org.jdbi.v3.core.mapper.RowMapper;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -93,6 +94,108 @@ public final class AssessmentSyncWorkDao {
                 .bind("targetUuid", targetUuid)
                 .mapTo(long.class)
                 .one();
+    }
+
+    /// {@link #requestFull(UUID)} for many targets in one statement. Rows are locked in UUID order.
+    public void requestFull(final Collection<UUID> targetUuids) {
+        requireTransaction(handle);
+        if (targetUuids.isEmpty()) {
+            return;
+        }
+        handle.createUpdate(/* language=SQL */ """
+                        INSERT INTO "ASSESSMENT_SYNC_WORK" (
+                          "TARGET_UUID"
+                        , "REQUESTED_REVISION"
+                        , "FULL_REVISION"
+                        , "NEXT_DISPATCH_AT"
+                        , "PENDING_SINCE"
+                        )
+                        SELECT DISTINCT t.target_uuid
+                             , 1
+                             , 1
+                             , date_trunc('milliseconds', clock_timestamp())
+                             , date_trunc('milliseconds', clock_timestamp())
+                          FROM UNNEST(:targetUuids) AS t(target_uuid)
+                         ORDER BY t.target_uuid
+                        ON CONFLICT ("TARGET_UUID") DO UPDATE
+                        SET "REQUESTED_REVISION" = "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
+                          , "FULL_REVISION" = "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
+                          , "NEXT_DISPATCH_AT" = date_trunc('milliseconds', clock_timestamp())
+                          , "PENDING_SINCE" = COALESCE(
+                              "ASSESSMENT_SYNC_WORK"."PENDING_SINCE"
+                            , date_trunc('milliseconds', clock_timestamp())
+                            )
+                        """)
+                .bind("targetUuids", targetUuids.toArray(UUID[]::new))
+                .execute();
+    }
+
+    /// {@link #requestFindings(UUID, Collection)} for many targets in one statement. Each target's keys are
+    /// stored at that target's new revision. Rows are locked in UUID order.
+    public void requestFindings(final Map<UUID, ? extends Collection<FindingKey>> keysByTarget) {
+        requireTransaction(handle);
+        if (keysByTarget.isEmpty()) {
+            return;
+        }
+        final var keyTargets = new ArrayList<UUID>();
+        final var componentIds = new ArrayList<Long>();
+        final var vulnerabilityIds = new ArrayList<Long>();
+        for (final var entry : keysByTarget.entrySet()) {
+            for (final FindingKey key : dedupe(entry.getValue())) {
+                keyTargets.add(entry.getKey());
+                componentIds.add(key.componentId());
+                vulnerabilityIds.add(key.vulnDbId());
+            }
+        }
+        handle.createUpdate(/* language=SQL */ """
+                        WITH requested AS (
+                          INSERT INTO "ASSESSMENT_SYNC_WORK" (
+                            "TARGET_UUID"
+                          , "REQUESTED_REVISION"
+                          , "NEXT_DISPATCH_AT"
+                          , "PENDING_SINCE"
+                          )
+                          SELECT DISTINCT t.target_uuid
+                               , 1
+                               , date_trunc('milliseconds', clock_timestamp())
+                               , date_trunc('milliseconds', clock_timestamp())
+                            FROM UNNEST(:targetUuids) AS t(target_uuid)
+                           ORDER BY t.target_uuid
+                          ON CONFLICT ("TARGET_UUID") DO UPDATE
+                          SET "REQUESTED_REVISION" = "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
+                            , "NEXT_DISPATCH_AT" = date_trunc('milliseconds', clock_timestamp())
+                            , "PENDING_SINCE" = COALESCE(
+                                "ASSESSMENT_SYNC_WORK"."PENDING_SINCE"
+                              , date_trunc('milliseconds', clock_timestamp())
+                              )
+                          RETURNING "TARGET_UUID", "REQUESTED_REVISION"
+                        )
+                        INSERT INTO "ASSESSMENT_SYNC_FINDING" (
+                          "TARGET_UUID"
+                        , "COMPONENT_ID"
+                        , "VULNERABILITY_ID"
+                        , "REVISION"
+                        )
+                        SELECT k.target_uuid
+                             , k.component_id
+                             , k.vulnerability_id
+                             , requested."REQUESTED_REVISION"
+                          FROM UNNEST(:keyTargets, :componentIds, :vulnerabilityIds)
+                            AS k(target_uuid, component_id, vulnerability_id)
+                         INNER JOIN requested
+                            ON requested."TARGET_UUID" = k.target_uuid
+                        ON CONFLICT ("TARGET_UUID", "COMPONENT_ID", "VULNERABILITY_ID") DO UPDATE
+                        SET "REVISION" = GREATEST("ASSESSMENT_SYNC_FINDING"."REVISION", EXCLUDED."REVISION")
+                        """)
+                .bind("targetUuids", keysByTarget.keySet().toArray(UUID[]::new))
+                .bind("keyTargets", keyTargets.toArray(UUID[]::new))
+                .bind(
+                        "componentIds",
+                        componentIds.stream().mapToLong(Long::longValue).toArray())
+                .bind(
+                        "vulnerabilityIds",
+                        vulnerabilityIds.stream().mapToLong(Long::longValue).toArray())
+                .execute();
     }
 
     /// Allocates the next revision and upserts finding keys at that revision.

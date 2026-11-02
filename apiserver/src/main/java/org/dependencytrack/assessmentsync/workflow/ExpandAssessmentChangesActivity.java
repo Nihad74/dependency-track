@@ -20,7 +20,6 @@ package org.dependencytrack.assessmentsync.workflow;
 
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.dependencytrack.assessmentsync.AssessmentSyncFanoutDao;
-import org.dependencytrack.assessmentsync.AssessmentSyncFanoutDao.TargetFinding;
 import org.dependencytrack.assessmentsync.AssessmentSyncOutboxDao;
 import org.dependencytrack.assessmentsync.AssessmentSyncOutboxDao.OutboxEntry;
 import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao;
@@ -36,6 +35,7 @@ import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
@@ -95,17 +95,44 @@ public final class ExpandAssessmentChangesActivity
         }
 
         final var fanoutDao = new AssessmentSyncFanoutDao(handle);
+        final var workDao = new AssessmentSyncWorkDao(handle);
         final int fetchLimit = fanoutBatchSize + 1;
-        final List<UUID> fetched =
-                switch (entry.change().scope()) {
-                    case PROJECT -> fanoutDao.pageProjectTargets(entry.id(), fetchLimit);
-                    case FINDING -> fanoutDao.pageFindingTargets(entry.id(), fetchLimit);
-                };
-        final boolean hasMore = fetched.size() > fanoutBatchSize;
-        final List<UUID> page = hasMore ? fetched.subList(0, fanoutBatchSize) : fetched;
-        final int targetsRequested = schedule(handle, fanoutDao, entry, page);
+        final boolean hasMore;
+        final UUID last;
+        final int targetsRequested;
+        if (entry.change().scope() == Scope.PROJECT) {
+            final List<UUID> fetched = fanoutDao.pageProjectTargets(entry.id(), fetchLimit);
+            hasMore = fetched.size() > fanoutBatchSize;
+            final List<UUID> page = hasMore ? fetched.subList(0, fanoutBatchSize) : fetched;
+            workDao.requestFull(page);
+            last = page.isEmpty() ? null : page.getLast();
+            targetsRequested = page.size();
+        } else {
+            final Map<UUID, List<FindingKey>> fetched =
+                    fanoutDao.pageFindingTargets(entry.id(), fetchLimit, reconcileBatchSize + 1);
+            hasMore = fetched.size() > fanoutBatchSize;
+            final var full = new ArrayList<UUID>();
+            final var findings = new LinkedHashMap<UUID, List<FindingKey>>();
+            UUID lastOnPage = null;
+            for (final var target : fetched.entrySet()) {
+                if (full.size() + findings.size() == fanoutBatchSize) {
+                    break;
+                }
+                // More keys than one reconcile batch: a full pass is cheaper than paging the keys.
+                if (target.getValue().size() > reconcileBatchSize) {
+                    full.add(target.getKey());
+                } else {
+                    findings.put(target.getKey(), target.getValue());
+                }
+                lastOnPage = target.getKey();
+            }
+            workDao.requestFull(full);
+            workDao.requestFindings(findings);
+            last = lastOnPage;
+            targetsRequested = full.size() + findings.size();
+        }
         if (hasMore) {
-            outboxDao.updateFanoutCursor(entry.id(), page.getLast());
+            outboxDao.updateFanoutCursor(entry.id(), requireNonNull(last));
         } else {
             outboxDao.deleteFinished(entry.id());
         }
@@ -114,47 +141,5 @@ public final class ExpandAssessmentChangesActivity
                 .setTargetsRequested(targetsRequested)
                 .setAlreadyCompleted(false)
                 .build();
-    }
-
-    private int schedule(
-            final Handle handle,
-            final AssessmentSyncFanoutDao fanoutDao,
-            final OutboxEntry entry,
-            final List<UUID> page) {
-        if (page.isEmpty()) {
-            return 0;
-        }
-        final var workDao = new AssessmentSyncWorkDao(handle);
-        if (entry.change().scope() == Scope.PROJECT) {
-            for (final UUID targetUuid : page) {
-                workDao.requestFull(targetUuid);
-            }
-            return page.size();
-        }
-
-        final var keysByTarget = new LinkedHashMap<UUID, List<FindingKey>>();
-        for (final UUID targetUuid : page) {
-            keysByTarget.put(targetUuid, new ArrayList<>());
-        }
-        for (final TargetFinding finding : fanoutDao.findingKeys(entry.id(), page, reconcileBatchSize + 1)) {
-            final List<FindingKey> keys = keysByTarget.get(finding.targetUuid());
-            if (keys != null) {
-                keys.add(new FindingKey(finding.componentId(), finding.vulnerabilityId()));
-            }
-        }
-        var requested = 0;
-        for (final var target : keysByTarget.entrySet()) {
-            final List<FindingKey> keys = target.getValue();
-            if (keys.isEmpty()) {
-                continue;
-            }
-            if (keys.size() > reconcileBatchSize) {
-                workDao.requestFull(target.getKey());
-            } else {
-                workDao.requestFindings(target.getKey(), keys);
-            }
-            requested++;
-        }
-        return requested;
     }
 }
