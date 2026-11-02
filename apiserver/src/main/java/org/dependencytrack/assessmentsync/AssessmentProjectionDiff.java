@@ -53,8 +53,6 @@ public final class AssessmentProjectionDiff {
         return new Change(
                 AssessmentOwnership.INHERITED,
                 agreed.decision(),
-                null,
-                null,
                 agreed.contributors(),
                 null,
                 machineChanged,
@@ -68,8 +66,6 @@ public final class AssessmentProjectionDiff {
         return new Change(
                 AssessmentOwnership.NEUTRAL,
                 AssessmentDecision.neutral(),
-                null,
-                null,
                 List.of(),
                 reason,
                 true,
@@ -84,8 +80,6 @@ public final class AssessmentProjectionDiff {
         return new Change(
                 current.origin(),
                 current.decision(),
-                current.details(),
-                current.policyId(),
                 current.contributors(),
                 reason,
                 machineChanged,
@@ -115,8 +109,6 @@ public final class AssessmentProjectionDiff {
     public record Change(
             @Nullable AssessmentOwnership origin,
             AssessmentDecision decision,
-            @Nullable String details,
-            @Nullable Long policyId,
             List<Contributor> contributors,
             @Nullable AssessmentReason reason,
             boolean machineChanged,
