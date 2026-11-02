@@ -31,6 +31,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -139,6 +140,40 @@ class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
     private static Instant nextDispatchAt(final UUID targetUuid) {
         return requireNonNull(withJdbiHandle(handle -> new AssessmentSyncWorkDao(handle).find(targetUuid)))
                 .nextDispatchAt();
+    }
+
+    @Test
+    void shouldRequestManyTargetsInOneCallAtEachTargetsOwnRevision() {
+        final UUID busy = UUID.fromString("40000000-0000-4000-8000-00000000000b");
+        final UUID idle = UUID.fromString("40000000-0000-4000-8000-00000000000c");
+        final UUID fresh = UUID.fromString("40000000-0000-4000-8000-00000000000d");
+        useJdbiTransaction(handle -> {
+            final var dao = new AssessmentSyncWorkDao(handle);
+            dao.requestFull(busy);
+            dao.requestFull(busy);
+        });
+
+        useJdbiTransaction(handle -> {
+            final var dao = new AssessmentSyncWorkDao(handle);
+            dao.requestFindings(Map.of(
+                    busy, List.of(new FindingKey(1, 2)),
+                    idle, List.of(new FindingKey(3, 4), new FindingKey(5, 6))));
+            dao.requestFull(List.of(fresh, busy));
+        });
+
+        final List<PendingFinding> busyFindings =
+                withJdbiHandle(handle -> new AssessmentSyncWorkDao(handle).pendingFindings(busy));
+        assertThat(busyFindings).containsExactly(new PendingFinding(1, 2, 3));
+        final List<PendingFinding> idleFindings =
+                withJdbiHandle(handle -> new AssessmentSyncWorkDao(handle).pendingFindings(idle));
+        assertThat(idleFindings).containsExactly(new PendingFinding(3, 4, 1), new PendingFinding(5, 6, 1));
+        final WorkRow busyRow = requireNonNull(withJdbiHandle(handle -> new AssessmentSyncWorkDao(handle).find(busy)));
+        assertThat(busyRow.requestedRevision()).isEqualTo(4);
+        assertThat(busyRow.fullRevision()).isEqualTo(4);
+        final WorkRow freshRow =
+                requireNonNull(withJdbiHandle(handle -> new AssessmentSyncWorkDao(handle).find(fresh)));
+        assertThat(freshRow.requestedRevision()).isEqualTo(1);
+        assertThat(freshRow.fullRevision()).isEqualTo(1);
     }
 
     private static @Nullable OffsetDateTime pendingSince(final UUID targetUuid) {

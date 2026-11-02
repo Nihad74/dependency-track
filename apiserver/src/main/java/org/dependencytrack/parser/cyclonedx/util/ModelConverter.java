@@ -41,7 +41,6 @@ import org.cyclonedx.model.license.Expression;
 import org.cyclonedx.model.license.ExpressionDetailed;
 import org.cyclonedx.model.metadata.ToolInformation;
 import org.dependencytrack.assessmentsync.AssessmentTrailAssembler;
-import org.dependencytrack.assessmentsync.AssessmentTrailAssembler.SourceAssessment;
 import org.dependencytrack.assessmentsync.AssessmentTrailAssembler.Trail;
 import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisJustification;
@@ -88,7 +87,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -1225,7 +1223,7 @@ public class ModelConverter {
             if (!explanation.sources().isEmpty()) {
                 final var properties =
                         new ArrayList<Property>(explanation.sources().size());
-                for (final SourceAttribution source : explanation.sources()) {
+                for (final ExportedExplanation.SourceAttribution source : explanation.sources()) {
                     final var property = new Property();
                     property.setName(ASSESSMENT_SOURCE_PROPERTY);
                     property.setValue(source.label());
@@ -1504,7 +1502,7 @@ public class ModelConverter {
         final Map<Long, Trail> trails = emitsAnalysis ? sourceTrails(qm, resolved) : Map.of();
         final var groups = new LinkedHashMap<VulnerabilityGroupKey, VulnerabilityGroup>();
         for (final ResolvedFinding row : resolved) {
-            final ExportedExplanation explanation = exportedExplanation(row.analysis(), trails);
+            final ExportedExplanation explanation = ExportedExplanation.of(row.analysis(), trails);
             groups.computeIfAbsent(
                             VulnerabilityGroupKey.of(row.vulnerability(), row.analysis(), explanation),
                             ignored -> new VulnerabilityGroup(
@@ -1517,51 +1515,6 @@ public class ModelConverter {
                 .map(group -> convert(
                         group.vulnerability(), group.analysis(), group.affectedComponentUuids(), group.explanation()))
                 .toList();
-    }
-
-    /// CycloneDX has one analysis.detail string. Copy source text only when every authorized source has
-    /// that same string, and name those sources. Differing or missing text is omitted.
-    private static ExportedExplanation exportedExplanation(
-            final @Nullable Analysis analysis, final Map<Long, Trail> trails) {
-        if (analysis == null) {
-            return ExportedExplanation.none();
-        }
-        final Trail trail = trails.get(analysis.getId());
-        final String local =
-                trail == null ? trimToNull(analysis.getAnalysisDetails()) : trimToNull(trail.localDetails());
-        if (local != null) {
-            return new ExportedExplanation(local, List.of());
-        }
-        if (trail == null || trail.sourceAssessments().isEmpty()) {
-            return ExportedExplanation.none();
-        }
-        final var sources = new ArrayList<SourceAttribution>();
-        for (final SourceAssessment source : trail.sourceAssessments()) {
-            final String text = trimToNull(source.sourceDetails());
-            if (text == null) {
-                return ExportedExplanation.none();
-            }
-            sources.add(new SourceAttribution(source.project().uuid(), sourceLabel(source), text));
-        }
-        final List<String> distinctTexts =
-                sources.stream().map(SourceAttribution::text).distinct().toList();
-        if (distinctTexts.size() != 1) {
-            return ExportedExplanation.none();
-        }
-        sources.sort(Comparator.comparing(SourceAttribution::projectUuid));
-        return new ExportedExplanation(distinctTexts.getFirst(), List.copyOf(sources));
-    }
-
-    private static String sourceLabel(final SourceAssessment source) {
-        return identityLabel(source.project().name(), source.project().version())
-                + " "
-                + identityLabel(source.component().name(), source.component().version())
-                + " "
-                + source.project().uuid();
-    }
-
-    private static String identityLabel(final String name, final @Nullable String version) {
-        return version == null || version.isBlank() ? name : name + "@" + version;
     }
 
     private static Map<Long, Trail> sourceTrails(final QueryManager qm, final List<ResolvedFinding> resolved) {
@@ -1586,19 +1539,6 @@ public class ModelConverter {
     private record ResolvedFinding(
             Vulnerability vulnerability, @Nullable Analysis analysis, String componentUuid) {}
 
-    private record SourceAttribution(UUID projectUuid, String label, String text) {}
-
-    private record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sources) {
-
-        private static ExportedExplanation none() {
-            return new ExportedExplanation(null, List.of());
-        }
-
-        private ExportedExplanation {
-            sources = List.copyOf(sources);
-        }
-    }
-
     private record VulnerabilityGroup(
             Vulnerability vulnerability,
             Analysis analysis,
@@ -1612,13 +1552,11 @@ public class ModelConverter {
             AnalysisJustification analysisJustification,
             AnalysisResponse analysisResponse,
             String analysisDetails,
-            String sourceProjects) {
+            List<UUID> sourceProjects) {
 
         private static VulnerabilityGroupKey of(
                 Vulnerability vulnerability, Analysis analysis, ExportedExplanation explanation) {
-            final String sourceProjects = explanation.sources().stream()
-                    .map(source -> source.projectUuid().toString())
-                    .collect(Collectors.joining(","));
+            final List<UUID> sourceProjects = explanation.sourceProjectUuids();
             if (analysis == null) {
                 return new VulnerabilityGroupKey(
                         vulnerability.getUuid(), false, null, null, null, explanation.detail(), sourceProjects);

@@ -18,9 +18,13 @@
  */
 package org.dependencytrack.assessmentsync;
 
+import org.dependencytrack.model.FindingKey;
 import org.jdbi.v3.core.Handle;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
@@ -207,36 +211,26 @@ public final class AssessmentSyncFanoutDao {
                 .list();
     }
 
-    /// Next finding-scope targets that have at least one matching key.
-    public List<UUID> pageFindingTargets(final long outboxId, final int limit) {
+    /// Next finding-scope targets after the row's stored cursor, in UUID order, each with at most
+    /// {@code limitPerTarget} matching keys in component/vulnerability order. One evaluation of the key query
+    /// serves both the page and its keys.
+    public LinkedHashMap<UUID, List<FindingKey>> pageFindingTargets(
+            final long outboxId, final int limit, final int limitPerTarget) {
         requirePositive(limit, "limit");
+        requirePositive(limitPerTarget, "limitPerTarget");
         requireTransaction(handle);
-        return handle.createQuery("WITH\n" + EVENT + ",\n" + FINDING_KEYS + """
-                        SELECT finding_key.target_uuid AS "TARGET_UUID"
-                          FROM finding_key
-                         CROSS JOIN event
-                         WHERE event.cursor_uuid IS NULL
-                            OR finding_key.target_uuid > event.cursor_uuid
-                         GROUP BY finding_key.target_uuid
-                         ORDER BY finding_key.target_uuid
-                         LIMIT :limit
-                        """)
-                .bind("outboxId", outboxId)
-                .bind("limit", limit)
-                .map((rs, ctx) -> rs.getObject("TARGET_UUID", UUID.class))
-                .list();
-    }
-
-    /// At most {@code limitPerTarget} keys for each requested target, in component/vulnerability order.
-    public List<TargetFinding> findingKeys(
-            final long outboxId, final List<UUID> targetUuids, final int limitPerTarget) {
-        requireNonNull(targetUuids, "targetUuids must not be null");
-        requirePositive(limitPerTarget, "limit");
-        requireTransaction(handle);
-        if (targetUuids.isEmpty()) {
-            return List.of();
-        }
-        return handle.createQuery("WITH\n" + EVENT + ",\n" + FINDING_KEYS + """
+        final var keysByTarget = new LinkedHashMap<UUID, List<FindingKey>>();
+        handle.createQuery("WITH\n" + EVENT + ",\n" + FINDING_KEYS + """
+                        , page AS (
+                          SELECT finding_key.target_uuid
+                            FROM finding_key
+                           CROSS JOIN event
+                           WHERE event.cursor_uuid IS NULL
+                              OR finding_key.target_uuid > event.cursor_uuid
+                           GROUP BY finding_key.target_uuid
+                           ORDER BY finding_key.target_uuid
+                           LIMIT :limit
+                        )
                         , ranked AS (
                           SELECT finding_key.target_uuid
                                , finding_key.component_id
@@ -246,7 +240,7 @@ public final class AssessmentSyncFanoutDao {
                                    ORDER BY finding_key.component_id, finding_key.vulnerability_id
                                  ) AS rn
                             FROM finding_key
-                            JOIN UNNEST(:targetUuids) AS page(target_uuid)
+                            JOIN page
                               ON page.target_uuid = finding_key.target_uuid
                         )
                         SELECT ranked.target_uuid AS "TARGET_UUID"
@@ -257,23 +251,14 @@ public final class AssessmentSyncFanoutDao {
                          ORDER BY ranked.target_uuid, ranked.component_id, ranked.vulnerability_id
                         """)
                 .bind("outboxId", outboxId)
-                .bind("targetUuids", targetUuids.toArray(UUID[]::new))
+                .bind("limit", limit)
                 .bind("limitPerTarget", limitPerTarget)
-                .map((rs, ctx) -> new TargetFinding(
+                .map((rs, ctx) -> Map.entry(
                         rs.getObject("TARGET_UUID", UUID.class),
-                        rs.getLong("COMPONENT_ID"),
-                        rs.getLong("VULNERABILITY_ID")))
-                .list();
-    }
-
-    /// One candidate finding on a target project.
-    public record TargetFinding(UUID targetUuid, long componentId, long vulnerabilityId) {
-
-        public TargetFinding {
-            requireNonNull(targetUuid, "targetUuid must not be null");
-            if (componentId <= 0 || vulnerabilityId <= 0) {
-                throw new IllegalArgumentException("component and vulnerability ids must be positive");
-            }
-        }
+                        new FindingKey(rs.getLong("COMPONENT_ID"), rs.getLong("VULNERABILITY_ID"))))
+                .forEach(entry -> keysByTarget
+                        .computeIfAbsent(entry.getKey(), ignored -> new ArrayList<>())
+                        .add(entry.getValue()));
+        return keysByTarget;
     }
 }
