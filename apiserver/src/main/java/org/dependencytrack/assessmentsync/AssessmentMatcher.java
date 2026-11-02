@@ -54,9 +54,10 @@ public final class AssessmentMatcher {
         Objects.requireNonNull(target, "target must not be null");
         Objects.requireNonNull(sourceCandidates, "sourceCandidates must not be null");
 
+        final TargetKey key = TargetKey.of(target);
         final var byComponent = new LinkedHashMap<UUID, Classified>();
-        for (final ParsedCandidate candidate : sourceCandidates.comparableTo(target)) {
-            final Classified classified = classify(target, candidate);
+        for (final ParsedCandidate candidate : sourceCandidates.comparableTo(key)) {
+            final Classified classified = classify(target, key, candidate);
             if (classified.relation() == Relation.IGNORE) {
                 continue;
             }
@@ -106,9 +107,10 @@ public final class AssessmentMatcher {
         return new VulnerabilityMatch.Same();
     }
 
-    private static Classified classify(final ComponentIdentity target, final ParsedCandidate candidate) {
+    private static Classified classify(
+            final ComponentIdentity target, final TargetKey key, final ParsedCandidate candidate) {
         final ComponentIdentity other = candidate.identity();
-        final String targetPurl = canonicalVersionedPurl(target.purl());
+        final String targetPurl = key.canonicalPurl();
         final boolean hashConflict = hashesConflict(target, other);
 
         if (targetPurl != null) {
@@ -123,7 +125,7 @@ public final class AssessmentMatcher {
             return new Classified(other, Relation.IGNORE);
         }
 
-        final Cpe targetCpe = concreteCpe(target.cpe());
+        final Cpe targetCpe = key.concreteCpe();
         if (targetCpe == null || !targetCpe.equals(candidate.concreteCpe())) {
             return new Classified(other, Relation.IGNORE);
         }
@@ -171,8 +173,7 @@ public final class AssessmentMatcher {
         return false;
     }
 
-    private static @Nullable String canonicalVersionedPurl(final @Nullable String purl) {
-        final PackageURL parsed = parsePurl(purl);
+    private static @Nullable String canonicalVersioned(final @Nullable PackageURL parsed) {
         if (parsed == null) {
             return null;
         }
@@ -190,13 +191,9 @@ public final class AssessmentMatcher {
         try {
             return new PackageURL(purl);
         } catch (MalformedPackageURLException e) {
-            return unrecognizedPurl(e);
+            // An unparseable PURL is no identity; the target or candidate then cannot match on it.
+            return null;
         }
-    }
-
-    private static @Nullable PackageURL unrecognizedPurl(final MalformedPackageURLException exception) {
-        Objects.requireNonNull(exception);
-        return null;
     }
 
     private static @Nullable Cpe concreteCpe(final @Nullable String cpe) {
@@ -225,13 +222,9 @@ public final class AssessmentMatcher {
         try {
             return CpeParser.parse(cpe);
         } catch (CpeParsingException e) {
-            return unrecognizedCpe(e);
+            // An unparseable CPE is no identity, as for an unparseable PURL.
+            return null;
         }
-    }
-
-    private static @Nullable Cpe unrecognizedCpe(final CpeParsingException exception) {
-        Objects.requireNonNull(exception);
-        return null;
     }
 
     /// Identity facts used for exact matching. Hashes are keyed by algorithm.
@@ -328,11 +321,9 @@ public final class AssessmentMatcher {
             final var byCpe = new HashMap<Cpe, List<ParsedCandidate>>();
             for (final ComponentIdentity identity : identities) {
                 Objects.requireNonNull(identity, "source candidate must not be null");
+                final PackageURL purl = parsePurl(identity.purl());
                 final var candidate = new ParsedCandidate(
-                        identity,
-                        canonicalVersionedPurl(identity.purl()),
-                        concreteCpe(identity.cpe()),
-                        parsePurl(identity.purl()) != null);
+                        identity, canonicalVersioned(purl), concreteCpe(identity.cpe()), purl != null);
                 if (candidate.canonicalPurl() != null) {
                     byPurl.computeIfAbsent(candidate.canonicalPurl(), ignored -> new ArrayList<>())
                             .add(candidate);
@@ -346,13 +337,22 @@ public final class AssessmentMatcher {
         }
 
         /// The only candidates {@code classify} does not ignore for this target.
-        private List<ParsedCandidate> comparableTo(final ComponentIdentity target) {
-            final String targetPurl = canonicalVersionedPurl(target.purl());
-            if (targetPurl != null) {
-                return byPurl.getOrDefault(targetPurl, List.of());
+        private List<ParsedCandidate> comparableTo(final TargetKey key) {
+            if (key.canonicalPurl() != null) {
+                return byPurl.getOrDefault(key.canonicalPurl(), List.of());
             }
-            final Cpe targetCpe = concreteCpe(target.cpe());
+            final Cpe targetCpe = key.concreteCpe();
             return targetCpe == null ? List.of() : byCpe.getOrDefault(targetCpe, List.of());
+        }
+    }
+
+    /// The target's identity, parsed once per match.
+    private record TargetKey(
+            @Nullable String canonicalPurl, @Nullable Cpe concreteCpe) {
+
+        private static TargetKey of(final ComponentIdentity target) {
+            return new TargetKey(
+                    canonicalVersioned(parsePurl(target.purl())), AssessmentMatcher.concreteCpe(target.cpe()));
         }
     }
 

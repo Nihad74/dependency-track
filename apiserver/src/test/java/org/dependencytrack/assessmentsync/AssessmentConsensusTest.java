@@ -71,8 +71,7 @@ class AssessmentConsensusTest {
 
     @Test
     void shouldAgreeOnASingleSource() {
-        final Result result = AssessmentConsensus.resolve(
-                List.of(source(FIRST, AssessmentOwnership.LOCAL, BASE, "kernel package is not affected")));
+        final Result result = AssessmentConsensus.resolve(List.of(source(FIRST, AssessmentOwnership.LOCAL, BASE)));
 
         assertThat(result).isInstanceOfSatisfying(Agreed.class, agreed -> {
             assertThat(agreed.decision()).isEqualTo(BASE);
@@ -82,10 +81,9 @@ class AssessmentConsensusTest {
     }
 
     @Test
-    void shouldAgreeWhenExplanationsDiffer() {
+    void shouldAgreeAcrossOwnersWithTheSameDecision() {
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(FIRST, AssessmentOwnership.LOCAL, BASE, "kernel package is not affected in this build"),
-                source(SECOND, AssessmentOwnership.POLICY, BASE, "not reachable from the product entry point")));
+                source(FIRST, AssessmentOwnership.LOCAL, BASE), source(SECOND, AssessmentOwnership.POLICY, BASE)));
 
         assertThat(result).isInstanceOfSatisfying(Agreed.class, agreed -> {
             assertThat(agreed.decision()).isEqualTo(BASE);
@@ -128,8 +126,7 @@ class AssessmentConsensusTest {
         assertThat(absent).isNotEqualTo(explicit);
 
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(FIRST, AssessmentOwnership.LOCAL, absent, "no override"),
-                source(SECOND, AssessmentOwnership.LOCAL, explicit, "explicit unassigned")));
+                source(FIRST, AssessmentOwnership.LOCAL, absent), source(SECOND, AssessmentOwnership.LOCAL, explicit)));
 
         assertThat(result)
                 .isInstanceOfSatisfying(
@@ -208,8 +205,8 @@ class AssessmentConsensusTest {
         assertThat(scaleOne.owaspScore()).isEqualByComparingTo("1.00");
 
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(SECOND, AssessmentOwnership.LOCAL, scaleTwo, "scale two"),
-                source(FIRST, AssessmentOwnership.LOCAL, scaleOne, "scale one")));
+                source(SECOND, AssessmentOwnership.LOCAL, scaleTwo),
+                source(FIRST, AssessmentOwnership.LOCAL, scaleOne)));
 
         assertThat(result).isInstanceOfSatisfying(Agreed.class, agreed -> {
             assertThat(agreed.decision().cvssV2Score()).isEqualByComparingTo(new BigDecimal("1.00"));
@@ -244,8 +241,8 @@ class AssessmentConsensusTest {
         assertThat(missing).isEqualTo(explicit);
 
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(FIRST, AssessmentOwnership.LOCAL, missing, "omitted"),
-                source(SECOND, AssessmentOwnership.LOCAL, explicit, "explicit not set")));
+                source(FIRST, AssessmentOwnership.LOCAL, missing),
+                source(SECOND, AssessmentOwnership.LOCAL, explicit)));
 
         assertThat(result).isInstanceOfSatisfying(Agreed.class, agreed -> {
             assertThat(agreed.decision().justification()).isEqualTo(AnalysisJustification.NOT_SET);
@@ -278,10 +275,10 @@ class AssessmentConsensusTest {
                 1L);
 
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(byProject, AssessmentOwnership.LOCAL, BASE, "project"),
-                source(byComponent, AssessmentOwnership.LOCAL, BASE, "component"),
-                source(byVulnerability, AssessmentOwnership.LOCAL, BASE, "vulnerability"),
-                source(byAnalysis, AssessmentOwnership.LOCAL, BASE, "analysis")));
+                source(byProject, AssessmentOwnership.LOCAL, BASE),
+                source(byComponent, AssessmentOwnership.LOCAL, BASE),
+                source(byVulnerability, AssessmentOwnership.LOCAL, BASE),
+                source(byAnalysis, AssessmentOwnership.LOCAL, BASE)));
 
         assertThat(result)
                 .isInstanceOfSatisfying(
@@ -293,10 +290,8 @@ class AssessmentConsensusTest {
     @Test
     void shouldKeepAgreementWhenOneOfTwoContributorsIsRemoved() {
         final Result both = AssessmentConsensus.resolve(List.of(
-                source(FIRST, AssessmentOwnership.LOCAL, BASE, "first"),
-                source(SECOND, AssessmentOwnership.POLICY, BASE, "second")));
-        final Result remaining =
-                AssessmentConsensus.resolve(List.of(source(SECOND, AssessmentOwnership.POLICY, BASE, "second")));
+                source(FIRST, AssessmentOwnership.LOCAL, BASE), source(SECOND, AssessmentOwnership.POLICY, BASE)));
+        final Result remaining = AssessmentConsensus.resolve(List.of(source(SECOND, AssessmentOwnership.POLICY, BASE)));
 
         assertThat(both).isInstanceOfSatisfying(Agreed.class, agreed -> {
             assertThat(agreed.decision()).isEqualTo(BASE);
@@ -322,9 +317,9 @@ class AssessmentConsensusTest {
     void shouldIgnoreInheritedAndNeutralRows() {
         final AssessmentDecision inheritedDecision = withState(AnalysisState.EXPLOITABLE);
         final AssessmentDecision neutralDecision = withState(AnalysisState.RESOLVED);
-        final SourceAssessment inherited = source(FIRST, AssessmentOwnership.INHERITED, inheritedDecision, "copied");
-        final SourceAssessment neutral = source(SECOND, AssessmentOwnership.NEUTRAL, neutralDecision, "cleared");
-        final SourceAssessment authored = source(THIRD, AssessmentOwnership.LOCAL, BASE, "product source");
+        final SourceAssessment inherited = source(FIRST, AssessmentOwnership.INHERITED, inheritedDecision);
+        final SourceAssessment neutral = source(SECOND, AssessmentOwnership.NEUTRAL, neutralDecision);
+        final SourceAssessment authored = source(THIRD, AssessmentOwnership.LOCAL, BASE);
 
         final Result withAuthor = AssessmentConsensus.resolve(List.of(inherited, neutral, authored));
         final Result withoutAuthor = AssessmentConsensus.resolve(List.of(inherited, neutral));
@@ -342,7 +337,7 @@ class AssessmentConsensusTest {
 
     @Test
     void shouldTreatLegacyNullOriginAsAuthored() {
-        final Result result = AssessmentConsensus.resolve(List.of(source(FIRST, null, BASE, "row has no sidecar")));
+        final Result result = AssessmentConsensus.resolve(List.of(source(FIRST, null, BASE)));
 
         assertThat(result).isInstanceOfSatisfying(Agreed.class, agreed -> {
             assertThat(agreed.decision()).isEqualTo(BASE);
@@ -353,8 +348,8 @@ class AssessmentConsensusTest {
     @Test
     void shouldNotSelectAWinnerOnConflict() {
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(SECOND, AssessmentOwnership.LOCAL, withState(AnalysisState.EXPLOITABLE), "second"),
-                source(FIRST, AssessmentOwnership.POLICY, BASE, "first")));
+                source(SECOND, AssessmentOwnership.LOCAL, withState(AnalysisState.EXPLOITABLE)),
+                source(FIRST, AssessmentOwnership.POLICY, BASE)));
 
         assertThat(result).isInstanceOf(Conflict.class).isNotInstanceOf(Agreed.class);
         assertThat(result)
@@ -366,8 +361,8 @@ class AssessmentConsensusTest {
     @Test
     void shouldIgnoreFindingWithoutAnAuthoredAssessment() {
         final Result result = AssessmentConsensus.resolve(List.of(
-                new SourceAssessment(FIRST, AssessmentOwnership.LOCAL, null, "matching finding, no analysis"),
-                source(SECOND, AssessmentOwnership.LOCAL, BASE, "authored")));
+                new SourceAssessment(FIRST, AssessmentOwnership.LOCAL, null),
+                source(SECOND, AssessmentOwnership.LOCAL, BASE)));
 
         assertThat(result).isInstanceOfSatisfying(Agreed.class, agreed -> {
             assertThat(agreed.decision()).isEqualTo(BASE);
@@ -378,10 +373,10 @@ class AssessmentConsensusTest {
     @Test
     void shouldNotLetANeutralSourceRowBlockAgreement() {
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(FIRST, AssessmentOwnership.LOCAL, AssessmentDecision.neutral(), "comment only"),
-                source(SECOND, AssessmentOwnership.LOCAL, BASE, "decided")));
+                source(FIRST, AssessmentOwnership.LOCAL, AssessmentDecision.neutral()),
+                source(SECOND, AssessmentOwnership.LOCAL, BASE)));
         final Result neutralOnly = AssessmentConsensus.resolve(
-                List.of(source(FIRST, AssessmentOwnership.LOCAL, AssessmentDecision.neutral(), "comment only")));
+                List.of(source(FIRST, AssessmentOwnership.LOCAL, AssessmentDecision.neutral())));
 
         assertThat(result).isInstanceOfSatisfying(Agreed.class, agreed -> {
             assertThat(agreed.decision()).isEqualTo(BASE);
@@ -407,8 +402,7 @@ class AssessmentConsensusTest {
     @Test
     void shouldCollapseDuplicateGraphPathsToOneContributor() {
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(FIRST, AssessmentOwnership.LOCAL, BASE, "path through the marker"),
-                source(FIRST, AssessmentOwnership.LOCAL, BASE, "the same finding reached again")));
+                source(FIRST, AssessmentOwnership.LOCAL, BASE), source(FIRST, AssessmentOwnership.LOCAL, BASE)));
 
         assertThat(result).isInstanceOfSatisfying(Agreed.class, agreed -> {
             assertThat(agreed.decision()).isEqualTo(BASE);
@@ -418,8 +412,7 @@ class AssessmentConsensusTest {
 
     private static void assertFieldConflict(final AssessmentDecision other) {
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(FIRST, AssessmentOwnership.LOCAL, BASE, "base"),
-                source(SECOND, AssessmentOwnership.LOCAL, other, "other")));
+                source(FIRST, AssessmentOwnership.LOCAL, BASE), source(SECOND, AssessmentOwnership.LOCAL, other)));
 
         assertThat(result)
                 .isInstanceOfSatisfying(
@@ -430,8 +423,7 @@ class AssessmentConsensusTest {
     private static void assertNullConflictsWithZero(final AssessmentDecision absent, final AssessmentDecision zero) {
         assertThat(absent).isNotEqualTo(zero);
         final Result result = AssessmentConsensus.resolve(List.of(
-                source(FIRST, AssessmentOwnership.LOCAL, absent, "absent"),
-                source(SECOND, AssessmentOwnership.LOCAL, zero, "zero")));
+                source(FIRST, AssessmentOwnership.LOCAL, absent), source(SECOND, AssessmentOwnership.LOCAL, zero)));
         assertThat(result)
                 .isInstanceOfSatisfying(
                         Conflict.class,
@@ -439,11 +431,8 @@ class AssessmentConsensusTest {
     }
 
     private static SourceAssessment source(
-            final Contributor contributor,
-            final AssessmentOwnership origin,
-            final AssessmentDecision decision,
-            final String explanation) {
-        return new SourceAssessment(contributor, origin, decision, explanation);
+            final Contributor contributor, final AssessmentOwnership origin, final AssessmentDecision decision) {
+        return new SourceAssessment(contributor, origin, decision);
     }
 
     private static Contributor contributor(

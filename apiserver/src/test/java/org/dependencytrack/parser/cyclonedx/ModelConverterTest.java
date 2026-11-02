@@ -250,8 +250,6 @@ class ModelConverterTest extends PersistenceCapableTest {
                     AssessmentOwnership.INHERITED,
                     AssessmentDecision.neutral(),
                     null,
-                    null,
-                    null,
                     origin.decisionVersion(),
                     List.of(
                             new SourceContributionWrite(

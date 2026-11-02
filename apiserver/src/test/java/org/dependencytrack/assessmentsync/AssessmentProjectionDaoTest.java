@@ -70,19 +70,25 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                 .bind("policyId", policyId)
                 .bind("analysisId", analysisId)
                 .execute());
+        useJdbiTransaction(handle ->
+                handle.createUpdate("""
+                        UPDATE "ANALYSIS"
+                           SET "DETAILS" = 'stale details'
+                         WHERE "ID" = :analysisId
+                        """).bind("analysisId", analysisId).execute());
         useJdbiTransaction(
                 handle -> new AssessmentOriginDao(handle).upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false));
         assertThat(originVersion(analysisId)).isZero();
 
         final WorkerWriteResult applied = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
-                .applyWorkerWrite(write(analysisId, AssessmentOwnership.INHERITED, richDecision(), "kept details", 0)));
+                .applyWorkerWrite(write(analysisId, AssessmentOwnership.INHERITED, richDecision(), 0)));
         assertThat(applied.status()).isEqualTo(WorkerWriteStatus.APPLIED);
         assertThat(applied.decisionVersion()).isEqualTo(1);
 
         final StoredProjection stored =
                 inJdbiTransaction(handle -> new AssessmentProjectionDao(handle).load(analysisId));
         assertThat(stored.origin()).isEqualTo(new Origin(AssessmentOwnership.INHERITED, 1, null));
-        assertThat(stored.details()).isEqualTo("kept details");
+        assertThat(stored.details()).isNull();
         assertThat(stored.policyId()).isNull();
         assertThat(stored.decision().state()).isEqualTo(AnalysisState.NOT_AFFECTED);
         assertThat(stored.decision().justification()).isEqualTo(AnalysisJustification.CODE_NOT_PRESENT);
@@ -97,8 +103,7 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
         assertThat(stored.decision().owaspScore()).isNull();
 
         final WorkerWriteResult reset = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
-                .applyWorkerWrite(
-                        write(analysisId, AssessmentOwnership.NEUTRAL, AssessmentDecision.neutral(), null, 1)));
+                .applyWorkerWrite(write(analysisId, AssessmentOwnership.NEUTRAL, AssessmentDecision.neutral(), 1)));
         assertThat(reset.status()).isEqualTo(WorkerWriteStatus.APPLIED);
         assertThat(reset.decisionVersion()).isEqualTo(2);
 
@@ -118,7 +123,7 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                 handle -> new AssessmentOriginDao(handle).upsertOrigin(analysisId, AssessmentOwnership.NEUTRAL, false));
 
         final WorkerWriteResult zero = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
-                .applyWorkerWrite(write(analysisId, AssessmentOwnership.NEUTRAL, score(BigDecimal.ZERO), null, 0)));
+                .applyWorkerWrite(write(analysisId, AssessmentOwnership.NEUTRAL, score(BigDecimal.ZERO), 0)));
         assertThat(zero.status()).isEqualTo(WorkerWriteStatus.APPLIED);
         assertThat(zero.decisionVersion()).isEqualTo(1);
         assertThat(inJdbiTransaction(handle -> new AssessmentProjectionDao(handle).load(analysisId))
@@ -127,13 +132,12 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                 .isEqualByComparingTo("0");
 
         final WorkerWriteResult sameZero = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
-                .applyWorkerWrite(
-                        write(analysisId, AssessmentOwnership.NEUTRAL, score(new BigDecimal("0.00")), null, 1)));
+                .applyWorkerWrite(write(analysisId, AssessmentOwnership.NEUTRAL, score(new BigDecimal("0.00")), 1)));
         assertThat(sameZero.status()).isEqualTo(WorkerWriteStatus.APPLIED);
         assertThat(sameZero.decisionVersion()).isEqualTo(1);
 
         final WorkerWriteResult cleared = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
-                .applyWorkerWrite(write(analysisId, AssessmentOwnership.NEUTRAL, score(null), null, 1)));
+                .applyWorkerWrite(write(analysisId, AssessmentOwnership.NEUTRAL, score(null), 1)));
         assertThat(cleared.status()).isEqualTo(WorkerWriteStatus.APPLIED);
         assertThat(cleared.decisionVersion()).isEqualTo(2);
         assertThat(inJdbiTransaction(handle -> new AssessmentProjectionDao(handle).load(analysisId))
@@ -156,8 +160,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         AssessmentOwnership.INHERITED,
                         richDecision(),
                         null,
-                        null,
-                        null,
                         0,
                         List.of(
                                 new SourceContributionWrite(kernel, "from kernel", List.of()),
@@ -169,8 +171,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         analysisId,
                         AssessmentOwnership.INHERITED,
                         richDecision(),
-                        null,
-                        null,
                         AssessmentReason.SOURCE_CONFLICT,
                         1,
                         List.of(new SourceContributionWrite(kernel, "from kernel", List.of())))));
@@ -199,8 +199,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         AssessmentOwnership.INHERITED,
                         richDecision(),
                         null,
-                        null,
-                        null,
                         originVersion,
                         List.of(new SourceContributionWrite(
                                 source,
@@ -215,8 +213,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         analysisId,
                         AssessmentOwnership.INHERITED,
                         richDecision(),
-                        null,
-                        null,
                         null,
                         applied.decisionVersion(),
                         List.of(new SourceContributionWrite(
@@ -252,8 +248,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         AssessmentOwnership.INHERITED,
                         richDecision(),
                         null,
-                        null,
-                        null,
                         0,
                         List.of(new SourceContributionWrite(
                                 contributor("kernel"),
@@ -279,8 +273,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         localAnalysisId,
                         AssessmentOwnership.INHERITED,
                         richDecision(),
-                        null,
-                        null,
                         AssessmentReason.NO_AUTHORED_SOURCE,
                         1,
                         List.of(new SourceContributionWrite(contributor("kernel"), "from kernel", List.of())))));
@@ -297,8 +289,8 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                 .upsertOrigin(inheritedAnalysisId, AssessmentOwnership.INHERITED, false));
         final long inheritedVersion = originVersion(inheritedAnalysisId);
         final WorkerWriteResult first = inJdbiTransaction(handle -> new AssessmentProjectionDao(handle)
-                .applyWorkerWrite(write(
-                        inheritedAnalysisId, AssessmentOwnership.INHERITED, richDecision(), null, inheritedVersion)));
+                .applyWorkerWrite(
+                        write(inheritedAnalysisId, AssessmentOwnership.INHERITED, richDecision(), inheritedVersion)));
         assertThat(first.status()).isEqualTo(WorkerWriteStatus.APPLIED);
         assertThat(first.decisionVersion()).isEqualTo(inheritedVersion + 1);
 
@@ -307,7 +299,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         inheritedAnalysisId,
                         AssessmentOwnership.NEUTRAL,
                         AssessmentDecision.neutral(),
-                        null,
                         inheritedVersion)));
         assertThat(stale.status()).isEqualTo(WorkerWriteStatus.REJECTED_VERSION);
         assertThat(stale.decisionVersion()).isEqualTo(first.decisionVersion());
@@ -341,8 +332,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         targetAnalysisId,
                         AssessmentOwnership.INHERITED,
                         richDecision(),
-                        null,
-                        null,
                         null,
                         0,
                         List.of(new SourceContributionWrite(
@@ -454,8 +443,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                                 AssessmentOwnership.INHERITED,
                                 richDecision(),
                                 null,
-                                null,
-                                null,
                                 0,
                                 List.of(new SourceContributionWrite(
                                         kernel,
@@ -467,13 +454,11 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                                 AssessmentOwnership.INHERITED,
                                 richDecision(),
                                 null,
-                                null,
-                                null,
                                 0,
                                 List.of(new SourceContributionWrite(firmware, "from firmware", List.of()))),
-                        write(stale, AssessmentOwnership.INHERITED, richDecision(), null, 5),
-                        write(local, AssessmentOwnership.INHERITED, richDecision(), null, 1),
-                        write(missing, AssessmentOwnership.INHERITED, richDecision(), null, 0))));
+                        write(stale, AssessmentOwnership.INHERITED, richDecision(), 5),
+                        write(local, AssessmentOwnership.INHERITED, richDecision(), 1),
+                        write(missing, AssessmentOwnership.INHERITED, richDecision(), 0))));
 
         assertThat(results)
                 .extracting(WorkerWriteResult::status)
@@ -514,8 +499,6 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
                         id,
                         AssessmentOwnership.INHERITED,
                         richDecision(),
-                        null,
-                        null,
                         null,
                         0,
                         List.of(new SourceContributionWrite(
@@ -558,9 +541,8 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
             final long analysisId,
             final AssessmentOwnership owner,
             final AssessmentDecision decision,
-            final String details,
             final long expectedDecisionVersion) {
-        return new WorkerWrite(analysisId, owner, decision, details, null, null, expectedDecisionVersion, List.of());
+        return new WorkerWrite(analysisId, owner, decision, null, expectedDecisionVersion, List.of());
     }
 
     private static AssessmentDecision richDecision() {

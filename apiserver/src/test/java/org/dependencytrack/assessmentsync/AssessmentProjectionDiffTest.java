@@ -73,8 +73,6 @@ class AssessmentProjectionDiffTest {
         assertThat(change.decision().response()).isEqualTo(AnalysisResponse.NOT_SET);
         assertThat(change.decision().suppressed()).isFalse();
         assertThat(change.decision().severity()).isNull();
-        assertThat(change.details()).isEqualTo("product note");
-        assertThat(change.policyId()).isEqualTo(42L);
         assertThat(change.contributors()).containsExactly(FIRST);
     }
 
@@ -91,8 +89,6 @@ class AssessmentProjectionDiffTest {
         assertThat(change.machineChanged()).isFalse();
         assertThat(change.contributorsChanged()).isFalse();
         assertThat(change.decision()).isEqualTo(AGREED);
-        assertThat(change.details()).isEqualTo("policy detail");
-        assertThat(change.policyId()).isEqualTo(8L);
     }
 
     @Test
@@ -119,8 +115,6 @@ class AssessmentProjectionDiffTest {
         assertThat(change.decision().state()).isEqualTo(AnalysisState.NOT_AFFECTED);
         assertThat(change.decision().suppressed()).isTrue();
         assertThat(change.decision().severity()).isEqualTo(Severity.LOW);
-        assertThat(change.details()).isNull();
-        assertThat(change.policyId()).isNull();
         assertThat(change.contributors()).containsExactly(FIRST, SECOND);
         assertThat(change.reason()).isNull();
         assertThat(change.machineChanged()).isTrue();
@@ -158,8 +152,6 @@ class AssessmentProjectionDiffTest {
         assertThat(change.origin()).isEqualTo(AssessmentOwnership.INHERITED);
         assertThat(change.decision()).isEqualTo(AGREED);
         assertThat(change.decision().state()).isEqualTo(AnalysisState.NOT_AFFECTED);
-        assertThat(change.details()).isNull();
-        assertThat(change.policyId()).isNull();
         assertThat(change.contributors()).containsExactly(FIRST);
         assertThat(change.reason()).isNull();
         assertThat(change.machineChanged()).isFalse();
@@ -185,8 +177,6 @@ class AssessmentProjectionDiffTest {
         assertThat(change.reason()).isEqualTo(reason);
         assertThat(change.machineChanged()).isTrue();
         assertThat(change.contributorsChanged()).isTrue();
-        assertThat(change.details()).isNull();
-        assertThat(change.policyId()).isNull();
         assertThat(change.contributors()).isEmpty();
         assertThat(change.decision().state()).isEqualTo(AnalysisState.NOT_SET);
         assertThat(change.decision().justification()).isEqualTo(AnalysisJustification.NOT_SET);

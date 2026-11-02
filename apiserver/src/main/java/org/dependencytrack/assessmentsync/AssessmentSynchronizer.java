@@ -76,9 +76,6 @@ public final class AssessmentSynchronizer {
 
     /// Matches, projects, and notifies for {@code findingKeys}. The caller chooses the page.
     public BatchResult reconcileBatch(final Handle handle, final UUID targetUuid, final List<FindingKey> findingKeys) {
-        requireNonNull(handle, "handle must not be null");
-        requireNonNull(targetUuid, "targetUuid must not be null");
-        requireNonNull(findingKeys, "findingKeys must not be null");
         if (!handle.isInTransaction()) {
             throw new IllegalStateException("Assessment reconciliation requires an active transaction");
         }
@@ -92,25 +89,19 @@ public final class AssessmentSynchronizer {
             return new BatchResult(0, 0, keys.size(), 0, false);
         }
 
-        lockAnalyses(handle, projectId, keys);
-        final Map<FindingKey, TargetRow> targets = loadTargets(handle, projectId, keys);
-        final Map<Long, List<UUID>> sourcesByComponent = sourceProjects(handle, targetUuid, projectId, keys);
-        final Map<UUID, Map<UUID, SourceComponent>> componentsBySource =
-                loadSourceComponents(handle, sourcesByComponent, keys);
-        final Map<UUID, Candidates> candidatesBySource = candidates(componentsBySource);
-        final Map<Long, List<CopiedTrail>> trailsByAnalysis = loadTrails(handle, targets);
+        final Batch batch = load(handle, targetUuid, projectId, keys);
 
         var skipped = 0;
         var conflicts = 0;
         final var planned = new ArrayList<PlannedTarget>(keys.size());
         final var missingAnalyses = new ArrayList<TargetRow>();
         for (final FindingKey key : keys) {
-            final TargetRow target = targets.get(key);
+            final TargetRow target = batch.targets().get(key);
             if (target == null || (target.analysisId() != null && target.owner() == null)) {
                 skipped++;
                 continue;
             }
-            final Decision decision = decide(target, sourcesByComponent, componentsBySource, candidatesBySource);
+            final Decision decision = batch.decide(target);
             if (decision.consensus() instanceof AssessmentConsensus.Conflict) {
                 conflicts++;
             }
@@ -135,7 +126,7 @@ public final class AssessmentSynchronizer {
             final TargetRow target = plan.target();
             final List<CopiedTrail> trails =
                     target.analysisId() != null && target.analysisId().longValue() == prepared.analysisId()
-                            ? trailsByAnalysis.getOrDefault(prepared.analysisId(), List.of())
+                            ? batch.trails(prepared.analysisId())
                             : List.of();
             final CurrentProjection current = new CurrentProjection(
                     prepared.owner(),
@@ -164,8 +155,6 @@ public final class AssessmentSynchronizer {
                             prepared.analysisId(),
                             origin,
                             change.decision(),
-                            null,
-                            null,
                             change.reason(),
                             prepared.decisionVersion(),
                             contributions)));
@@ -214,9 +203,6 @@ public final class AssessmentSynchronizer {
     /// Does not insert analyses, change ownership, or write machine fields.
     /// A legacy analysis with no origin is not drift.
     public int countDrift(final Handle handle, final UUID targetUuid, final List<FindingKey> findingKeys) {
-        requireNonNull(handle, "handle must not be null");
-        requireNonNull(targetUuid, "targetUuid must not be null");
-        requireNonNull(findingKeys, "findingKeys must not be null");
         if (!handle.isInTransaction()) {
             throw new IllegalStateException("Assessment drift inspection requires an active transaction");
         }
@@ -229,21 +215,15 @@ public final class AssessmentSynchronizer {
             return 0;
         }
 
-        lockAnalyses(handle, projectId, keys);
-        final Map<FindingKey, TargetRow> targets = loadTargets(handle, projectId, keys);
-        final Map<Long, List<UUID>> sourcesByComponent = sourceProjects(handle, targetUuid, projectId, keys);
-        final Map<UUID, Map<UUID, SourceComponent>> componentsBySource =
-                loadSourceComponents(handle, sourcesByComponent, keys);
-        final Map<UUID, Candidates> candidatesBySource = candidates(componentsBySource);
-        final Map<Long, List<CopiedTrail>> trailsByAnalysis = loadTrails(handle, targets);
+        final Batch batch = load(handle, targetUuid, projectId, keys);
 
         var drift = 0;
         for (final FindingKey key : keys) {
-            final TargetRow target = targets.get(key);
+            final TargetRow target = batch.targets().get(key);
             if (target == null || (target.analysisId() != null && target.owner() == null)) {
                 continue;
             }
-            final Decision decision = decide(target, sourcesByComponent, componentsBySource, candidatesBySource);
+            final Decision decision = batch.decide(target);
             if (target.analysisId() == null) {
                 if (decision.consensus() instanceof AssessmentConsensus.Agreed) {
                     drift++;
@@ -251,7 +231,7 @@ public final class AssessmentSynchronizer {
                 continue;
             }
             final long analysisId = requireNonNull(target.analysisId());
-            final List<CopiedTrail> trails = trailsByAnalysis.getOrDefault(analysisId, List.of());
+            final List<CopiedTrail> trails = batch.trails(analysisId);
             final Change change = AssessmentProjectionDiff.diff(
                     new CurrentProjection(
                             target.owner(),
@@ -270,6 +250,22 @@ public final class AssessmentSynchronizer {
             }
         }
         return drift;
+    }
+
+    /// Locks the target analyses and loads everything one batch needs to decide its findings.
+    private static Batch load(
+            final Handle handle, final UUID targetUuid, final long projectId, final List<FindingKey> keys) {
+        lockAnalyses(handle, projectId, keys);
+        final Map<FindingKey, TargetRow> targets = loadTargets(handle, projectId, keys);
+        final Map<Long, List<UUID>> sourcesByComponent = sourceProjects(handle, targetUuid, projectId, keys);
+        final Map<UUID, Map<UUID, SourceComponent>> componentsBySource =
+                loadSourceComponents(handle, sourcesByComponent, keys);
+        return new Batch(
+                targets,
+                sourcesByComponent,
+                componentsBySource,
+                candidates(componentsBySource),
+                loadTrails(handle, targets));
     }
 
     /// One source match per source project. Ambiguous identity blocks the finding.
@@ -355,8 +351,7 @@ public final class AssessmentSynchronizer {
                         component.identity().uuid(),
                         analysis.vulnerabilityUuid(),
                         analysis.analysisId());
-                voters.add(
-                        new SourceAssessment(contributor, analysis.owner(), analysis.decision(), analysis.details()));
+                voters.add(new SourceAssessment(contributor, analysis.owner(), analysis.decision()));
                 writesByContributor.putIfAbsent(
                         contributor,
                         new SourceContributionWrite(contributor, analysis.details(), List.copyOf(analysis.comments())));
@@ -1115,6 +1110,23 @@ public final class AssessmentSynchronizer {
             AssessmentDecision decision,
             @Nullable String details,
             @Nullable Long policyId) {}
+
+    /// What one reconcile or drift batch loaded for its findings.
+    private record Batch(
+            Map<FindingKey, TargetRow> targets,
+            Map<Long, List<UUID>> sourcesByComponent,
+            Map<UUID, Map<UUID, SourceComponent>> componentsBySource,
+            Map<UUID, Candidates> candidatesBySource,
+            Map<Long, List<CopiedTrail>> trailsByAnalysis) {
+
+        private Decision decide(final TargetRow target) {
+            return AssessmentSynchronizer.decide(target, sourcesByComponent, componentsBySource, candidatesBySource);
+        }
+
+        private List<CopiedTrail> trails(final long analysisId) {
+            return trailsByAnalysis.getOrDefault(analysisId, List.of());
+        }
+    }
 
     private record PlannedTarget(FindingKey key, TargetRow target, Decision decision) {}
 
