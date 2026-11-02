@@ -33,9 +33,9 @@ import org.dependencytrack.model.Classifier;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.ConfigPropertyVisibility;
+import org.dependencytrack.model.Project;
 import org.dependencytrack.persistence.jdbi.ConfigPropertyDao;
 import org.dependencytrack.persistence.jdbi.ConfigPropertyDao.ConfigPropertyRow;
-import org.dependencytrack.model.Project;
 import org.dependencytrack.secret.management.SecretManager;
 import org.dependencytrack.secret.management.SecretMetadata;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
@@ -61,6 +61,7 @@ import static org.dependencytrack.model.ConfigPropertyConstants.CUSTOM_RISK_SCOR
 import static org.dependencytrack.persistence.jdbi.ConfigPropertyTestUtil.createConfigProperty;
 import static org.dependencytrack.persistence.jdbi.ConfigPropertyTestUtil.createConfigPropertyWithDefaultValue;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
