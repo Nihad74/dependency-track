@@ -382,8 +382,6 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
                             null,
                             null,
                             null),
-                    null,
-                    null,
                     reason,
                     origin.decisionVersion(),
                     List.of(contributions)));

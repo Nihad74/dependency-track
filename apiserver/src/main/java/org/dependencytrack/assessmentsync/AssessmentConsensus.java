@@ -76,12 +76,11 @@ public final class AssessmentConsensus {
         return sole;
     }
 
-    /// One source finding that may vote. A null decision does not vote.
+    /// One source finding that may vote. A null decision does not vote. Explanations never vote, so they are not here.
     public record SourceAssessment(
             Contributor contributor,
             @Nullable AssessmentOwnership origin,
-            @Nullable AssessmentDecision decision,
-            @Nullable String explanation) {
+            @Nullable AssessmentDecision decision) {
 
         public SourceAssessment {
             Objects.requireNonNull(contributor, "contributor must not be null");

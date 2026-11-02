@@ -38,7 +38,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
@@ -86,7 +85,7 @@ public final class AssessmentProjectionDao {
             } else {
                 final boolean versionBump = current.owner() != write.owner()
                         || !current.decision().equals(write.decision())
-                        || !Objects.equals(current.details(), write.details());
+                        || current.details() != null;
                 accepted.add(new AcceptedWrite(results.size(), write, versionBump));
                 results.add(null);
             }
@@ -353,8 +352,6 @@ public final class AssessmentProjectionDao {
         final var cvssV4Scores = new @Nullable BigDecimal[n];
         final var owaspVectors = new @Nullable String[n];
         final var owaspScores = new @Nullable BigDecimal[n];
-        final var details = new @Nullable String[n];
-        final var policyIds = new @Nullable Long[n];
         for (int i = 0; i < n; i++) {
             final WorkerWrite write = accepted.get(i).write();
             final AssessmentDecision decision = write.decision();
@@ -373,8 +370,6 @@ public final class AssessmentProjectionDao {
             cvssV4Scores[i] = decision.cvssV4Score();
             owaspVectors[i] = decision.owaspVector();
             owaspScores[i] = decision.owaspScore();
-            details[i] = write.details();
-            policyIds[i] = write.policyId();
         }
         handle.createUpdate(/* language=SQL */ """
                         UPDATE "ANALYSIS" AS a
@@ -391,8 +386,8 @@ public final class AssessmentProjectionDao {
                              , "CVSSV4SCORE" = t.cvss_v4_score
                              , "OWASPVECTOR" = t.owasp_vector
                              , "OWASPSCORE" = t.owasp_score
-                             , "DETAILS" = t.details
-                             , "VULNERABILITY_POLICY_ID" = t.policy_id
+                             , "DETAILS" = NULL
+                             , "VULNERABILITY_POLICY_ID" = NULL
                           FROM UNNEST(
                                  :ids
                                , :states
@@ -408,8 +403,6 @@ public final class AssessmentProjectionDao {
                                , :cvssV4Scores
                                , :owaspVectors
                                , :owaspScores
-                               , :details
-                               , :policyIds
                                ) AS t(
                                  id
                                , state
@@ -425,8 +418,6 @@ public final class AssessmentProjectionDao {
                                , cvss_v4_score
                                , owasp_vector
                                , owasp_score
-                               , details
-                               , policy_id
                                )
                          WHERE a."ID" = t.id
                         """)
@@ -445,8 +436,6 @@ public final class AssessmentProjectionDao {
                 .bind("cvssV4Scores", cvssV4Scores)
                 .bind("owaspVectors", owaspVectors)
                 .bind("owaspScores", owaspScores)
-                .bind("details", details)
-                .bind("policyIds", policyIds)
                 .execute();
     }
 
@@ -773,8 +762,6 @@ public final class AssessmentProjectionDao {
             long analysisId,
             AssessmentOwnership owner,
             AssessmentDecision decision,
-            @Nullable String details,
-            @Nullable Long policyId,
             @Nullable AssessmentReason lastReason,
             long expectedDecisionVersion,
             List<SourceContributionWrite> contributions) {
