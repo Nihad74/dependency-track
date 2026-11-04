@@ -30,15 +30,19 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.UUID;
 
-/// Runs stored policy evaluation and project metrics for one captured refresh revision.
-///
-/// Does not run vulnerability analyzers. The caller supplies the instance id and concurrency key.
+/**
+ * Runs stored policy evaluation and project metrics for one captured refresh revision.
+ *
+ * <p>Does not run vulnerability analyzers. The caller supplies the instance id and concurrency key.
+ */
 @WorkflowSpec(name = RefreshSynchronizedAssessmentsWorkflow.NAME)
 public final class RefreshSynchronizedAssessmentsWorkflow implements Workflow<RefreshSynchronizedAssessmentsArg, Void> {
 
     public static final String NAME = "refresh-synchronized-assessments";
 
-    /// Instance id for one captured refresh of one target.
+    /**
+     * Instance id for one captured refresh of one target.
+     */
     public static String instanceId(final UUID targetUuid, final long refreshRevision) {
         if (refreshRevision <= 0) {
             throw new IllegalArgumentException("refreshRevision must be positive");

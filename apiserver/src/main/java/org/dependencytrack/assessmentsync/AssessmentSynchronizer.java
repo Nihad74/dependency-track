@@ -65,16 +65,22 @@ import static org.dependencytrack.assessmentsync.DaoSupport.nullableLong;
 import static org.dependencytrack.assessmentsync.DaoSupport.readNullableInstant;
 import static org.dependencytrack.notification.api.NotificationFactory.createVulnerabilityAnalysisDecisionChangeNotification;
 
-/// Applies one page of target findings on the caller's transaction.
-///
-/// Does not open a transaction, commit, or call Dex. Source projects are read, not locked.
+/**
+ * Applies one page of target findings on the caller's transaction.
+ *
+ * <p>Does not open a transaction, commit, or call Dex. Source projects are read, not locked.
+ */
 public final class AssessmentSynchronizer {
 
-    /// Outcome of one page. {@code conflicts} counts disagreeing source sets.
-    /// A conflict that withdraws an inherited row is also included in {@code withdrawn}.
+    /**
+     * Outcome of one page. {@code conflicts} counts disagreeing source sets.
+     * A conflict that withdraws an inherited row is also included in {@code withdrawn}.
+     */
     public record BatchResult(int applied, int withdrawn, int skipped, int conflicts, boolean machineFieldsChanged) {}
 
-    /// Matches, projects, and notifies for {@code findingKeys}. The caller chooses the page.
+    /**
+     * Matches, projects, and notifies for {@code findingKeys}. The caller chooses the page.
+     */
     public BatchResult reconcileBatch(final Handle handle, final UUID targetUuid, final List<FindingKey> findingKeys) {
         if (!handle.isInTransaction()) {
             throw new IllegalStateException("Assessment reconciliation requires an active transaction");
@@ -198,10 +204,12 @@ public final class AssessmentSynchronizer {
         return new BatchResult(applied, withdrawn, skipped, conflicts, machineFieldsChanged);
     }
 
-    /// Counts findings whose match, consensus, and diff would change the stored projection.
-    ///
-    /// Does not insert analyses, change ownership, or write machine fields.
-    /// A legacy analysis with no origin is not drift.
+    /**
+     * Counts findings whose match, consensus, and diff would change the stored projection.
+     *
+     * <p>Does not insert analyses, change ownership, or write machine fields.
+     * A legacy analysis with no origin is not drift.
+     */
     public int countDrift(final Handle handle, final UUID targetUuid, final List<FindingKey> findingKeys) {
         if (!handle.isInTransaction()) {
             throw new IllegalStateException("Assessment drift inspection requires an active transaction");
@@ -252,7 +260,9 @@ public final class AssessmentSynchronizer {
         return drift;
     }
 
-    /// Locks the target analyses and loads everything one batch needs to decide its findings.
+    /**
+     * Locks the target analyses and loads everything one batch needs to decide its findings.
+     */
     private static Batch load(
             final Handle handle, final UUID targetUuid, final long projectId, final List<FindingKey> keys) {
         lockAnalyses(handle, projectId, keys);
@@ -268,8 +278,10 @@ public final class AssessmentSynchronizer {
                 loadTrails(handle, targets));
     }
 
-    /// One source match per source project. Ambiguous identity blocks the finding.
-    /// An inactive target attribution withdraws instead of inheriting.
+    /**
+     * One source match per source project. Ambiguous identity blocks the finding.
+     * An inactive target attribution withdraws instead of inheriting.
+     */
     private static Decision decide(
             final TargetRow target,
             final Map<Long, List<UUID>> sourcesByComponent,
@@ -313,7 +325,9 @@ public final class AssessmentSynchronizer {
         return new Decision(consensus, writes);
     }
 
-    /// Parses each source's components once per batch instead of once per target finding.
+    /**
+     * Parses each source's components once per batch instead of once per target finding.
+     */
     private static Map<UUID, Candidates> candidates(final Map<UUID, Map<UUID, SourceComponent>> componentsBySource) {
         final var candidates = new HashMap<UUID, Candidates>(componentsBySource.size());
         for (final var source : componentsBySource.entrySet()) {
@@ -385,8 +399,10 @@ public final class AssessmentSynchronizer {
         return rereadAnalysis(handle, projectId, target);
     }
 
-    /// Inserts neutral analyses with their origins in one statement. A key whose analysis a concurrent writer
-    /// created is missing from the result, and the caller reads that row instead.
+    /**
+     * Inserts neutral analyses with their origins in one statement. A key whose analysis a concurrent writer
+     * created is missing from the result, and the caller reads that row instead.
+     */
     private static Map<FindingKey, Long> insertNeutralAnalyses(
             final Handle handle, final long projectId, final List<TargetRow> targets) {
         if (targets.isEmpty()) {
@@ -438,7 +454,9 @@ public final class AssessmentSynchronizer {
         return inserted;
     }
 
-    /// The unique analysis key already existed. A missing origin stays protected.
+    /**
+     * The unique analysis key already existed. A missing origin stays protected.
+     */
     private static @Nullable PreparedTarget rereadAnalysis(
             final Handle handle, final long projectId, final TargetRow target) {
         return handle.createQuery(/* language=SQL */ """
@@ -1111,7 +1129,9 @@ public final class AssessmentSynchronizer {
             @Nullable String details,
             @Nullable Long policyId) {}
 
-    /// What one reconcile or drift batch loaded for its findings.
+    /**
+     * What one reconcile or drift batch loaded for its findings.
+     */
     private record Batch(
             Map<FindingKey, TargetRow> targets,
             Map<Long, List<UUID>> sourcesByComponent,
@@ -1185,6 +1205,8 @@ public final class AssessmentSynchronizer {
             boolean stateChanged,
             boolean suppressionChanged) {}
 
-    /// Consensus plus the contribution rows to copy when the sources agree.
+    /**
+     * Consensus plus the contribution rows to copy when the sources agree.
+     */
     private record Decision(Result consensus, List<SourceContributionWrite> contributions) {}
 }

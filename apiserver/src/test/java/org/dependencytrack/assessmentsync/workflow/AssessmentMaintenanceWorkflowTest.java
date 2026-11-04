@@ -463,7 +463,9 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
         return builder.build();
     }
 
-    /// A project with one operating-system marker at its root, so backfill queues a full pass for it.
+    /**
+     * A project with one operating-system marker at its root, so backfill queues a full pass for it.
+     */
     private static void insertProject(final UUID uuid, final String name) {
         useJdbiTransaction(handle -> insertProject(handle, uuid, name));
     }

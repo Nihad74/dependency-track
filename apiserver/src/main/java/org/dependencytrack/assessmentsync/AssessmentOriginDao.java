@@ -31,10 +31,14 @@ import java.util.UUID;
 import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
-/// Ownership records of target analyses, as authored writers and backfill set them. Uses the caller's transaction.
+/**
+ * Ownership records of target analyses, as authored writers and backfill set them. Uses the caller's transaction.
+ */
 public final class AssessmentOriginDao {
 
-    /// SQL form of {@link AssessmentOwnership#ofUnlabeled(boolean)} for an analysis aliased {@code a}.
+    /**
+     * SQL form of {@link AssessmentOwnership#ofUnlabeled(boolean)} for an analysis aliased {@code a}.
+     */
     private static final String UNLABELED_OWNER_SQL = """
             CASE WHEN a."VULNERABILITY_POLICY_ID" IS NOT NULL THEN 'POLICY' ELSE 'LOCAL' END""";
 
@@ -48,10 +52,12 @@ public final class AssessmentOriginDao {
         upsertOrigins(List.of(new OriginUpdate(analysisId, owner, decisionChanged)));
     }
 
-    /// Inserts or updates origins in one statement, and clears the worker's last reason. On an existing row the
-    /// version moves by one when ownership or the decision changes. A new row starts at 1 when the decision
-    /// changed, else at 0. A caller that takes over an unlabeled row passes {@code decisionChanged}, because the
-    /// owner the row had is not stored. Analyses that no longer exist are skipped.
+    /**
+     * Inserts or updates origins in one statement, and clears the worker's last reason. On an existing row the
+     * version moves by one when ownership or the decision changes. A new row starts at 1 when the decision
+     * changed, else at 0. A caller that takes over an unlabeled row passes {@code decisionChanged}, because the
+     * owner the row had is not stored. Analyses that no longer exist are skipped.
+     */
     public void upsertOrigins(final Collection<OriginUpdate> updates) {
         requireTransaction(handle);
         if (updates.isEmpty()) {
@@ -104,8 +110,10 @@ public final class AssessmentOriginDao {
                 .execute();
     }
 
-    /// Reads the origin row. Null means the analysis predates the feature; see
-    /// {@link AssessmentOwnership#ofUnlabeled(boolean)}.
+    /**
+     * Reads the origin row. Null means the analysis predates the feature; see
+     * {@link AssessmentOwnership#ofUnlabeled(boolean)}.
+     */
     public @Nullable Origin findOrigin(final long analysisId) {
         requirePositive(analysisId, "analysisId");
         return handle.createQuery(/* language=SQL */ """
@@ -121,7 +129,9 @@ public final class AssessmentOriginDao {
                 .orElse(null);
     }
 
-    /// Reads the origin of the analysis of one finding. Null when the analysis or its origin row is missing.
+    /**
+     * Reads the origin of the analysis of one finding. Null when the analysis or its origin row is missing.
+     */
     public @Nullable Origin findOriginOfFinding(final long componentId, final long vulnerabilityId) {
         return handle.createQuery(/* language=SQL */ """
                         SELECT o."OWNER"
@@ -140,7 +150,9 @@ public final class AssessmentOriginDao {
                 .orElse(null);
     }
 
-    /// Removes copied source trails. Target comments in ANALYSISCOMMENT are left in place.
+    /**
+     * Removes copied source trails. Target comments in ANALYSISCOMMENT are left in place.
+     */
     public void deleteCopiedContributions(final long analysisId) {
         deleteCopiedContributions(List.of(analysisId));
     }
@@ -160,7 +172,9 @@ public final class AssessmentOriginDao {
                 .execute();
     }
 
-    /// Labels one project's unlabeled analyses. An existing origin row is left unchanged.
+    /**
+     * Labels one project's unlabeled analyses. An existing origin row is left unchanged.
+     */
     public int backfillProjectOrigins(final UUID projectUuid) {
         requireTransaction(handle);
         return handle.createUpdate(/* language=SQL */ """
@@ -177,8 +191,10 @@ public final class AssessmentOriginDao {
                 .execute();
     }
 
-    /// Maps {@code OWNER}, {@code DECISION_VERSION} and {@code LAST_REASON}. Null when {@code OWNER} is null, as
-    /// it is for an analysis without an origin row in an outer join.
+    /**
+     * Maps {@code OWNER}, {@code DECISION_VERSION} and {@code LAST_REASON}. Null when {@code OWNER} is null, as
+     * it is for an analysis without an origin row in an outer join.
+     */
     static @Nullable Origin readOrigin(final ResultSet rs) throws SQLException {
         final String owner = rs.getString("OWNER");
         if (owner == null) {
@@ -191,7 +207,9 @@ public final class AssessmentOriginDao {
                 lastReason == null ? null : AssessmentReason.valueOf(lastReason));
     }
 
-    /// Stored owner of one analysis, its decision version, and why the worker last left it as it is.
+    /**
+     * Stored owner of one analysis, its decision version, and why the worker last left it as it is.
+     */
     public record Origin(
             AssessmentOwnership owner,
             long decisionVersion,

@@ -26,8 +26,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/// Dependency graph of one project's components. Every node is a key; an edge to an id that is not a key is
-/// ignored, so a removed component also hides what was only reachable through it.
+/**
+ * Dependency graph of one project's components. Every node is a key; an edge to an id that is not a key is
+ * ignored, so a removed component also hides what was only reachable through it.
+ */
 public final class AssessmentGraph {
 
     private final Map<Long, List<Long>> childrenByNode;
@@ -38,7 +40,9 @@ public final class AssessmentGraph {
         this.childrenByNode = copy;
     }
 
-    /// Every node reachable from {@code roots}, roots included. Roots that are not nodes are ignored.
+    /**
+     * Every node reachable from {@code roots}, roots included. Roots that are not nodes are ignored.
+     */
     public Set<Long> reachableFrom(final Collection<Long> roots) {
         final var visited = new LinkedHashSet<Long>();
         for (final long root : roots) {
@@ -50,7 +54,9 @@ public final class AssessmentGraph {
         return Set.copyOf(visited);
     }
 
-    /// Components strictly beneath {@code markerId}. The marker itself is omitted, even on a cycle.
+    /**
+     * Components strictly beneath {@code markerId}. The marker itself is omitted, even on a cycle.
+     */
     public Set<Long> descendants(final long markerId) {
         if (!childrenByNode.containsKey(markerId)) {
             return Set.of();
@@ -62,7 +68,9 @@ public final class AssessmentGraph {
         return Set.copyOf(visited);
     }
 
-    /// Breadth-first from {@code start}, whose nodes are already in {@code visited}.
+    /**
+     * Breadth-first from {@code start}, whose nodes are already in {@code visited}.
+     */
     private void walk(final Set<Long> visited, final List<Long> start) {
         final var pending = new ArrayDeque<Long>(start);
         while (!pending.isEmpty()) {

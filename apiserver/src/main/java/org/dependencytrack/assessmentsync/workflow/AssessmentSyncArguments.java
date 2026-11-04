@@ -30,7 +30,9 @@ import java.util.UUID;
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.stringConverter;
 
-/// Validation shared by the assessment sync workflows and activities. Bad arguments are terminal.
+/**
+ * Validation shared by the assessment sync workflows and activities. Bad arguments are terminal.
+ */
 final class AssessmentSyncArguments {
 
     private AssessmentSyncArguments() {}
@@ -46,7 +48,9 @@ final class AssessmentSyncArguments {
         return uuid("project_uuid", projectUuid);
     }
 
-    /// {@code field} is the proto field name used in the failure message.
+    /**
+     * {@code field} is the proto field name used in the failure message.
+     */
     static UUID uuid(final String field, final String value) {
         if (value.isBlank()) {
             throw new TerminalApplicationFailureException(field + " must be a UUID");
@@ -65,7 +69,9 @@ final class AssessmentSyncArguments {
         return value;
     }
 
-    /// Batches per run before continue-as-new, read once per run as a side effect so replay sees the same value.
+    /**
+     * Batches per run before continue-as-new, read once per run as a side effect so replay sees the same value.
+     */
     static int maxBatches(final WorkflowContext<?> ctx) {
         return Integer.parseInt(requireNonNull(
                 ctx.executeSideEffect(

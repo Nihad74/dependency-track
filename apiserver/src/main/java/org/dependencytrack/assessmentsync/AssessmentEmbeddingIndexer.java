@@ -38,15 +38,19 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 
-/// Rebuilds one target project's marker index from the persisted dependency graph.
-///
-/// A marker is a reachable component whose classifier denotes an assembled unit (see ADR 044).
-/// Libraries, frameworks, files, and other package-level classifiers are never markers.
-/// Source projects are resolved by {@link AssessmentSourceResolver}, including the access gate.
-/// Organizational parent projects are not consulted. Services are not members.
+/**
+ * Rebuilds one target project's marker index from the persisted dependency graph.
+ *
+ * <p>A marker is a reachable component whose classifier denotes an assembled unit (see ADR 044).
+ * Libraries, frameworks, files, and other package-level classifiers are never markers.
+ * Source projects are resolved by {@link AssessmentSourceResolver}, including the access gate.
+ * Organizational parent projects are not consulted. Services are not members.
+ */
 public final class AssessmentEmbeddingIndexer {
 
-    /// Allow-list on purpose: a classifier added to CycloneDX later stays out until added here.
+    /**
+     * Allow-list on purpose: a classifier added to CycloneDX later stays out until added here.
+     */
     private static final Set<String> MARKER_CLASSIFIERS = Stream.of(
                     Classifier.APPLICATION,
                     Classifier.CONTAINER,
@@ -63,7 +67,9 @@ public final class AssessmentEmbeddingIndexer {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Replaces embeddings for {@code projectUuid}. A missing project is a no-op.
+    /**
+     * Replaces embeddings for {@code projectUuid}. A missing project is a no-op.
+     */
     public void rebuild(final UUID projectUuid) {
         final LoadedGraph loaded = loadGraph(projectUuid);
         if (loaded == null) {
@@ -72,9 +78,11 @@ public final class AssessmentEmbeddingIndexer {
         new AssessmentEmbeddingDao(handle).replaceMembership(loaded.projectId(), loaded.membership());
     }
 
-    /// Rebuilds from persisted dependency edges when a reachable marker has no index row.
-    ///
-    /// An empty index is not a reason to skip inheritance. A graph with no markers is left untouched.
+    /**
+     * Rebuilds from persisted dependency edges when a reachable marker has no index row.
+     *
+     * <p>An empty index is not a reason to skip inheritance. A graph with no markers is left untouched.
+     */
     public void ensureMarkersPresent(final UUID projectUuid) {
         final LoadedGraph loaded = loadGraph(projectUuid);
         if (loaded == null || loaded.membership().isEmpty()) {
@@ -174,7 +182,9 @@ public final class AssessmentEmbeddingIndexer {
                 .list();
     }
 
-    /// Component ids named by a {@code DIRECT_DEPENDENCIES} document. UUIDs of other projects are dropped.
+    /**
+     * Component ids named by a {@code DIRECT_DEPENDENCIES} document. UUIDs of other projects are dropped.
+     */
     private static List<Long> componentIds(final @Nullable String directDependencies, final Map<UUID, Long> idByUuid) {
         final var ids = new ArrayList<Long>();
         for (final UUID uuid : dependencyUuids(directDependencies)) {

@@ -24,14 +24,18 @@ import org.dependencytrack.proto.internal.workflow.v1.AssessmentMaintenanceOpera
 import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjectionsArg;
 import org.jspecify.annotations.Nullable;
 
-/// Which maintenance operation each mode runs, and whether an operation may keep running in a mode.
+/**
+ * Which maintenance operation each mode runs, and whether an operation may keep running in a mode.
+ */
 final class MaintenanceOperations {
 
     private static final String INVALID = "operation must be BOOTSTRAP, VERIFY, or WITHDRAW";
 
     private MaintenanceOperations() {}
 
-    /// The operation the daily schedule starts. {@code OFF} starts nothing.
+    /**
+     * The operation the daily schedule starts. {@code OFF} starts nothing.
+     */
     static @Nullable AssessmentMaintenanceOperation scheduledFor(final AssessmentSyncMode mode) {
         return switch (mode) {
             case CAPTURE -> AssessmentMaintenanceOperation.ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP;
@@ -41,8 +45,10 @@ final class MaintenanceOperations {
         };
     }
 
-    /// Backfill and verification keep running across {@code CAPTURE} and {@code ACTIVE}; withdrawal only in
-    /// {@code WITHDRAW}. A scan stops at the next project once its operation may no longer run.
+    /**
+     * Backfill and verification keep running across {@code CAPTURE} and {@code ACTIVE}; withdrawal only in
+     * {@code WITHDRAW}. A scan stops at the next project once its operation may no longer run.
+     */
     static boolean runsIn(final AssessmentMaintenanceOperation operation, final AssessmentSyncMode mode) {
         return switch (operation) {
             case ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP, ASSESSMENT_MAINTENANCE_OPERATION_VERIFY ->

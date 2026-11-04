@@ -168,7 +168,7 @@ public class AnalysisResource extends AbstractApiResource {
                 @ApiResponse(
                         responseCode = "200",
                         description = "The created analysis",
-                        content = @Content(schema = @Schema(implementation = AnalysisTrailResponse.class))),
+                        content = @Content(schema = @Schema(implementation = AnalysisTrailResponse.class))),yes
                 @ApiResponse(responseCode = "401", description = "Unauthorized"),
                 @ApiResponse(
                         responseCode = "403",
@@ -281,7 +281,9 @@ public class AnalysisResource extends AbstractApiResource {
         };
     }
 
-    /// Applies only the fields the client sent. Omitted fields keep their stored value.
+    /**
+     * Applies only the fields the client sent. Omitted fields keep their stored value.
+     */
     private static MakeAnalysisCommand applySentFields(
             final MakeAnalysisCommand command, final AnalysisRequest request) {
         return command.withState(request.getAnalysisState())

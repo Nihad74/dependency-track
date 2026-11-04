@@ -36,10 +36,12 @@ import static org.dependencytrack.assessmentsync.DaoSupport.nullableLong;
 import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
-/// Durable per-target reconciliation and refresh revisions. Mutators lock the work row first.
-///
-/// {@code PENDING_SINCE} is set when an idle row receives a request and cleared once reconciliation
-/// and refresh have both caught up. Its age is an upper bound on the delay of any pending request.
+/**
+ * Durable per-target reconciliation and refresh revisions. Mutators lock the work row first.
+ *
+ * <p>{@code PENDING_SINCE} is set when an idle row receives a request and cleared once reconciliation
+ * and refresh have both caught up. Its age is an upper bound on the delay of any pending request.
+ */
 public final class AssessmentSyncWorkDao {
 
     private static final RowMapper<WorkRow> WORK_ROW = (rs, ctx) -> new WorkRow(
@@ -62,7 +64,9 @@ public final class AssessmentSyncWorkDao {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Allocates the next revision and marks it as a full-project pass.
+    /**
+     * Allocates the next revision and marks it as a full-project pass.
+     */
     public long requestFull(final UUID targetUuid) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireTransaction(handle);
@@ -96,7 +100,9 @@ public final class AssessmentSyncWorkDao {
                 .one();
     }
 
-    /// {@link #requestFull(UUID)} for many targets in one statement. Rows are locked in UUID order.
+    /**
+     * {@link #requestFull(UUID)} for many targets in one statement. Rows are locked in UUID order.
+     */
     public void requestFull(final Collection<UUID> targetUuids) {
         requireTransaction(handle);
         if (targetUuids.isEmpty()) {
@@ -130,8 +136,10 @@ public final class AssessmentSyncWorkDao {
                 .execute();
     }
 
-    /// {@link #requestFindings(UUID, Collection)} for many targets in one statement. Each target's keys are
-    /// stored at that target's new revision. Rows are locked in UUID order.
+    /**
+     * {@link #requestFindings(UUID, Collection)} for many targets in one statement. Each target's keys are
+     * stored at that target's new revision. Rows are locked in UUID order.
+     */
     public void requestFindings(final Map<UUID, ? extends Collection<FindingKey>> keysByTarget) {
         requireTransaction(handle);
         if (keysByTarget.isEmpty()) {
@@ -198,7 +206,9 @@ public final class AssessmentSyncWorkDao {
                 .execute();
     }
 
-    /// Allocates the next revision and upserts finding keys at that revision.
+    /**
+     * Allocates the next revision and upserts finding keys at that revision.
+     */
     public long requestFindings(final UUID targetUuid, final Collection<FindingKey> keys) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireNonNull(keys, "keys must not be null");
@@ -264,7 +274,9 @@ public final class AssessmentSyncWorkDao {
         return revision;
     }
 
-    /// Captures {@code REQUESTED_REVISION} or resumes the pass already in progress.
+    /**
+     * Captures {@code REQUESTED_REVISION} or resumes the pass already in progress.
+     */
     public @Nullable Pass beginOrResumePass(final UUID targetUuid) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireTransaction(handle);
@@ -294,7 +306,9 @@ public final class AssessmentSyncWorkDao {
                 .one();
     }
 
-    /// Saves the keyset cursor for the captured pass. A mismatched revision is left unchanged.
+    /**
+     * Saves the keyset cursor for the captured pass. A mismatched revision is left unchanged.
+     */
     public boolean advancePass(final UUID targetUuid, final long activeRevision, final FindingKey cursor) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireTransaction(handle);
@@ -315,7 +329,9 @@ public final class AssessmentSyncWorkDao {
         return updated == 1;
     }
 
-    /// Acknowledges only {@code activeRevision}. Newer finding rows and a newer full request stay pending.
+    /**
+     * Acknowledges only {@code activeRevision}. Newer finding rows and a newer full request stay pending.
+     */
     public boolean completePass(final UUID targetUuid, final long activeRevision) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireTransaction(handle);
@@ -360,10 +376,12 @@ public final class AssessmentSyncWorkDao {
         return updated == 1;
     }
 
-    /// Completes reconciliation and refresh for a target that no longer exists.
-    ///
-    /// Pending finding keys are removed. Newer work cannot arrive for a deleted project
-    /// through this row once both revisions are caught up.
+    /**
+     * Completes reconciliation and refresh for a target that no longer exists.
+     *
+     * <p>Pending finding keys are removed. Newer work cannot arrive for a deleted project
+     * through this row once both revisions are caught up.
+     */
     public boolean acknowledgeCancellation(final UUID targetUuid) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireTransaction(handle);
@@ -423,7 +441,9 @@ public final class AssessmentSyncWorkDao {
                 .one();
     }
 
-    /// Advances refresh completion up to {@code capturedRefresh}, and never past the requested value.
+    /**
+     * Advances refresh completion up to {@code capturedRefresh}, and never past the requested value.
+     */
     public long acknowledgeRefresh(final UUID targetUuid, final long capturedRefresh) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         if (capturedRefresh < 0) {
@@ -467,8 +487,10 @@ public final class AssessmentSyncWorkDao {
                 .one();
     }
 
-    /// Locks due rows whose reconciliation or refresh is unfinished. Without {@code includeReconciliation},
-    /// only rows with a refresh pending are returned.
+    /**
+     * Locks due rows whose reconciliation or refresh is unfinished. Without {@code includeReconciliation},
+     * only rows with a refresh pending are returned.
+     */
     public List<WorkRow> pollDue(final int limit, final boolean includeReconciliation) {
         requireTransaction(handle);
         if (limit <= 0) {
@@ -490,12 +512,16 @@ public final class AssessmentSyncWorkDao {
                 .list();
     }
 
-    /// Pushes the next dispatch back. Attempts reset when a pass or refresh makes progress.
+    /**
+     * Pushes the next dispatch back. Attempts reset when a pass or refresh makes progress.
+     */
     public boolean recordDispatchAttempt(final UUID targetUuid, final Instant nextDispatchAt) {
         return recordDispatchAttempts(Map.of(targetUuid, nextDispatchAt)) == 1;
     }
 
-    /// Records one dispatch attempt per target in one statement.
+    /**
+     * Records one dispatch attempt per target in one statement.
+     */
     public int recordDispatchAttempts(final Map<UUID, Instant> nextDispatchAtByTarget) {
         requireTransaction(handle);
         if (nextDispatchAtByTarget.isEmpty()) {
@@ -517,7 +543,9 @@ public final class AssessmentSyncWorkDao {
                 .execute();
     }
 
-    /// Moves the next dispatch without counting an attempt, for work deferred on purpose.
+    /**
+     * Moves the next dispatch without counting an attempt, for work deferred on purpose.
+     */
     public boolean scheduleDispatch(final UUID targetUuid, final Instant nextDispatchAt) {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
@@ -598,7 +626,9 @@ public final class AssessmentSyncWorkDao {
         return unique.values();
     }
 
-    /// One target's durable progress.
+    /**
+     * One target's durable progress.
+     */
     public record WorkRow(
             UUID targetUuid,
             long requestedRevision,
@@ -618,7 +648,9 @@ public final class AssessmentSyncWorkDao {
             requireNonNull(nextDispatchAt, "nextDispatchAt must not be null");
         }
 
-        /// The saved keyset cursor, or null when the pass has not finished a finding yet.
+        /**
+         * The saved keyset cursor, or null when the pass has not finished a finding yet.
+         */
         public @Nullable FindingKey cursor() {
             return cursorComponentId == null || cursorVulnerabilityId == null
                     ? null
@@ -626,11 +658,15 @@ public final class AssessmentSyncWorkDao {
         }
     }
 
-    /// A pass captured from the locked work row. {@code resumed} means the cursor was kept.
-    /// One captured pass. {@code cursor} is the last finding finished, or null at the start.
+    /**
+     * A pass captured from the locked work row. {@code resumed} means the cursor was kept.
+     * One captured pass. {@code cursor} is the last finding finished, or null at the start.
+     */
     public record Pass(
             long activeRevision, boolean full, @Nullable FindingKey cursor, boolean resumed) {}
 
-    /// One pending finding key and the revision that requested it.
+    /**
+     * One pending finding key and the revision that requested it.
+     */
     public record PendingFinding(long componentId, long vulnerabilityId, long revision) {}
 }

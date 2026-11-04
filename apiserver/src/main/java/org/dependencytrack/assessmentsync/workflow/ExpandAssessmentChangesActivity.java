@@ -41,7 +41,9 @@ import java.util.UUID;
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 
-/// Schedules one page of target work and advances the outbox cursor in that same transaction.
+/**
+ * Schedules one page of target work and advances the outbox cursor in that same transaction.
+ */
 @ActivitySpec(name = "expand-assessment-changes", defaultTaskQueue = ExpandAssessmentChangesActivity.QUEUE_NAME)
 public final class ExpandAssessmentChangesActivity
         implements Activity<ExpandAssessmentChangesArg, ExpandAssessmentChangesRes> {
@@ -56,7 +58,9 @@ public final class ExpandAssessmentChangesActivity
         this(fanoutBatchSize, reconcileBatchSize, () -> {});
     }
 
-    /// {@code beforeExpand} runs at the start of every call, so a test can make the activity fail.
+    /**
+     * {@code beforeExpand} runs at the start of every call, so a test can make the activity fail.
+     */
     public ExpandAssessmentChangesActivity(
             final int fanoutBatchSize, final int reconcileBatchSize, final Runnable beforeExpand) {
         if (fanoutBatchSize <= 0) {

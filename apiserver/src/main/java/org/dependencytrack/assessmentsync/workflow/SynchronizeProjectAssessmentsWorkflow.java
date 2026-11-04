@@ -36,7 +36,9 @@ import org.jspecify.annotations.Nullable;
 import java.time.Duration;
 import java.util.UUID;
 
-/// Reconciles one target project. Each activity call is its own transaction.
+/**
+ * Reconciles one target project. Each activity call is its own transaction.
+ */
 @WorkflowSpec(name = SynchronizeProjectAssessmentsWorkflow.NAME)
 public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<SynchronizeProjectAssessmentsArg, Void> {
 
@@ -45,7 +47,9 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
     private static final RetryPolicy RECONCILE_RETRY_POLICY =
             new RetryPolicy(Duration.ofSeconds(1), 2.0, 0.2, Duration.ofSeconds(10), 3);
 
-    /// Instance id and concurrency key for one target project.
+    /**
+     * Instance id and concurrency key for one target project.
+     */
     public static String instanceId(final UUID targetUuid) {
         return "assessment-sync:" + targetUuid;
     }
@@ -126,7 +130,9 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
         ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(argument));
     }
 
-    /// The child uses the project analysis key, never this workflow's assessment-sync key.
+    /**
+     * The child uses the project analysis key, never this workflow's assessment-sync key.
+     */
     private static void awaitRefresh(
             final WorkflowContext<SynchronizeProjectAssessmentsArg> ctx,
             final UUID projectUuid,

@@ -291,7 +291,9 @@ public class ConfigPropertyResource extends AbstractConfigPropertyResource {
                 .build();
     }
 
-    /// Mirrors how authentication reads the flag, so both agree on what counts as enabled.
+    /**
+     * Mirrors how authentication reads the flag, so both agree on what counts as enabled.
+     */
     private static boolean isAclEnabledValue(
             final String groupName, final String propertyName, final @Nullable String value) {
         if (ConfigPropertyConstants.ofProperty(groupName, propertyName)

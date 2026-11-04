@@ -33,7 +33,9 @@ import java.util.UUID;
 
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 
-/// Reads the work row. Does not reconcile findings or acknowledge refresh.
+/**
+ * Reads the work row. Does not reconcile findings or acknowledge refresh.
+ */
 @ActivitySpec(name = "read-assessment-sync-pending", defaultTaskQueue = ReadAssessmentSyncPendingActivity.QUEUE_NAME)
 public final class ReadAssessmentSyncPendingActivity
         implements Activity<SynchronizeProjectAssessmentsArg, AssessmentSyncPendingRes> {

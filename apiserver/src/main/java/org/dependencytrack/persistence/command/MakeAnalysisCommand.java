@@ -69,9 +69,32 @@ public record MakeAnalysisCommand(
      * How an authored writer wants the analysis changed.
      */
     public enum DecisionAction {
+
+        /**
+         * Derive ownership from what changed. Changing a decision field takes local ownership,
+         * and drops the copied source trail if the decision itself changed.
+         * A comment alone keeps the current owner. A new analysis without changes is neutral.
+         */
         AUTO,
+
+        /**
+         * Only add {@code comment}, which is required. Decision fields and the owner stay unchanged.
+         * A new analysis is created as neutral.
+         */
         COMMENT_ONLY,
+
+        /**
+         * Take local ownership, even if no value changes, so synchronization no longer updates the analysis.
+         * Fields that are not supplied keep their stored value. The copied source trail is kept
+         * unless the decision changes.
+         */
         TAKE_LOCAL,
+
+        /**
+         * Give up a local decision: reset every decision field, remove the copied source trail,
+         * and make the analysis neutral so it can inherit again.
+         * Only a local analysis can be released.
+         */
         RELEASE_LOCAL
     }
 

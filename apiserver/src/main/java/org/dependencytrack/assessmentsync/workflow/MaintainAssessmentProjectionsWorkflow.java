@@ -36,7 +36,9 @@ import java.time.Duration;
 
 import static java.util.Objects.requireNonNull;
 
-/// Scans projects by UUID. The continue-as-new argument is the only scan cursor.
+/**
+ * Scans projects by UUID. The continue-as-new argument is the only scan cursor.
+ */
 @WorkflowSpec(name = MaintainAssessmentProjectionsWorkflow.NAME)
 public final class MaintainAssessmentProjectionsWorkflow implements Workflow<MaintainAssessmentProjectionsArg, Void> {
 
@@ -45,12 +47,16 @@ public final class MaintainAssessmentProjectionsWorkflow implements Workflow<Mai
     private static final RetryPolicy MAINTAIN_RETRY_POLICY =
             new RetryPolicy(Duration.ofSeconds(1), 2.0, 0.2, Duration.ofSeconds(10), 3);
 
-    /// Instance id and concurrency key for one maintenance operation.
+    /**
+     * Instance id and concurrency key for one maintenance operation.
+     */
     public static String instanceId(final AssessmentMaintenanceOperation operation) {
         return "assessment-maintenance:" + MaintenanceOperations.name(operation);
     }
 
-    /// Daily run selected from the current mode. {@code OFF} starts nothing.
+    /**
+     * Daily run selected from the current mode. {@code OFF} starts nothing.
+     */
     public static @Nullable CreateWorkflowRunRequest<MaintainAssessmentProjectionsArg> scheduledRun() {
         final AssessmentMaintenanceOperation operation =
                 MaintenanceOperations.scheduledFor(AssessmentSyncMode.current());

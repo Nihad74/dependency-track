@@ -26,11 +26,13 @@ import java.util.Objects;
 import java.util.TreeMap;
 import java.util.UUID;
 
-/// Agreement across eligible authored source decisions. Explanation text is ignored.
-///
-/// A source row whose structured decision is neutral does not vote (see ADR 044).
-/// Otherwise a comment-only row in one source would block a real decision from another.
-/// Suppression and rating overrides are part of the decision, so a suppressed {@code NOT_SET} row still votes.
+/**
+ * Agreement across eligible authored source decisions. Explanation text is ignored.
+ *
+ * <p>A source row whose structured decision is neutral does not vote (see ADR 044).
+ * Otherwise a comment-only row in one source would block a real decision from another.
+ * Suppression and rating overrides are part of the decision, so a suppressed {@code NOT_SET} row still votes.
+ */
 public final class AssessmentConsensus {
 
     private static final AssessmentDecision NEUTRAL = AssessmentDecision.neutral();
@@ -76,7 +78,9 @@ public final class AssessmentConsensus {
         return sole;
     }
 
-    /// One source finding that may vote. A null decision does not vote. Explanations never vote, so they are not here.
+    /**
+     * One source finding that may vote. A null decision does not vote. Explanations never vote, so they are not here.
+     */
     public record SourceAssessment(
             Contributor contributor,
             @Nullable AssessmentOwnership origin,
@@ -87,7 +91,9 @@ public final class AssessmentConsensus {
         }
     }
 
-    /// Stable source identity. Order is project, component, vulnerability, then analysis id.
+    /**
+     * Stable source identity. Order is project, component, vulnerability, then analysis id.
+     */
     public record Contributor(
             UUID sourceProjectUuid, UUID sourceComponentUuid, UUID sourceVulnerabilityUuid, long sourceAnalysisId)
             implements Comparable<Contributor> {
@@ -118,7 +124,9 @@ public final class AssessmentConsensus {
 
     public sealed interface Result permits Unavailable, Agreed, Conflict {}
 
-    /// No eligible authored decision.
+    /**
+     * No eligible authored decision.
+     */
     public record Unavailable(AssessmentReason reason) implements Result {
 
         public Unavailable {
@@ -126,7 +134,9 @@ public final class AssessmentConsensus {
         }
     }
 
-    /// Every eligible contributor has this decision. The list is sorted and deduplicated.
+    /**
+     * Every eligible contributor has this decision. The list is sorted and deduplicated.
+     */
     public record Agreed(AssessmentDecision decision, List<Contributor> contributors) implements Result {
 
         public Agreed {
@@ -139,7 +149,9 @@ public final class AssessmentConsensus {
         }
     }
 
-    /// At least two structured tuples differ. No source is selected.
+    /**
+     * At least two structured tuples differ. No source is selected.
+     */
     public record Conflict(List<Contributor> contributors) implements Result {
 
         public Conflict {

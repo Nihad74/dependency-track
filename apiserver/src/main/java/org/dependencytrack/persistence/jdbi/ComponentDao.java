@@ -70,7 +70,9 @@ public interface ComponentDao extends SqlObject, PaginationSupport {
             """)
     int deleteComponentRow(@Bind final UUID componentUuid);
 
-    /// Deletes a component and records one project invalidation for its owner.
+    /**
+     * Deletes a component and records one project invalidation for its owner.
+     */
     @Transaction
     default int deleteComponent(final UUID componentUuid) {
         final UUID projectUuid = getHandle()

@@ -20,20 +20,26 @@ package org.dependencytrack.assessmentsync;
 
 import org.jspecify.annotations.Nullable;
 
-/// Who owns the structured decision stored on an analysis.
+/**
+ * Who owns the structured decision stored on an analysis.
+ */
 public enum AssessmentOwnership {
     LOCAL,
     POLICY,
     INHERITED,
     NEUTRAL;
 
-    /// Written by a person or a policy. A row without an origin record is legacy and counts as authored.
-    /// Synchronization never overwrites an authored row, and only authored source rows vote.
+    /**
+     * Written by a person or a policy. A row without an origin record is legacy and counts as authored.
+     * Synchronization never overwrites an authored row, and only authored source rows vote.
+     */
     public static boolean authored(final @Nullable AssessmentOwnership owner) {
         return owner == null || owner == LOCAL || owner == POLICY;
     }
 
-    /// Owner of an analysis that has no origin row: a policy owns what it wrote, anything else is local.
+    /**
+     * Owner of an analysis that has no origin row: a policy owns what it wrote, anything else is local.
+     */
     public static AssessmentOwnership ofUnlabeled(final boolean writtenByPolicy) {
         return writtenByPolicy ? POLICY : LOCAL;
     }

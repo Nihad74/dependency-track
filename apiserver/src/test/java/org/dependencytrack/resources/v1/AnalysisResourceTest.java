@@ -1996,7 +1996,9 @@ class AnalysisResourceTest extends ResourceTest {
         return parseJsonObject(response);
     }
 
-    /// An analysis written before assessment synchronization, so it has no origin row.
+    /**
+     * An analysis written before assessment synchronization, so it has no origin row.
+     */
     private FindingFixture findingWithoutOrigin() {
         final Project project = qm.createProject("Acme Example", null, "1.0", null, null, null, null, false);
         var component = new Component();
@@ -2017,7 +2019,9 @@ class AnalysisResourceTest extends ResourceTest {
         return new FindingFixture(project, component, vulnerability, analysis.getId());
     }
 
-    /// A finding a vulnerability policy wrote before assessment synchronization, so it has no origin row.
+    /**
+     * A finding a vulnerability policy wrote before assessment synchronization, so it has no origin row.
+     */
     private FindingFixture policyRowWithoutOrigin() {
         final var fixture = findingOwnedBy("LOCAL");
         useJdbiHandle(handle -> {
@@ -2046,7 +2050,9 @@ class AnalysisResourceTest extends ResourceTest {
         return findingOwnedBy("INHERITED");
     }
 
-    /// A finding at decision version 4. Only an inherited finding gets a source contribution.
+    /**
+     * A finding at decision version 4. Only an inherited finding gets a source contribution.
+     */
     private FindingFixture findingOwnedBy(final String owner) {
         final Project project = qm.createProject("Acme Example", null, "1.0", null, null, null, null, false);
         var component = new Component();
@@ -2101,7 +2107,9 @@ class AnalysisResourceTest extends ResourceTest {
         return new FindingFixture(project, component, vulnerability, analysisId);
     }
 
-    /// An inherited finding whose contribution points to a source analysis that still exists.
+    /**
+     * An inherited finding whose contribution points to a source analysis that still exists.
+     */
     private FindingFixture inheritedFromALiveSource() {
         final FindingFixture fixture = inheritedFinding();
         final Project source = qm.createProject("Acme Source", null, "2.0", null, null, null, null, false);

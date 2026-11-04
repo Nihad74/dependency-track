@@ -30,13 +30,15 @@ import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
 
-/// The single rule that turns a marker identity into a source project (ADR 044).
-///
-/// A source has exactly the marker's name and version, is active, is not a collection project,
-/// and is not the target. An identity that matches more than one project resolves to nothing.
-/// With portfolio access control on, a source is eligible only when every team that can access the
-/// target can also access the source, directly or through a parent. Otherwise its decided values would
-/// reach viewers of the target who cannot see the source.
+/**
+ * The single rule that turns a marker identity into a source project (ADR 044).
+ *
+ * <p>A source has exactly the marker's name and version, is active, is not a collection project,
+ * and is not the target. An identity that matches more than one project resolves to nothing.
+ * With portfolio access control on, a source is eligible only when every team that can access the
+ * target can also access the source, directly or through a parent. Otherwise its decided values would
+ * reach viewers of the target who cannot see the source.
+ */
 final class AssessmentSourceResolver {
 
     private AssessmentSourceResolver() {}

@@ -44,7 +44,9 @@ import java.util.UUID;
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 
-/// One reconciliation batch for a target project. The work row holds the cursor.
+/**
+ * One reconciliation batch for a target project. The work row holds the cursor.
+ */
 @ActivitySpec(name = "reconcile-project-assessments", defaultTaskQueue = ReconcileProjectAssessmentsActivity.QUEUE_NAME)
 public final class ReconcileProjectAssessmentsActivity
         implements Activity<SynchronizeProjectAssessmentsArg, ReconcileProjectAssessmentsRes> {
@@ -59,8 +61,10 @@ public final class ReconcileProjectAssessmentsActivity
         this(reconcileBatchSize, inactiveBackoff, () -> {});
     }
 
-    /// {@code afterWrite} runs inside the batch transaction after the batch is written, so a test can
-    /// make the batch fail and roll back.
+    /**
+     * {@code afterWrite} runs inside the batch transaction after the batch is written, so a test can
+     * make the batch fail and roll back.
+     */
     ReconcileProjectAssessmentsActivity(
             final int reconcileBatchSize, final Duration inactiveBackoff, final Runnable afterWrite) {
         if (reconcileBatchSize <= 0) {
@@ -142,7 +146,9 @@ public final class ReconcileProjectAssessmentsActivity
                 .build();
     }
 
-    /// Nothing reconciled in this call.
+    /**
+     * Nothing reconciled in this call.
+     */
     private static ReconcileProjectAssessmentsRes idle(final boolean targetDeleted) {
         return ReconcileProjectAssessmentsRes.newBuilder()
                 .setHasMore(false)

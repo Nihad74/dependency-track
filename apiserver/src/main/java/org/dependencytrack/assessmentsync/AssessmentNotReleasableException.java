@@ -18,11 +18,13 @@
  */
 package org.dependencytrack.assessmentsync;
 
-/// Only a local decision can be released (ADR 044).
-///
-/// Releasing a policy row would drop its suppression until the next policy evaluation.
-/// An inherited or neutral row already follows its sources, so there is nothing to release.
-/// A row without origin metadata predates the feature and counts as local.
+/**
+ * Only a local decision can be released (ADR 044).
+ *
+ * <p>Releasing a policy row would drop its suppression until the next policy evaluation.
+ * An inherited or neutral row already follows its sources, so there is nothing to release.
+ * A row without origin metadata predates the feature and counts as local.
+ */
 public final class AssessmentNotReleasableException extends RuntimeException {
 
     public AssessmentNotReleasableException() {

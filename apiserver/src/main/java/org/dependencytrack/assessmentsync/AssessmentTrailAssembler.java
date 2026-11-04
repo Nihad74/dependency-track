@@ -41,14 +41,16 @@ import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
 import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
 
-/// Projects target analysis rows and the source groups the caller can read right now.
-///
-/// Access is the caller's current portfolio ACL, not a permission stored at sync time.
-/// The caller is the principal of the request the handle is bound to. A handle without one yields no
-/// source groups, because an unbound handle treats portfolio ACL as open.
-/// Deleted or inaccessible sources are omitted entirely. The result has no hidden-source count.
-/// Source text is read only for contributions that passed the access check, so hidden text never leaves the
-/// database.
+/**
+ * Projects target analysis rows and the source groups the caller can read right now.
+ *
+ * <p>Access is the caller's current portfolio ACL, not a permission stored at sync time.
+ * The caller is the principal of the request the handle is bound to. A handle without one yields no
+ * source groups, because an unbound handle treats portfolio ACL as open.
+ * Deleted or inaccessible sources are omitted entirely. The result has no hidden-source count.
+ * Source text is read only for contributions that passed the access check, so hidden text never leaves the
+ * database.
+ */
 public final class AssessmentTrailAssembler {
 
     private AssessmentTrailAssembler() {}
@@ -136,7 +138,9 @@ public final class AssessmentTrailAssembler {
                 .list();
     }
 
-    /// Drops sources the principal cannot read, and sources whose project, component, or analysis is gone.
+    /**
+     * Drops sources the principal cannot read, and sources whose project, component, or analysis is gone.
+     */
     private static List<VisibleContribution> visibleContributions(
             final Handle handle, final List<ContributionIdentity> identities) {
         if (identities.isEmpty() || !canReadSources(handle)) {
@@ -317,7 +321,9 @@ public final class AssessmentTrailAssembler {
         return values.stream().mapToLong(Long::longValue).toArray();
     }
 
-    /// One target analysis. {@code localDetails} is null while the decision is inherited.
+    /**
+     * One target analysis. {@code localDetails} is null while the decision is inherited.
+     */
     public record Trail(
             long analysisId,
             @Nullable AssessmentOwnership decisionOrigin,
@@ -331,7 +337,9 @@ public final class AssessmentTrailAssembler {
         }
     }
 
-    /// One source the caller can currently read. Identity is the live project and component.
+    /**
+     * One source the caller can currently read. Identity is the live project and component.
+     */
     public record SourceAssessment(
             ProjectIdentity project,
             ComponentIdentity component,
@@ -364,7 +372,9 @@ public final class AssessmentTrailAssembler {
         }
     }
 
-    /// Original source comment, as the source commenter wrote it.
+    /**
+     * Original source comment, as the source commenter wrote it.
+     */
     public record SourceComment(
             Instant timestamp, String comment, @Nullable String commenter) {
 

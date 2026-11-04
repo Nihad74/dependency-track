@@ -457,8 +457,10 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
                         """).bind("id", id).execute());
     }
 
-    /// Each run fails because the reconcile activity is not registered.
-    /// Returns how long the relay waits after the last dispatch.
+    /**
+     * Each run fails because the reconcile activity is not registered.
+     * Returns how long the relay waits after the last dispatch.
+     */
     private Duration dispatchAndEndWithoutProgress(final UUID targetUuid, final int runs) throws Exception {
         final String instanceId = SynchronizeProjectAssessmentsWorkflow.instanceId(targetUuid);
         Duration delay = Duration.ZERO;

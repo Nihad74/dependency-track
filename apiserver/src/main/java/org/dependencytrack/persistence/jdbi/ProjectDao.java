@@ -1073,7 +1073,9 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
             """)
     int deleteProjectRow(@Bind final UUID projectUuid);
 
-    /// Deletes one project and records every cascade-removed descendant.
+    /**
+     * Deletes one project and records every cascade-removed descendant.
+     */
     @Transaction
     default int deleteProject(final UUID projectUuid) {
         final List<ProjectTreeRow> removed = lockProjectTree(List.of(projectUuid));
@@ -1124,7 +1126,9 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
     @RegisterConstructorMapper(DeletedProjectRow.class)
     List<DeletedProjectRow> deleteProjectsReturning(@Bind Collection<UUID> projectUuids);
 
-    /// Deletes accessible projects and records each removed project, including cascade descendants.
+    /**
+     * Deletes accessible projects and records each removed project, including cascade descendants.
+     */
     @Transaction
     default List<DeletedProjectRow> deleteProjects(final Collection<UUID> projectUuids) {
         final Set<UUID> accessible = getAccessibleProjectUuids(projectUuids);
@@ -1151,7 +1155,9 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
             """)
     List<UUID> selectInactiveProjectUuids(@Bind Instant retentionCutOff, @Bind int batchSize);
 
-    /// Deletes inactive projects past the retention cutoff and records cascade descendants.
+    /**
+     * Deletes inactive projects past the retention cutoff and records cascade descendants.
+     */
     @Transaction
     default List<DeletedProject> deleteInactiveProjectsForRetentionDuration(
             final Instant retentionCutOff, final int batchSize) {
@@ -1178,7 +1184,9 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
             """)
     List<UUID> selectExcessProjectVersionUuids(@Bind int versionCountThreshold, @Bind int batchSize);
 
-    /// Deletes excess inactive versions and records cascade descendants.
+    /**
+     * Deletes excess inactive versions and records cascade descendants.
+     */
     @Transaction
     default List<DeletedProject> deleteExcessProjectVersions(final int versionCountThreshold, final int batchSize) {
         return deleteAndRecordProjectRoots(selectExcessProjectVersionUuids(versionCountThreshold, batchSize));
@@ -1214,7 +1222,9 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
     @RegisterConstructorMapper(DeletedProject.class)
     List<DeletedProject> deleteProjectRootsReturningTree(@Bind Collection<UUID> rootUuids);
 
-    /// Every project in the trees under {@code rootUuids}, roots included. {@code forUpdate} row-locks them.
+    /**
+     * Every project in the trees under {@code rootUuids}, roots included. {@code forUpdate} row-locks them.
+     */
     @SqlQuery(/* language=InjectedFreeMarker */ """
             SELECT project."UUID" AS "UUID"
                  , project."NAME" AS "NAME"

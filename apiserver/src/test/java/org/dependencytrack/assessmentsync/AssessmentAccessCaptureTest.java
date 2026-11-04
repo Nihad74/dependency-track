@@ -33,7 +33,9 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 
-/// Access changes decide source eligibility (ADR 044), so they must reach every project whose access changed.
+/**
+ * Access changes decide source eligibility (ADR 044), so they must reach every project whose access changed.
+ */
 class AssessmentAccessCaptureTest extends PersistenceCapableTest {
 
     @BeforeEach

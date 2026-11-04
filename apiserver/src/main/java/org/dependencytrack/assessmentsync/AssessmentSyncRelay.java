@@ -56,7 +56,9 @@ import java.util.concurrent.TimeUnit;
 import static io.github.resilience4j.core.IntervalFunction.ofExponentialRandomBackoff;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 
-/// Dispatches due outbox rows and unfinished target work. Rows stay until activities finish them.
+/**
+ * Dispatches due outbox rows and unfinished target work. Rows stay until activities finish them.
+ */
 final class AssessmentSyncRelay implements Closeable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AssessmentSyncRelay.class);
@@ -64,7 +66,9 @@ final class AssessmentSyncRelay implements Closeable {
     private static final String OUTCOME_TAG = "outcome";
     private static final String SCOPE_TAG = "scope";
 
-    /// Distinct from the notification relay lock.
+    /**
+     * Distinct from the notification relay lock.
+     */
     private static final long RELAY_ADVISORY_LOCK_ID = 418263950172846531L;
 
     private final DexEngine dexEngine;
@@ -117,7 +121,9 @@ final class AssessmentSyncRelay implements Closeable {
         }
     }
 
-    /// One poll. Visible to tests so a cycle can run without waiting for the scheduler.
+    /**
+     * One poll. Visible to tests so a cycle can run without waiting for the scheduler.
+     */
     void executeCycle() throws InterruptedException {
         final Timer.Sample cycleLatencySample = Timer.start();
         final CycleOutcome outcome;
@@ -160,8 +166,10 @@ final class AssessmentSyncRelay implements Closeable {
         }
     }
 
-    /// Active mode dispatches outbox rows and all target work. Withdrawal dispatches only targets with a
-    /// refresh pending, so policy and metrics catch up with withdrawn rows. Other modes dispatch nothing.
+    /**
+     * Active mode dispatches outbox rows and all target work. Withdrawal dispatches only targets with a
+     * refresh pending, so policy and metrics catch up with withdrawn rows. Other modes dispatch nothing.
+     */
     private CycleOutcome dispatchDue() throws InterruptedException {
         throwIfInterrupted();
         final AssessmentSyncMode mode = AssessmentSyncMode.current();
@@ -320,6 +328,8 @@ final class AssessmentSyncRelay implements Closeable {
         }
     }
 
-    /// One submitted run. {@code key} is the outbox id or the target UUID.
+    /**
+     * One submitted run. {@code key} is the outbox id or the target UUID.
+     */
     private record Dispatch<K>(K key, int attempts, UUID requestId) {}
 }

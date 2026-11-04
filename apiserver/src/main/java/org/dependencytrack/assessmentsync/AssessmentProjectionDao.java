@@ -47,8 +47,10 @@ import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
 import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
-/// Worker projections: machine fields and copied source trails on target analyses. Ownership records
-/// written by authored writers live in {@link AssessmentOriginDao}. Uses the caller's transaction.
+/**
+ * Worker projections: machine fields and copied source trails on target analyses. Ownership records
+ * written by authored writers live in {@link AssessmentOriginDao}. Uses the caller's transaction.
+ */
 public final class AssessmentProjectionDao {
 
     private final Handle handle;
@@ -57,8 +59,10 @@ public final class AssessmentProjectionDao {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Applies worker projections in a fixed number of statements. Returns one result per write, in order.
-    /// Local and policy rows, and stale versions, are left unchanged.
+    /**
+     * Applies worker projections in a fixed number of statements. Returns one result per write, in order.
+     * Local and policy rows, and stale versions, are left unchanged.
+     */
     public List<WorkerWriteResult> applyWorkerWrites(final List<WorkerWrite> writes) {
         requireTransaction(handle);
         if (writes.isEmpty()) {
@@ -108,7 +112,9 @@ public final class AssessmentProjectionDao {
         return List.copyOf(results);
     }
 
-    /// Applies one worker projection. Local and policy rows, and stale versions, are left unchanged.
+    /**
+     * Applies one worker projection. Local and policy rows, and stale versions, are left unchanged.
+     */
     public WorkerWriteResult applyWorkerWrite(final WorkerWrite write) {
         return applyWorkerWrites(List.of(write)).getFirst();
     }
@@ -162,10 +168,12 @@ public final class AssessmentProjectionDao {
                 loadContributions(analysisId));
     }
 
-    /// Resets worker-owned inherited projections on one project to neutral.
-    ///
-    /// Local, policy, and neutral rows are not updated. Comments in {@code ANALYSISCOMMENT} stay.
-    /// Every copied source trail on the project is removed, including provenance kept on local rows.
+    /**
+     * Resets worker-owned inherited projections on one project to neutral.
+     *
+     * <p>Local, policy, and neutral rows are not updated. Comments in {@code ANALYSISCOMMENT} stay.
+     * Every copied source trail on the project is removed, including provenance kept on local rows.
+     */
     public int withdrawInherited(final UUID projectUuid) {
         requireNonNull(projectUuid, "projectUuid must not be null");
         requireTransaction(handle);
@@ -296,8 +304,10 @@ public final class AssessmentProjectionDao {
                 .toList();
     }
 
-    /// Locks the analysis rows. The origins are not locked: every origin writer holds the project lock, as the
-    /// worker does, and the origin update still checks the version it read.
+    /**
+     * Locks the analysis rows. The origins are not locked: every origin writer holds the project lock, as the
+     * worker does, and the origin update still checks the version it read.
+     */
     private Map<Long, LockedAnalysis> lockAnalyses(final Collection<Long> analysisIds) {
         final var locked = new LinkedHashMap<Long, LockedAnalysis>();
         handle.createQuery(/* language=SQL */ """
@@ -439,7 +449,9 @@ public final class AssessmentProjectionDao {
                 .execute();
     }
 
-    /// Returns the new version per analysis. A row missing from the result lost the origin guard.
+    /**
+     * Returns the new version per analysis. A row missing from the result lost the origin guard.
+     */
     private Map<Long, Long> updateOrigins(final List<AcceptedWrite> accepted) {
         final int n = accepted.size();
         final var ids = new long[n];
@@ -479,8 +491,10 @@ public final class AssessmentProjectionDao {
         return versions;
     }
 
-    /// Upserts the desired trails of every accepted write, then removes contributions and comments that are no
-    /// longer desired. A write with no contributions clears its trail.
+    /**
+     * Upserts the desired trails of every accepted write, then removes contributions and comments that are no
+     * longer desired. A write with no contributions clears its trail.
+     */
     private void replaceContributions(final List<AcceptedWrite> accepted) {
         final long[] targetIds =
                 accepted.stream().mapToLong(write -> write.write().analysisId()).toArray();
@@ -703,7 +717,9 @@ public final class AssessmentProjectionDao {
                 rs.getBigDecimal("OWASPSCORE"));
     }
 
-    /// Why a worker write did not change the target row.
+    /**
+     * Why a worker write did not change the target row.
+     */
     public enum WorkerWriteStatus {
         APPLIED,
         REJECTED_OWNERSHIP,
@@ -711,7 +727,9 @@ public final class AssessmentProjectionDao {
         MISSING
     }
 
-    /// Result of a worker write. {@code decisionVersion} is the version after a successful write, or the current one.
+    /**
+     * Result of a worker write. {@code decisionVersion} is the version after a successful write, or the current one.
+     */
     public record WorkerWriteResult(WorkerWriteStatus status, long decisionVersion) {
 
         public WorkerWriteResult {
@@ -719,7 +737,9 @@ public final class AssessmentProjectionDao {
         }
     }
 
-    /// Current stored projection, including copied source trails.
+    /**
+     * Current stored projection, including copied source trails.
+     */
     public record StoredProjection(
             long analysisId,
             @Nullable Origin origin,
@@ -735,7 +755,9 @@ public final class AssessmentProjectionDao {
         }
     }
 
-    /// One copied source, including its own details and original comments.
+    /**
+     * One copied source, including its own details and original comments.
+     */
     public record StoredContribution(
             Contributor contributor, @Nullable String sourceDetails, Instant lastSyncAt, List<StoredComment> comments) {
 
@@ -747,7 +769,9 @@ public final class AssessmentProjectionDao {
         }
     }
 
-    /// Copied source comment. {@code originalTimestamp} is the source timestamp, not the copy time.
+    /**
+     * Copied source comment. {@code originalTimestamp} is the source timestamp, not the copy time.
+     */
     public record StoredComment(
             long sourceCommentId, String comment, @Nullable String commenter, Instant originalTimestamp) {
 
@@ -757,7 +781,9 @@ public final class AssessmentProjectionDao {
         }
     }
 
-    /// Desired worker projection. Ownership {@code LOCAL} and {@code POLICY} are not worker-assigned.
+    /**
+     * Desired worker projection. Ownership {@code LOCAL} and {@code POLICY} are not worker-assigned.
+     */
     public record WorkerWrite(
             long analysisId,
             AssessmentOwnership owner,
@@ -793,7 +819,9 @@ public final class AssessmentProjectionDao {
         }
     }
 
-    /// Desired source trail. Details belong to this contributor only.
+    /**
+     * Desired source trail. Details belong to this contributor only.
+     */
     public record SourceContributionWrite(
             Contributor contributor, @Nullable String sourceDetails, List<SourceCommentWrite> comments) {
 
@@ -811,7 +839,9 @@ public final class AssessmentProjectionDao {
         }
     }
 
-    /// Desired copied comment. The original timestamp is kept when the same source comment is written again.
+    /**
+     * Desired copied comment. The original timestamp is kept when the same source comment is written again.
+     */
     public record SourceCommentWrite(
             long sourceCommentId, String comment, @Nullable String commenter, Instant originalTimestamp) {
 

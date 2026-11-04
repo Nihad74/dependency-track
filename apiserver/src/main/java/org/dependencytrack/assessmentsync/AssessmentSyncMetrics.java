@@ -28,7 +28,9 @@ import org.slf4j.LoggerFactory;
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
-/// Backlog, mode, and drift gauges. Labels are the mode name or the maintenance operation.
+/**
+ * Backlog, mode, and drift gauges. Labels are the mode name or the maintenance operation.
+ */
 public final class AssessmentSyncMetrics {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AssessmentSyncMetrics.class);
@@ -46,14 +48,18 @@ public final class AssessmentSyncMetrics {
 
     private AssessmentSyncMetrics() {}
 
-    /// Findings verification found out of line with current source consensus, tagged by operation.
+    /**
+     * Findings verification found out of line with current source consensus, tagged by operation.
+     */
     public static MeterProvider<Counter> driftCounter(final MeterRegistry registry) {
         return Counter.builder(DRIFT)
                 .description("Findings whose maintained projection differed from current source consensus")
                 .withRegistry(registry);
     }
 
-    /// Registers gauges on {@code registry}. A second call with the same registry does nothing.
+    /**
+     * Registers gauges on {@code registry}. A second call with the same registry does nothing.
+     */
     public static void bind(final MeterRegistry registry) {
         requireNonNull(registry, "registry must not be null");
         if (registry.find(MODE).tag(MODE_TAG, AssessmentSyncMode.OFF.name()).gauge() != null) {
@@ -137,8 +143,10 @@ public final class AssessmentSyncMetrics {
                 """);
     }
 
-    /// Rollback is done once no row is inherited and no copied source text is left, including text kept as
-    /// provenance on local rows.
+    /**
+     * Rollback is done once no row is inherited and no copied source text is left, including text kept as
+     * provenance on local rows.
+     */
     private static double rollbackIncomplete() {
         if (AssessmentSyncMode.current() != AssessmentSyncMode.OFF) {
             return 0d;

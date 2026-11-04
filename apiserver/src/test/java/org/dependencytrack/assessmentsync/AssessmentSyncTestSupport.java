@@ -26,12 +26,16 @@ import java.util.UUID;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
-/// Reads what writers record for assessment synchronization, through the same DAO methods its consumers use.
+/**
+ * Reads what writers record for assessment synchronization, through the same DAO methods its consumers use.
+ */
 public final class AssessmentSyncTestSupport {
 
     private AssessmentSyncTestSupport() {}
 
-    /// What writers hand to the relay, read the way the relay reads it.
+    /**
+     * What writers hand to the relay, read the way the relay reads it.
+     */
     public static List<AssessmentChange> recordedChanges() {
         return inJdbiTransaction(handle -> new AssessmentSyncOutboxDao(handle)
                 .pollDue(1000).stream()
@@ -45,14 +49,18 @@ public final class AssessmentSyncTestSupport {
                 .toList();
     }
 
-    /// Null when the analysis has no origin record, as before the feature.
+    /**
+     * Null when the analysis has no origin record, as before the feature.
+     */
     public static AssessmentOwnership owner(final long analysisId) {
         final AssessmentOriginDao.Origin origin =
                 withJdbiHandle(handle -> new AssessmentOriginDao(handle).findOrigin(analysisId));
         return origin == null ? null : origin.owner();
     }
 
-    /// The embeddings of a target that resolve the marker name and version to a source.
+    /**
+     * The embeddings of a target that resolve the marker name and version to a source.
+     */
     public static List<AssessmentEmbeddingDao.Embedding> embeddings(
             final UUID targetUuid, final String markerName, final String markerVersion) {
         return withJdbiHandle(handle -> {
@@ -64,7 +72,9 @@ public final class AssessmentSyncTestSupport {
         });
     }
 
-    /// Whether the component is inside an embedded scope of the target.
+    /**
+     * Whether the component is inside an embedded scope of the target.
+     */
     public static boolean isEmbeddedMember(final UUID targetUuid, final long componentId) {
         return withJdbiHandle(handle -> {
             final Long targetId = handle.attach(ProjectDao.class).getProjectId(targetUuid);

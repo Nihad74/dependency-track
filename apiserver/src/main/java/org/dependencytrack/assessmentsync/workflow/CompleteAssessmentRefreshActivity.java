@@ -30,7 +30,9 @@ import java.util.UUID;
 
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 
-/// Acknowledges one captured refresh revision. Does not reconcile findings.
+/**
+ * Acknowledges one captured refresh revision. Does not reconcile findings.
+ */
 @ActivitySpec(name = "complete-assessment-refresh", defaultTaskQueue = CompleteAssessmentRefreshActivity.QUEUE_NAME)
 public final class CompleteAssessmentRefreshActivity implements Activity<RefreshSynchronizedAssessmentsArg, Void> {
 

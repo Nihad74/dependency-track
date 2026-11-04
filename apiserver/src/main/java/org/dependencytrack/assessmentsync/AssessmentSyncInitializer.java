@@ -32,7 +32,9 @@ import jakarta.servlet.ServletContextListener;
 
 import static java.util.Objects.requireNonNull;
 
-/// Starts the assessment sync relay after the Dex engine is available.
+/**
+ * Starts the assessment sync relay after the Dex engine is available.
+ */
 public final class AssessmentSyncInitializer implements ServletContextListener {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AssessmentSyncInitializer.class);

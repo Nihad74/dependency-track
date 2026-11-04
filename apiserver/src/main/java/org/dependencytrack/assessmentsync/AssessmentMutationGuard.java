@@ -26,22 +26,28 @@ import java.util.UUID;
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
-/// Transaction-scoped advisory guard for one target project.
-///
-/// The wait is bounded by the connection query timeout already installed on the handle.
-/// This class does not clear that timeout or open a transaction.
+/**
+ * Transaction-scoped advisory guard for one target project.
+ *
+ * <p>The wait is bounded by the connection query timeout already installed on the handle.
+ * This class does not clear that timeout or open a transaction.
+ */
 public final class AssessmentMutationGuard {
 
     private AssessmentMutationGuard() {}
 
-    /// Locks one project for the rest of the caller's transaction.
+    /**
+     * Locks one project for the rest of the caller's transaction.
+     */
     public static void lockProject(final Handle handle, final UUID projectUuid) {
         requireNonNull(projectUuid, "projectUuid must not be null");
         requireTransaction(handle);
         lockCanonical(handle, projectUuid.toString());
     }
 
-    /// Locks every project in canonical UUID string order.
+    /**
+     * Locks every project in canonical UUID string order.
+     */
     public static void lockProjects(final Handle handle, final Collection<UUID> projectUuids) {
         requireNonNull(projectUuids, "projectUuids must not be null");
         requireTransaction(handle);
