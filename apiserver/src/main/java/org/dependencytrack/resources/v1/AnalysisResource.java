@@ -168,7 +168,7 @@ public class AnalysisResource extends AbstractApiResource {
                 @ApiResponse(
                         responseCode = "200",
                         description = "The created analysis",
-                        content = @Content(schema = @Schema(implementation = AnalysisTrailResponse.class))),yes
+                        content = @Content(schema = @Schema(implementation = AnalysisTrailResponse.class))),
                 @ApiResponse(responseCode = "401", description = "Unauthorized"),
                 @ApiResponse(
                         responseCode = "403",
