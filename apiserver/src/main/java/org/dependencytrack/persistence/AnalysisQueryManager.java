@@ -104,6 +104,9 @@ public class AnalysisQueryManager extends QueryManager {
     public long makeAnalysis(final MakeAnalysisCommand command) {
         assertPersistent(command.component(), "component must be persistent");
         assertPersistent(command.vulnerability(), "vulnerability must be persistent");
+        if (command.decisionAction() == DecisionAction.COMMENT_ONLY && StringUtils.isBlank(command.comment())) {
+            throw new IllegalArgumentException("COMMENT_ONLY requires a comment");
+        }
 
         final long analysisId = callInTransaction(() -> {
             final Project project = command.component().getProject();
@@ -142,15 +145,35 @@ public class AnalysisQueryManager extends QueryManager {
             long vulnerabilityId,
             UUID vulnerabilityUuid) {}
 
+    /**
+     * Applies {@code command} to the analysis of one finding through JDBI, in the caller's transaction.
+     *
+     * <p>Locks the project for assessment synchronization and the analysis row, so it cannot race the
+     * synchronization worker or another writer. Throws {@link StaleAssessmentDecisionException} when
+     * {@code expectedDecisionVersion} does not match the stored version, and
+     * {@link AssessmentNotReleasableException} when {@code RELEASE_LOCAL} targets an analysis that is not local.
+     *
+     * <p>Then it creates or updates the analysis, adds the audit trail and comment, and updates the
+     * assessment origin as the decision action requires: it sets the owner, moves the decision version,
+     * drops the copied source trail, and records an assessment change for synchronization. An audit-change
+     * notification is emitted when the state or suppression changed.
+     *
+     * @param handle    JDBI handle bound to the transaction of {@link #makeAnalysis}
+     * @param command   the requested change
+     * @param finding   ids, UUIDs and names of the finding, read through JDO beforehand
+     * @param commenter name stored on the comments, or {@code null}
+     * @return the id of the created or updated analysis
+     */
     private static long write(
             final Handle handle,
             final MakeAnalysisCommand command,
             final FindingIds finding,
             final @Nullable String commenter) {
+
         AssessmentMutationGuard.lockProject(handle, finding.projectUuid());
         final long componentId = finding.componentId();
         final long vulnerabilityId = finding.vulnerabilityId();
-        final StoredAnalysis stored = lockAnalysis(handle, componentId, vulnerabilityId);
+        final StoredAnalysis stored = loadAndLockAnalysis(handle, componentId, vulnerabilityId);
         final AssessmentOriginDao.Origin originBefore =
                 stored == null ? null : new AssessmentOriginDao(handle).findOrigin(stored.id());
         final long decisionVersionBefore = originBefore == null ? 0 : originBefore.decisionVersion();
@@ -177,12 +200,7 @@ public class AnalysisQueryManager extends QueryManager {
         final DecisionAction action = effective.decisionAction();
         final FieldUpdate update =
                 switch (action) {
-                    case COMMENT_ONLY -> {
-                        if (effective.comment() == null || effective.comment().isBlank()) {
-                            throw new IllegalArgumentException("COMMENT_ONLY requires a comment");
-                        }
-                        yield FieldUpdate.NONE;
-                    }
+                    case COMMENT_ONLY -> FieldUpdate.NONE;
                     case RELEASE_LOCAL -> releaseLocal(analysis, auditTrailComments);
                     case AUTO, TAKE_LOCAL -> applySuppliedFields(effective, analysis, auditTrailComments);
                 };
@@ -484,7 +502,7 @@ public class AnalysisQueryManager extends QueryManager {
      */
     private record StoredAnalysis(long id, Analysis values) {}
 
-    private static @Nullable StoredAnalysis lockAnalysis(
+    private static @Nullable StoredAnalysis loadAndLockAnalysis(
             final Handle handle, final long componentId, final long vulnerabilityId) {
         return handle.createQuery(/* language=SQL */ """
                         SELECT "ID"
