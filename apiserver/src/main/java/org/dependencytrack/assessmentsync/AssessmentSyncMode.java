@@ -22,26 +22,54 @@ import org.dependencytrack.common.ConfigKeys;
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
 
-/// Cluster-wide deployment mode for assessment synchronization.
-///
-/// Read on each capture. This type does not cache the value.
+/**
+ * Cluster-wide deployment mode for assessment synchronization.
+ *
+ * <p>Read on each capture. This type does not cache the value.
+ */
 public enum AssessmentSyncMode {
+
+    /**
+     * Nothing is recorded, dispatched, or applied. Inherited analyses already written stay as they are.
+     * This is the default.
+     */
     OFF,
+
+    /**
+     * Changes are recorded in the outbox but not dispatched or applied. The daily maintenance run labels
+     * existing analyses with an owner and builds the embedding index.
+     */
     CAPTURE,
+
+    /**
+     * Changes are recorded, expanded to the affected targets, and reconciled onto them. The daily
+     * maintenance run verifies every project and repairs drift.
+     */
     ACTIVE,
+
+    /**
+     * Nothing new is recorded or reconciled. The daily maintenance run resets inherited analyses to neutral
+     * and removes copied source trails. The relay dispatches only the policy and metrics refresh that follows.
+     */
     WITHDRAW;
 
-    /// Outbox rows are written in capture and active modes only.
+    /**
+     * Outbox rows are written in capture and active modes only.
+     */
     public boolean recordsOutbox() {
         return this == CAPTURE || this == ACTIVE;
     }
 
-    /// Machine decisions are reconciled onto targets in active mode only.
+    /**
+     * Machine decisions are reconciled onto targets in active mode only.
+     */
     public boolean appliesAssessments() {
         return this == ACTIVE;
     }
 
-    /// Current mode. A missing property is OFF. Any other unknown value is rejected.
+    /**
+     * Current mode. A missing property is OFF. Any other unknown value is rejected.
+     */
     public static AssessmentSyncMode current() {
         return from(ConfigProvider.getConfig());
     }

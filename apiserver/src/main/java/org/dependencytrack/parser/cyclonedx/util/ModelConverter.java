@@ -112,7 +112,9 @@ public class ModelConverter {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ModelConverter.class);
 
-    /// Names an authorized source project on a CycloneDX vulnerability. The value is identity, not explanation text.
+    /**
+     * Names an authorized source project on a CycloneDX vulnerability. The value is identity, not explanation text.
+     */
     static final String ASSESSMENT_SOURCE_PROPERTY = "dependency-track:assessment-source";
 
     private record ComponentHashFieldAccessors(

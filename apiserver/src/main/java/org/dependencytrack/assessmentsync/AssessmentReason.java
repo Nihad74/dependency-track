@@ -18,7 +18,9 @@
  */
 package org.dependencytrack.assessmentsync;
 
-/// Why synchronization did not apply a machine decision, or withdrew one.
+/**
+ * Why synchronization did not apply a machine decision, or withdrew one.
+ */
 public enum AssessmentReason {
     IDENTITY_MISSING,
     IDENTITY_CONFLICT,

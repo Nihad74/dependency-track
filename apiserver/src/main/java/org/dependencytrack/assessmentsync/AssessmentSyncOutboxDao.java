@@ -41,7 +41,9 @@ import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
 import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
-/// Transactional outbox for assessment invalidations. Uses the caller's handle and transaction.
+/**
+ * Transactional outbox for assessment invalidations. Uses the caller's handle and transaction.
+ */
 public final class AssessmentSyncOutboxDao {
 
     private static final TypeReference<List<LookupKey>> LOOKUP_KEYS = new TypeReference<>() {};
@@ -67,8 +69,10 @@ public final class AssessmentSyncOutboxDao {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Inserts a batch. A row already stored in this transaction for the same scope keeps its reason
-    /// and gains the new lookup keys.
+    /**
+     * Inserts a batch. A row already stored in this transaction for the same scope keeps its reason
+     * and gains the new lookup keys.
+     */
     public List<Long> recordAll(final Collection<AssessmentChange> changes) {
         requireNonNull(changes, "changes must not be null");
         requireTransaction(handle);
@@ -159,7 +163,9 @@ public final class AssessmentSyncOutboxDao {
                 .list();
     }
 
-    /// Locks due rows without deleting them. A lower id committed later is still eligible.
+    /**
+     * Locks due rows without deleting them. A lower id committed later is still eligible.
+     */
     public List<OutboxEntry> pollDue(final int limit) {
         requireTransaction(handle);
         requirePositive(limit, "limit");
@@ -174,7 +180,9 @@ public final class AssessmentSyncOutboxDao {
                 .list();
     }
 
-    /// Locks one row so the caller can advance its expansion cursor. Null means it was deleted.
+    /**
+     * Locks one row so the caller can advance its expansion cursor. Null means it was deleted.
+     */
     public @Nullable OutboxEntry lock(final long id) {
         requireTransaction(handle);
         return handle.createQuery(SELECT_ENTRY + /* language=SQL */ """
@@ -201,12 +209,16 @@ public final class AssessmentSyncOutboxDao {
         return updated == 1;
     }
 
-    /// Records a dispatch attempt. False means expansion already deleted the row.
+    /**
+     * Records a dispatch attempt. False means expansion already deleted the row.
+     */
     public boolean recordDispatchAttempt(final long id, final Instant nextDispatchAt) {
         return recordDispatchAttempts(Map.of(id, nextDispatchAt)) == 1;
     }
 
-    /// Records one dispatch attempt per row in one statement. Rows expansion already deleted are skipped.
+    /**
+     * Records one dispatch attempt per row in one statement. Rows expansion already deleted are skipped.
+     */
     public int recordDispatchAttempts(final Map<Long, Instant> nextDispatchAtById) {
         requireTransaction(handle);
         if (nextDispatchAtById.isEmpty()) {
@@ -229,7 +241,9 @@ public final class AssessmentSyncOutboxDao {
                 .execute();
     }
 
-    /// Deletes the row after the caller has finished expansion.
+    /**
+     * Deletes the row after the caller has finished expansion.
+     */
     public boolean deleteFinished(final long id) {
         requireTransaction(handle);
         final int deleted =
@@ -298,7 +312,9 @@ public final class AssessmentSyncOutboxDao {
         }
     }
 
-    /// One durable outbox row. {@code change} is the stored invalidation.
+    /**
+     * One durable outbox row. {@code change} is the stored invalidation.
+     */
     public record OutboxEntry(
             long id,
             AssessmentChange change,

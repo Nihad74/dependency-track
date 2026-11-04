@@ -542,7 +542,9 @@ public interface MetricsDao extends SqlObject {
             """)
     List<ProjectMetrics> getMostRecentCollectionProjectMetrics(@Bind Collection<Long> projectIds);
 
-    /// Requires the caller's transaction, then locks the project before the metrics procedure.
+    /**
+     * Requires the caller's transaction, then locks the project before the metrics procedure.
+     */
     default void updateProjectMetrics(UUID uuid) {
         if (!getHandle().isInTransaction()) {
             throw new IllegalStateException("updateProjectMetrics requires an active transaction");

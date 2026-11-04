@@ -41,7 +41,9 @@ import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
-/// Two authored sources and one target whose marker graph names those sources.
+/**
+ * Two authored sources and one target whose marker graph names those sources.
+ */
 final class ReconcileFixture {
 
     static final String FOO_PURL = "pkg:maven/org.example/libfoo@1.2.3";

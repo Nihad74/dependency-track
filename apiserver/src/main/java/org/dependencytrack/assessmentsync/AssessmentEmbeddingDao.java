@@ -31,7 +31,9 @@ import java.util.UUID;
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
-/// Target marker index and descendant membership. Source projects are not foreign keys.
+/**
+ * Target marker index and descendant membership. Source projects are not foreign keys.
+ */
 public final class AssessmentEmbeddingDao {
 
     private final Handle handle;
@@ -40,8 +42,10 @@ public final class AssessmentEmbeddingDao {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Replaces markers and descendants for one target project. A null source UUID is kept.
-    /// Writes nothing when the stored rows already match, so daily verification does not rewrite them.
+    /**
+     * Replaces markers and descendants for one target project. A null source UUID is kept.
+     * Writes nothing when the stored rows already match, so daily verification does not rewrite them.
+     */
     public void replaceMembership(final long targetProjectId, final Collection<MarkerMembership> membership) {
         if (targetProjectId <= 0) {
             throw new IllegalArgumentException("targetProjectId must be positive");
@@ -280,7 +284,9 @@ public final class AssessmentEmbeddingDao {
         return componentIds;
     }
 
-    /// One marker row. {@code sourceProjectUuid} is null when the source project is unresolved.
+    /**
+     * One marker row. {@code sourceProjectUuid} is null when the source project is unresolved.
+     */
     public record Embedding(
             long targetProjectId,
             long markerComponentId,
@@ -294,10 +300,14 @@ public final class AssessmentEmbeddingDao {
         }
     }
 
-    /// One descendant stored under a marker.
+    /**
+     * One descendant stored under a marker.
+     */
     public record Membership(long targetProjectId, long markerComponentId, long componentId) {}
 
-    /// Desired marker plus its descendant component ids.
+    /**
+     * Desired marker plus its descendant component ids.
+     */
     public record MarkerMembership(
             long markerComponentId,
             String markerName,

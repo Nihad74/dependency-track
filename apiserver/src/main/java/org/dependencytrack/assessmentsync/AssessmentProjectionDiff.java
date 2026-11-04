@@ -26,7 +26,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 
-/// Calculates the next target projection. Does not write it.
+/**
+ * Calculates the next target projection. Does not write it.
+ */
 public final class AssessmentProjectionDiff {
 
     private AssessmentProjectionDiff() {}
@@ -90,7 +92,9 @@ public final class AssessmentProjectionDiff {
         return new HashSet<>(left).equals(new HashSet<>(right));
     }
 
-    /// Current target ownership and the machine fields synchronization is allowed to replace.
+    /**
+     * Current target ownership and the machine fields synchronization is allowed to replace.
+     */
     public record CurrentProjection(
             @Nullable AssessmentOwnership origin,
             AssessmentDecision decision,
@@ -105,7 +109,9 @@ public final class AssessmentProjectionDiff {
         }
     }
 
-    /// Next machine tuple.
+    /**
+     * Next machine tuple.
+     */
     public record Change(
             @Nullable AssessmentOwnership origin,
             AssessmentDecision decision,

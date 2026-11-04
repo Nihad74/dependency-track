@@ -25,9 +25,11 @@ import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
-/// Writes assessment invalidations through the caller's transaction.
-///
-/// Does not commit, open a transaction, or call Dex.
+/**
+ * Writes assessment invalidations through the caller's transaction.
+ *
+ * <p>Does not commit, open a transaction, or call Dex.
+ */
 public final class AssessmentChangeRecorder {
 
     private final Handle handle;
@@ -36,12 +38,16 @@ public final class AssessmentChangeRecorder {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Records one change when the current mode captures outbox rows.
+    /**
+     * Records one change when the current mode captures outbox rows.
+     */
     public void record(final AssessmentChange change) {
         recordAll(List.of(change));
     }
 
-    /// Records a batch when the current mode captures outbox rows.
+    /**
+     * Records a batch when the current mode captures outbox rows.
+     */
     public void recordAll(final Collection<AssessmentChange> changes) {
         requireNonNull(changes, "changes must not be null");
         if (changes.isEmpty() || !AssessmentSyncMode.current().recordsOutbox()) {

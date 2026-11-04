@@ -36,20 +36,26 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
-/// Component and vulnerability identity. Does not choose among different valid identities.
+/**
+ * Component and vulnerability identity. Does not choose among different valid identities.
+ */
 public final class AssessmentMatcher {
 
     private AssessmentMatcher() {}
 
-    /// Match {@code target} to at most one source component.
-    ///
-    /// Two source components with the same winning identity are ambiguous. Candidates that are
-    /// different identities are not collapsed to a winner.
+    /**
+     * Match {@code target} to at most one source component.
+     *
+     * <p>Two source components with the same winning identity are ambiguous. Candidates that are
+     * different identities are not collapsed to a winner.
+     */
     public static MatchResult match(final ComponentIdentity target, final List<ComponentIdentity> sourceCandidates) {
         return match(target, Candidates.of(sourceCandidates));
     }
 
-    /// Same as {@link #match(ComponentIdentity, List)}, against candidates parsed once for many targets.
+    /**
+     * Same as {@link #match(ComponentIdentity, List)}, against candidates parsed once for many targets.
+     */
     public static MatchResult match(final ComponentIdentity target, final Candidates sourceCandidates) {
         Objects.requireNonNull(target, "target must not be null");
         Objects.requireNonNull(sourceCandidates, "sourceCandidates must not be null");
@@ -93,7 +99,9 @@ public final class AssessmentMatcher {
         return new MatchResult.Unavailable(AssessmentReason.IDENTITY_MISSING);
     }
 
-    /// Same vulnerability row, both attributions still active. A shared vulnerability id is not enough.
+    /**
+     * Same vulnerability row, both attributions still active. A shared vulnerability id is not enough.
+     */
     public static VulnerabilityMatch matchVulnerability(
             final VulnerabilityIdentity target, final VulnerabilityIdentity source) {
         Objects.requireNonNull(target, "target must not be null");
@@ -204,7 +212,9 @@ public final class AssessmentMatcher {
         return parsed;
     }
 
-    /// Wildcard ({@code *}, including {@code 5.*}) and unspecified ({@code -}) versions are not concrete.
+    /**
+     * Wildcard ({@code *}, including {@code 5.*}) and unspecified ({@code -}) versions are not concrete.
+     */
     private static boolean concreteVersion(final Cpe cpe) {
         final String version = cpe.getVersion();
         if (version == null
@@ -227,7 +237,9 @@ public final class AssessmentMatcher {
         }
     }
 
-    /// Identity facts used for exact matching. Hashes are keyed by algorithm.
+    /**
+     * Identity facts used for exact matching. Hashes are keyed by algorithm.
+     */
     public record ComponentIdentity(
             UUID uuid,
             @Nullable Classifier classifier,
@@ -244,7 +256,9 @@ public final class AssessmentMatcher {
         }
     }
 
-    /// Algorithms stored on a component. Names follow the component hash columns.
+    /**
+     * Algorithms stored on a component. Names follow the component hash columns.
+     */
     public enum HashAlgorithm {
         MD5,
         SHA1,
@@ -279,7 +293,9 @@ public final class AssessmentMatcher {
         }
     }
 
-    /// Vulnerability row identity. {@code vulnerabilityId} is not used for matching.
+    /**
+     * Vulnerability row identity. {@code vulnerabilityId} is not used for matching.
+     */
     public record VulnerabilityIdentity(
             UUID vulnerabilityUuid, @Nullable String vulnerabilityId, boolean attributionActive) {
 
@@ -292,7 +308,9 @@ public final class AssessmentMatcher {
 
         record Same() implements VulnerabilityMatch {}
 
-        /// Active rows whose vulnerability UUIDs differ. No alias or vulnerability-id fallback.
+        /**
+         * Active rows whose vulnerability UUIDs differ. No alias or vulnerability-id fallback.
+         */
         record Different() implements VulnerabilityMatch {}
 
         record Unavailable(AssessmentReason reason) implements VulnerabilityMatch {
@@ -303,7 +321,9 @@ public final class AssessmentMatcher {
         }
     }
 
-    /// Source candidates with PURL and CPE parsed once, indexed by the identity a target can match on.
+    /**
+     * Source candidates with PURL and CPE parsed once, indexed by the identity a target can match on.
+     */
     public static final class Candidates {
 
         private final Map<String, List<ParsedCandidate>> byPurl;
@@ -336,7 +356,9 @@ public final class AssessmentMatcher {
             return new Candidates(byPurl, byCpe);
         }
 
-        /// The only candidates {@code classify} does not ignore for this target.
+        /**
+         * The only candidates {@code classify} does not ignore for this target.
+         */
         private List<ParsedCandidate> comparableTo(final TargetKey key) {
             if (key.canonicalPurl() != null) {
                 return byPurl.getOrDefault(key.canonicalPurl(), List.of());
@@ -346,7 +368,9 @@ public final class AssessmentMatcher {
         }
     }
 
-    /// The target's identity, parsed once per match.
+    /**
+     * The target's identity, parsed once per match.
+     */
     private record TargetKey(
             @Nullable String canonicalPurl, @Nullable Cpe concreteCpe) {
 

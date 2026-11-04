@@ -28,7 +28,9 @@ import java.time.OffsetDateTime;
 
 import static java.util.Objects.requireNonNull;
 
-/// Argument checks and row readers shared by the assessment sync DAOs.
+/**
+ * Argument checks and row readers shared by the assessment sync DAOs.
+ */
 final class DaoSupport {
 
     private DaoSupport() {}

@@ -135,7 +135,9 @@ public class AnalysisRequest {
         return vulnerability;
     }
 
-    /// What the client sent; {@code null} when omitted. Callers that need the v1 default apply it themselves.
+    /**
+     * What the client sent; {@code null} when omitted. Callers that need the v1 default apply it themselves.
+     */
     public @Nullable AnalysisState getAnalysisState() {
         return analysisState;
     }

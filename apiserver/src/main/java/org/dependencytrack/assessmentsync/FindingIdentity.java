@@ -26,7 +26,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
-/// The ids and UUIDs that name one analysed finding in an assessment change.
+/**
+ * The ids and UUIDs that name one analysed finding in an assessment change.
+ */
 public record FindingIdentity(
         long analysisId,
         long componentId,
@@ -37,8 +39,10 @@ public record FindingIdentity(
         UUID componentUuid,
         UUID vulnerabilityUuid) {
 
-    /// Select list for {@link #MAPPER}, over {@code ANALYSIS a}, {@code PROJECT p}, {@code COMPONENT c} and
-    /// {@code VULNERABILITY v}.
+    /**
+     * Select list for {@link #MAPPER}, over {@code ANALYSIS a}, {@code PROJECT p}, {@code COMPONENT c} and
+     * {@code VULNERABILITY v}.
+     */
     public static final String COLUMNS = """
             a."ID" AS analysis_id
                  , a."COMPONENT_ID" AS component_id
@@ -59,8 +63,10 @@ public record FindingIdentity(
             rs.getObject("component_uuid", UUID.class),
             rs.getObject("vulnerability_uuid", UUID.class));
 
-    /// Loads the identities of existing analyses. Fails when one of them is gone, because callers pass ids
-    /// they wrote in the same transaction.
+    /**
+     * Loads the identities of existing analyses. Fails when one of them is gone, because callers pass ids
+     * they wrote in the same transaction.
+     */
     public static List<FindingIdentity> ofAnalyses(final Handle handle, final Collection<Long> analysisIds) {
         if (analysisIds.isEmpty()) {
             return List.of();

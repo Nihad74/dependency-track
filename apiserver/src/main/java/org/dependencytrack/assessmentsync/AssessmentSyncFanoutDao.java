@@ -31,9 +31,11 @@ import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
-/// Paged discovery of targets affected by one outbox row. Reads the durable cursor from that row.
-///
-/// The changed project is its own target only where it can inherit or holds inherited rows.
+/**
+ * Paged discovery of targets affected by one outbox row. Reads the durable cursor from that row.
+ *
+ * <p>The changed project is its own target only where it can inherit or holds inherited rows.
+ */
 public final class AssessmentSyncFanoutDao {
 
     private static final String EVENT = """
@@ -192,7 +194,9 @@ public final class AssessmentSyncFanoutDao {
         this.handle = requireNonNull(handle, "handle must not be null");
     }
 
-    /// Next project-scope targets after the row's stored cursor, in UUID order.
+    /**
+     * Next project-scope targets after the row's stored cursor, in UUID order.
+     */
     public List<UUID> pageProjectTargets(final long outboxId, final int limit) {
         requirePositive(limit, "limit");
         requireTransaction(handle);
@@ -211,9 +215,11 @@ public final class AssessmentSyncFanoutDao {
                 .list();
     }
 
-    /// Next finding-scope targets after the row's stored cursor, in UUID order, each with at most
-    /// {@code limitPerTarget} matching keys in component/vulnerability order. One evaluation of the key query
-    /// serves both the page and its keys.
+    /**
+     * Next finding-scope targets after the row's stored cursor, in UUID order, each with at most
+     * {@code limitPerTarget} matching keys in component/vulnerability order. One evaluation of the key query
+     * serves both the page and its keys.
+     */
     public LinkedHashMap<UUID, List<FindingKey>> pageFindingTargets(
             final long outboxId, final int limit, final int limitPerTarget) {
         requirePositive(limit, "limit");

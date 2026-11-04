@@ -27,10 +27,12 @@ import org.jspecify.annotations.Nullable;
 import java.math.BigDecimal;
 import java.util.Objects;
 
-/// Structured machine tuple compared by consensus.
-///
-/// Scores are stored with trailing zeros removed so numerical equals holds for different scales.
-/// Vector strings are kept as given. A null rating override is distinct from an explicit zero.
+/**
+ * Structured machine tuple compared by consensus.
+ *
+ * <p>Scores are stored with trailing zeros removed so numerical equals holds for different scales.
+ * Vector strings are kept as given. A null rating override is distinct from an explicit zero.
+ */
 public record AssessmentDecision(
         AnalysisState state,
         AnalysisJustification justification,
@@ -56,7 +58,9 @@ public record AssessmentDecision(
         owaspScore = canonicalScore(owaspScore);
     }
 
-    /// Missing justification and response use the existing {@code NOT_SET} value.
+    /**
+     * Missing justification and response use the existing {@code NOT_SET} value.
+     */
     public static AssessmentDecision of(
             final AnalysisState state,
             final @Nullable AnalysisJustification justification,
@@ -87,7 +91,9 @@ public record AssessmentDecision(
                 owaspScore);
     }
 
-    /// Worker-owned fields after an inherited decision is withdrawn.
+    /**
+     * Worker-owned fields after an inherited decision is withdrawn.
+     */
     public static AssessmentDecision neutral() {
         return of(
                 AnalysisState.NOT_SET,

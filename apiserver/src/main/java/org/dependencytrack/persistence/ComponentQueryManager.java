@@ -489,7 +489,9 @@ final class ComponentQueryManager extends QueryManager {
                         handle, projectUuid, AssessmentChange.Reason.COMPONENT_CHANGED, keys));
     }
 
-    /// Fields that decide marker membership and matching. Compared before and after an update.
+    /**
+     * Fields that decide marker membership and matching. Compared before and after an update.
+     */
     private static List<Object> structure(final Component component) {
         final Project project = component.getProject();
         return Arrays.asList(

@@ -21,7 +21,9 @@ package org.dependencytrack.assessmentsync;
 import org.dependencytrack.common.ConfigKeys;
 import org.eclipse.microprofile.config.Config;
 
-/// Validated assessment-sync settings. Non-positive batch and poll values are rejected.
+/**
+ * Validated assessment-sync settings. Non-positive batch and poll values are rejected.
+ */
 public record AssessmentSyncSettings(
         long pollIntervalMillis,
         int relayBatchSize,
@@ -43,7 +45,9 @@ public record AssessmentSyncSettings(
         }
     }
 
-    /// Also rejects an unknown mode, so a typo fails startup instead of every later write.
+    /**
+     * Also rejects an unknown mode, so a typo fails startup instead of every later write.
+     */
     public static AssessmentSyncSettings read(final Config config) {
         AssessmentSyncMode.from(config);
         return new AssessmentSyncSettings(

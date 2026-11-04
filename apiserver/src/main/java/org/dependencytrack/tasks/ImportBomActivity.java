@@ -431,7 +431,9 @@ public final class ImportBomActivity implements Activity<ImportBomArg, Void> {
         }
     }
 
-    /// Locks a project that already exists, before the import can change it. Returns whether it did.
+    /**
+     * Locks a project that already exists, before the import can change it. Returns whether it did.
+     */
     private static boolean lockIfExists(final Handle handle, final UUID projectUuid) {
         final boolean exists = handle.createQuery(/* language=SQL */ """
                         SELECT EXISTS (

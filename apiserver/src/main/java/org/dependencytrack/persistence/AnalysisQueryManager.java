@@ -129,7 +129,9 @@ public class AnalysisQueryManager extends QueryManager {
         return analysisId;
     }
 
-    /// The JDO-loaded ids, UUIDs and names {@link #makeAnalysis} needs inside its JDBI handle.
+    /**
+     * The JDO-loaded ids, UUIDs and names {@link #makeAnalysis} needs inside its JDBI handle.
+     */
     private record FindingIds(
             long projectId,
             UUID projectUuid,
@@ -152,14 +154,17 @@ public class AnalysisQueryManager extends QueryManager {
         final AssessmentOriginDao.Origin originBefore =
                 stored == null ? null : new AssessmentOriginDao(handle).findOrigin(stored.id());
         final long decisionVersionBefore = originBefore == null ? 0 : originBefore.decisionVersion();
+
         if (command.expectedDecisionVersion() != null && decisionVersionBefore != command.expectedDecisionVersion()) {
             throw new StaleAssessmentDecisionException();
         }
+
         final Analysis analysis = stored == null ? newAnalysisValues() : stored.values();
         if (command.decisionAction() == DecisionAction.RELEASE_LOCAL
                 && !isReleasable(stored == null ? null : analysis, originBefore)) {
             throw new AssessmentNotReleasableException();
         }
+
         final boolean inheritedBefore = originBefore != null && originBefore.owner() == AssessmentOwnership.INHERITED;
         final AssessmentOwnership ownerBefore = stored == null
                 ? null
@@ -242,8 +247,10 @@ public class AnalysisQueryManager extends QueryManager {
         return owner == AssessmentOwnership.LOCAL;
     }
 
-    /// REST API v1 resets an omitted state, justification, or response to {@code NOT_SET}.
-    /// On an inherited analysis, omitted fields keep the inherited value instead (ADR 044).
+    /**
+     * REST API v1 resets an omitted state, justification, or response to {@code NOT_SET}.
+     * On an inherited analysis, omitted fields keep the inherited value instead (ADR 044).
+     */
     private static MakeAnalysisCommand applyV1Defaults(
             final MakeAnalysisCommand command, final boolean inheritedBefore) {
         if (!command.options().contains(MakeAnalysisCommand.Option.V1_RESET_OMITTED_DECISION) || inheritedBefore) {
@@ -254,8 +261,10 @@ public class AnalysisQueryManager extends QueryManager {
                 .withResponse(requireNonNullElse(command.response(), AnalysisResponse.NOT_SET));
     }
 
-    /// The source trail stays as provenance while a local owner keeps the inherited decision (ADR 044). Any later
-    /// change to the decision drops it, whichever action makes the change.
+    /**
+     * The source trail stays as provenance while a local owner keeps the inherited decision (ADR 044). Any later
+     * change to the decision drops it, whichever action makes the change.
+     */
     private static OriginWrite planOriginWrite(
             final DecisionAction action, final FieldUpdate update, final boolean created, final boolean commentAdded) {
         return switch (action) {
@@ -274,7 +283,9 @@ public class AnalysisQueryManager extends QueryManager {
         };
     }
 
-    /// Blank and null details are the same explanation. Clients send either for an empty field.
+    /**
+     * Blank and null details are the same explanation. Clients send either for an empty field.
+     */
     private static boolean sameDetails(final String left, final String right) {
         return StringUtils.isBlank(left) ? StringUtils.isBlank(right) : left.equals(right);
     }
@@ -436,19 +447,25 @@ public class AnalysisQueryManager extends QueryManager {
 
         private static final FieldUpdate NONE = new FieldUpdate(false, false, false, false);
 
-        /// The structured decision or the free-text details changed.
+        /**
+         * The structured decision or the free-text details changed.
+         */
         private boolean valuesChanged() {
             return decisionChanged || detailsChanged;
         }
     }
 
-    /// What an authored write does to the origin. {@code owner} is null when ownership stays as it is.
+    /**
+     * What an authored write does to the origin. {@code owner} is null when ownership stays as it is.
+     */
     private record OriginWrite(@Nullable AssessmentOwnership owner, boolean dropTrail, boolean recordChange) {
 
         private static final OriginWrite COMMENT_ONLY = new OriginWrite(null, false, true);
         private static final OriginWrite NONE = new OriginWrite(null, false, false);
 
-        /// Sets the owner and records an assessment change.
+        /**
+         * Sets the owner and records an assessment change.
+         */
         private static OriginWrite claim(final AssessmentOwnership owner) {
             return new OriginWrite(owner, false, true);
         }
@@ -462,7 +479,9 @@ public class AnalysisQueryManager extends QueryManager {
         }
     }
 
-    /// Decision fields of the stored analysis of one finding, locked for this transaction.
+    /**
+     * Decision fields of the stored analysis of one finding, locked for this transaction.
+     */
     private record StoredAnalysis(long id, Analysis values) {}
 
     private static @Nullable StoredAnalysis lockAnalysis(
@@ -519,7 +538,9 @@ public class AnalysisQueryManager extends QueryManager {
         return name == null ? null : Enum.valueOf(type, name);
     }
 
-    /// Values of a new analysis before the command is applied. Not persisted.
+    /**
+     * Values of a new analysis before the command is applied. Not persisted.
+     */
     private static Analysis newAnalysisValues() {
         final var values = new Analysis();
         values.setAnalysisState(AnalysisState.NOT_SET);
@@ -632,7 +653,9 @@ public class AnalysisQueryManager extends QueryManager {
         return value == null ? null : value.name();
     }
 
-    /// Inserts the comments in order, so their ids follow the audit trail order.
+    /**
+     * Inserts the comments in order, so their ids follow the audit trail order.
+     */
     private static void insertComments(
             final Handle handle, final long analysisId, final @Nullable String commenter, final List<String> comments) {
         if (comments.isEmpty()) {
@@ -678,7 +701,9 @@ public class AnalysisQueryManager extends QueryManager {
                         suppressionChanged));
     }
 
-    /// The commenter the command names, else the calling principal.
+    /**
+     * The commenter the command names, else the calling principal.
+     */
     private @Nullable String commenter(final @Nullable String commenter) {
         final String commenterToUse;
         if (commenter == null) {
