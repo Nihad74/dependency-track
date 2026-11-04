@@ -99,7 +99,9 @@ public record AnalysisTrailResponse(
         @Schema(description = "Source assessments the caller can currently read. Hidden sources are omitted")
         List<SourceAssessment> sourceAssessments) {
 
-    /// Who owns the structured decision. Clients cannot assign policy or inherited ownership.
+    /**
+     * Who owns the structured decision. Clients cannot assign policy or inherited ownership.
+     */
     public enum DecisionOrigin {
         LOCAL,
         POLICY,
@@ -107,7 +109,9 @@ public record AnalysisTrailResponse(
         NEUTRAL
     }
 
-    /// Machine fields come from the target analysis. Inherited rows do not expose copied details here.
+    /**
+     * Machine fields come from the target analysis. Inherited rows do not expose copied details here.
+     */
     public static AnalysisTrailResponse of(Analysis analysis, AssessmentTrailAssembler.Trail trail) {
         final List<AnalysisComment> jdoComments = analysis.getAnalysisComments();
         final List<Comment> comments =
@@ -175,7 +179,9 @@ public record AnalysisTrailResponse(
         }
     }
 
-    /// One source project the caller can read. There is no companion count of hidden sources.
+    /**
+     * One source project the caller can read. There is no companion count of hidden sources.
+     */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record SourceAssessment(
             @Schema(description = "Source project", requiredMode = Schema.RequiredMode.REQUIRED)

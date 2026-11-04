@@ -1624,7 +1624,9 @@ class VulnAnalysisWorkflowTest extends PersistenceCapableTest {
                         List.of(new AssessmentChange.LookupKey("acme-app", "1.0.0"))));
     }
 
-    /// Turns the finding into an inherited row with one copied source contribution.
+    /**
+     * Turns the finding into an inherited row with one copied source contribution.
+     */
     private void inheritWithTrail(
             final PolicyFixture fixture, final AnalysisState state, final AnalysisJustification justification) {
         final long analysisId = qm.makeAnalysis(new MakeAnalysisCommand(fixture.component(), fixture.vulnerability())
@@ -1665,7 +1667,9 @@ class VulnAnalysisWorkflowTest extends PersistenceCapableTest {
                 .one());
     }
 
-    /// A row from before assessment synchronization has no origin record.
+    /**
+     * A row from before assessment synchronization has no origin record.
+     */
     private void forgetOrigin(final PolicyFixture fixture) {
         final long analysisId =
                 qm.getAnalysis(fixture.component(), fixture.vulnerability()).getId();

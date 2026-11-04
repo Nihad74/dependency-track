@@ -31,7 +31,9 @@ import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 
-/// Expands one outbox row into target work. The activity owns the cursor.
+/**
+ * Expands one outbox row into target work. The activity owns the cursor.
+ */
 @WorkflowSpec(name = ExpandAssessmentChangesWorkflow.NAME)
 public final class ExpandAssessmentChangesWorkflow implements Workflow<ExpandAssessmentChangesArg, Void> {
 
@@ -40,7 +42,9 @@ public final class ExpandAssessmentChangesWorkflow implements Workflow<ExpandAss
     private static final RetryPolicy EXPAND_RETRY_POLICY =
             new RetryPolicy(Duration.ofSeconds(1), 2.0, 0.2, Duration.ofSeconds(10), 3);
 
-    /// Instance id and concurrency key for one outbox row.
+    /**
+     * Instance id and concurrency key for one outbox row.
+     */
     public static String instanceId(final long outboxId) {
         if (outboxId <= 0) {
             throw new IllegalArgumentException("outboxId must be positive");

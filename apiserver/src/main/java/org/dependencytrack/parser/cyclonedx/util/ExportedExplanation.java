@@ -31,10 +31,12 @@ import java.util.UUID;
 
 import static org.apache.commons.lang3.StringUtils.trimToNull;
 
-/// The one {@code analysis.detail} string CycloneDX allows for a finding, and the sources it is copied from.
-///
-/// Target-local details win. Otherwise source text is copied only when every source the caller may read has
-/// that same text, and those sources are named. Differing or missing text is omitted.
+/**
+ * The one {@code analysis.detail} string CycloneDX allows for a finding, and the sources it is copied from.
+ *
+ * <p>Target-local details win. Otherwise source text is copied only when every source the caller may read has
+ * that same text, and those sources are named. Differing or missing text is omitted.
+ */
 record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sources) {
 
     ExportedExplanation {
@@ -45,7 +47,9 @@ record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sour
         return new ExportedExplanation(null, List.of());
     }
 
-    /// {@code trails} holds the readable source trails by target analysis id.
+    /**
+     * {@code trails} holds the readable source trails by target analysis id.
+     */
     static ExportedExplanation of(final @Nullable Analysis analysis, final Map<Long, Trail> trails) {
         if (analysis == null) {
             return none();
@@ -80,7 +84,9 @@ record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sour
         return sources.stream().map(SourceAttribution::projectUuid).toList();
     }
 
-    /// "name@version name@version uuid" of the source project and component, as exported in a property.
+    /**
+     * "name@version name@version uuid" of the source project and component, as exported in a property.
+     */
     private static String label(final SourceAssessment source) {
         return identity(source.project().name(), source.project().version())
                 + " "

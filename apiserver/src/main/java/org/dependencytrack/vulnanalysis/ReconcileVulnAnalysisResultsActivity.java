@@ -786,7 +786,9 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
         return new PolicyApplication(changedKeys, auditChangeResults);
     }
 
-    /// Audit subjects are read after inheritance so a replaced policy outcome is not announced twice.
+    /**
+     * Audit subjects are read after inheritance so a replaced policy outcome is not announced twice.
+     */
     private static List<Notification> policyAuditNotifications(
             final Handle handle,
             final List<AnalysisReconciler.Result> auditResults,
@@ -837,7 +839,9 @@ public final class ReconcileVulnAnalysisResultsActivity implements Activity<Reco
         return notifications;
     }
 
-    /// Active mode only. Does not touch the work row or Dex.
+    /**
+     * Active mode only. Does not touch the work row or Dex.
+     */
     private static void materializeInitialAssessments(
             final Handle handle,
             final UUID projectUuid,

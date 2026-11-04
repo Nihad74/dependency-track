@@ -25,7 +25,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-/// Finding or project invalidation.
+/**
+ * Finding or project invalidation.
+ */
 public record AssessmentChange(
         Scope scope,
         UUID projectUuid,
@@ -54,7 +56,9 @@ public record AssessmentChange(
         }
     }
 
-    /// A change to a whole project, keyed by the project's name and version when both are known.
+    /**
+     * A change to a whole project, keyed by the project's name and version when both are known.
+     */
     public static AssessmentChange project(
             final UUID projectUuid,
             final Reason reason,
@@ -64,7 +68,9 @@ public record AssessmentChange(
                 Scope.PROJECT, projectUuid, null, null, reason, LookupKey.listOf(projectName, projectVersion));
     }
 
-    /// A change to one finding, keyed by its project's name and version when both are known.
+    /**
+     * A change to one finding, keyed by its project's name and version when both are known.
+     */
     public static AssessmentChange finding(
             final UUID projectUuid,
             final UUID componentUuid,
@@ -81,7 +87,9 @@ public record AssessmentChange(
                 LookupKey.listOf(projectName, projectVersion));
     }
 
-    /// {@code project:<uuid>} or {@code finding:<project>:<component>:<vulnerability>}.
+    /**
+     * {@code project:<uuid>} or {@code finding:<project>:<component>:<vulnerability>}.
+     */
     public String scopeKey() {
         return switch (scope) {
             case PROJECT -> "project:" + projectUuid;
@@ -96,7 +104,9 @@ public record AssessmentChange(
         PROJECT
     }
 
-    /// The writer that recorded the change. Stored for diagnostics only; expansion ignores it.
+    /**
+     * The writer that recorded the change. Stored for diagnostics only; expansion ignores it.
+     */
     public enum Reason {
         AUTHORED,
         POLICY,
@@ -111,7 +121,9 @@ public record AssessmentChange(
         ACCESS_CHANGED
     }
 
-    /// Project name and version observed before or after a change.
+    /**
+     * Project name and version observed before or after a change.
+     */
     public record LookupKey(String name, String version) {
 
         public LookupKey {
@@ -122,7 +134,9 @@ public record AssessmentChange(
             }
         }
 
-        /// One key when both name and version are present, otherwise none.
+        /**
+         * One key when both name and version are present, otherwise none.
+         */
         public static List<LookupKey> listOf(final @Nullable String name, final @Nullable String version) {
             if (name == null || version == null || name.isBlank() || version.isBlank()) {
                 return List.of();

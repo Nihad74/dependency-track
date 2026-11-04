@@ -47,7 +47,9 @@ import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
-/// One project-UUID page of backfill, verification, or withdrawal.
+/**
+ * One project-UUID page of backfill, verification, or withdrawal.
+ */
 @ActivitySpec(
         name = "maintain-assessment-projections",
         defaultTaskQueue = MaintainAssessmentProjectionsActivity.QUEUE_NAME)
@@ -163,7 +165,9 @@ public final class MaintainAssessmentProjectionsActivity
         return ProjectOutcome.advance(drift, enqueued);
     }
 
-    /// Same rule as expansion: only a project with a marker, or with inherited rows to withdraw, needs a pass.
+    /**
+     * Same rule as expansion: only a project with a marker, or with inherited rows to withdraw, needs a pass.
+     */
     private static boolean canInheritOrHoldsInherited(final Handle handle, final long projectId) {
         return handle.createQuery(/* language=SQL */ """
                         SELECT EXISTS (

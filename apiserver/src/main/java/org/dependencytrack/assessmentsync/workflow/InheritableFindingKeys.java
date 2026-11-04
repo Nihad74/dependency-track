@@ -25,13 +25,17 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 
-/// Keyset pages of the findings a full pass or verification must look at: findings on embedded members,
-/// which can inherit, and inherited rows, which may need withdrawal. The marker itself is not a member.
+/**
+ * Keyset pages of the findings a full pass or verification must look at: findings on embedded members,
+ * which can inherit, and inherited rows, which may need withdrawal. The marker itself is not a member.
+ */
 final class InheritableFindingKeys {
 
     private InheritableFindingKeys() {}
 
-    /// Keyset predicate "after the cursor" over the given columns. Bind it with {@link #bindCursor}.
+    /**
+     * Keyset predicate "after the cursor" over the given columns. Bind it with {@link #bindCursor}.
+     */
     static String afterCursor(final String componentColumn, final String vulnerabilityColumn) {
         return """
                 (:hasCursor = FALSE
