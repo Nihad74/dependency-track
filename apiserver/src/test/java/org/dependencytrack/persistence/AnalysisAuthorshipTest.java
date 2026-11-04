@@ -68,6 +68,25 @@ class AnalysisAuthorshipTest extends PersistenceCapableTest {
     }
 
     @Test
+    void commentOnlyWithoutACommentIsRejectedAndWritesNothing() {
+        final Finding finding = finding();
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+
+        for (final String comment : new String[] {null, " "}) {
+            assertThatThrownBy(
+                            () -> qm.makeAnalysis(new MakeAnalysisCommand(finding.component(), finding.vulnerability())
+                                    .withComment(comment)
+                                    .withDecisionAction(MakeAnalysisCommand.DecisionAction.COMMENT_ONLY)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("COMMENT_ONLY requires a comment");
+        }
+
+        assertThat(analysisCount(finding.componentId())).isZero();
+        assertThat(originCount(finding.componentId())).isZero();
+        assertThat(outboxCount(finding.projectUuid())).isZero();
+    }
+
+    @Test
     void modeOffWritesAnalysisWithoutOutbox() {
         final Finding finding = finding();
 
