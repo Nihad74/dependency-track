@@ -41,6 +41,7 @@ import org.cyclonedx.model.license.Expression;
 import org.cyclonedx.model.license.ExpressionDetailed;
 import org.cyclonedx.model.metadata.ToolInformation;
 import org.dependencytrack.assessmentsync.AssessmentTrailAssembler;
+import org.dependencytrack.assessmentsync.AssessmentTrailAssembler.AnalysisSnapshot;
 import org.dependencytrack.assessmentsync.AssessmentTrailAssembler.Trail;
 import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisJustification;
@@ -1087,7 +1088,7 @@ public class ModelConverter {
 
     private static org.cyclonedx.model.vulnerability.Vulnerability convert(
             Vulnerability vulnerability,
-            Analysis analysis,
+            @Nullable AnalysisSnapshot analysis,
             SortedSet<String> affectedComponentUuids,
             ExportedExplanation explanation) {
         // NB: No bom-ref. It is optional, nothing references a vulnerability entry,
@@ -1206,19 +1207,17 @@ public class ModelConverter {
 
         if (analysis != null) {
             final var cdxAnalysis = new org.cyclonedx.model.vulnerability.Vulnerability.Analysis();
-            if (analysis.getAnalysisResponse() != null) {
+            if (analysis.response() != null) {
                 final org.cyclonedx.model.vulnerability.Vulnerability.Analysis.Response response =
-                        convertDtVulnAnalysisResponseToCdxAnalysisResponse(analysis.getAnalysisResponse());
+                        convertDtVulnAnalysisResponseToCdxAnalysisResponse(analysis.response());
                 if (response != null) {
                     cdxAnalysis.setResponses(new ArrayList<>(List.of(response)));
                 }
             }
-            if (analysis.getAnalysisState() != null) {
-                cdxAnalysis.setState(convertDtVulnAnalysisStateToCdxAnalysisState(analysis.getAnalysisState()));
-            }
-            if (analysis.getAnalysisJustification() != null) {
-                cdxAnalysis.setJustification(convertDtVulnAnalysisJustificationToCdxAnalysisJustification(
-                        analysis.getAnalysisJustification()));
+            cdxAnalysis.setState(convertDtVulnAnalysisStateToCdxAnalysisState(analysis.state()));
+            if (analysis.justification() != null) {
+                cdxAnalysis.setJustification(
+                        convertDtVulnAnalysisJustificationToCdxAnalysisJustification(analysis.justification()));
             }
             cdxAnalysis.setDetail(explanation.detail());
             cdxVulnerability.setAnalysis(cdxAnalysis);
@@ -1505,10 +1504,13 @@ public class ModelConverter {
         final var groups = new LinkedHashMap<VulnerabilityGroupKey, VulnerabilityGroup>();
         for (final ResolvedFinding row : resolved) {
             final ExportedExplanation explanation = ExportedExplanation.of(row.analysis(), trails);
+            final Trail trail =
+                    row.analysis() == null ? null : trails.get(row.analysis().getId());
+            final AnalysisSnapshot analysis = trail == null ? null : trail.analysis();
             groups.computeIfAbsent(
-                            VulnerabilityGroupKey.of(row.vulnerability(), row.analysis(), explanation),
-                            ignored -> new VulnerabilityGroup(
-                                    row.vulnerability(), row.analysis(), new TreeSet<>(), explanation))
+                            VulnerabilityGroupKey.of(row.vulnerability(), analysis, explanation),
+                            ignored ->
+                                    new VulnerabilityGroup(row.vulnerability(), analysis, new TreeSet<>(), explanation))
                     .affectedComponentUuids()
                     .add(row.componentUuid());
         }
@@ -1543,35 +1545,30 @@ public class ModelConverter {
 
     private record VulnerabilityGroup(
             Vulnerability vulnerability,
-            Analysis analysis,
+            @Nullable AnalysisSnapshot analysis,
             SortedSet<String> affectedComponentUuids,
             ExportedExplanation explanation) {}
 
     private record VulnerabilityGroupKey(
             UUID vulnerabilityUuid,
             boolean analyzed,
-            AnalysisState analysisState,
-            AnalysisJustification analysisJustification,
-            AnalysisResponse analysisResponse,
-            String analysisDetails,
-            List<UUID> sourceProjects) {
+            @Nullable AnalysisState analysisState,
+            @Nullable AnalysisJustification analysisJustification,
+            @Nullable AnalysisResponse analysisResponse,
+            ExportedExplanation explanation) {
 
         private static VulnerabilityGroupKey of(
-                Vulnerability vulnerability, Analysis analysis, ExportedExplanation explanation) {
-            final List<UUID> sourceProjects = explanation.sourceProjectUuids();
+                Vulnerability vulnerability, @Nullable AnalysisSnapshot analysis, ExportedExplanation explanation) {
             if (analysis == null) {
-                return new VulnerabilityGroupKey(
-                        vulnerability.getUuid(), false, null, null, null, explanation.detail(), sourceProjects);
+                return new VulnerabilityGroupKey(vulnerability.getUuid(), false, null, null, null, explanation);
             }
-
             return new VulnerabilityGroupKey(
                     vulnerability.getUuid(),
                     true,
-                    analysis.getAnalysisState(),
-                    analysis.getAnalysisJustification(),
-                    analysis.getAnalysisResponse(),
-                    explanation.detail(),
-                    sourceProjects);
+                    analysis.state(),
+                    analysis.justification(),
+                    analysis.response(),
+                    explanation);
         }
     }
 

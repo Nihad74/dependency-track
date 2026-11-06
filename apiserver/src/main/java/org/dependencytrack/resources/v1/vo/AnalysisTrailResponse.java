@@ -117,22 +117,23 @@ public record AnalysisTrailResponse(
         final List<Comment> comments =
                 jdoComments != null ? jdoComments.stream().map(Comment::of).toList() : List.of();
 
+        final var snapshot = trail.analysis();
         return new AnalysisTrailResponse(
-                analysis.getAnalysisState(),
-                analysis.getAnalysisJustification(),
-                analysis.getAnalysisResponse(),
+                snapshot.state(),
+                snapshot.justification(),
+                snapshot.response(),
                 trail.localDetails(),
                 comments,
-                analysis.isSuppressed(),
-                analysis.getSeverity(),
-                analysis.getCvssV2Vector(),
-                analysis.getCvssV2Score(),
-                analysis.getCvssV3Vector(),
-                analysis.getCvssV3Score(),
-                analysis.getCvssV4Vector(),
-                analysis.getCvssV4Score(),
-                analysis.getOwaspVector(),
-                analysis.getOwaspScore(),
+                snapshot.suppressed(),
+                snapshot.severity(),
+                snapshot.cvssV2Vector(),
+                snapshot.cvssV2Score(),
+                snapshot.cvssV3Vector(),
+                snapshot.cvssV3Score(),
+                snapshot.cvssV4Vector(),
+                snapshot.cvssV4Score(),
+                snapshot.owaspVector(),
+                snapshot.owaspScore(),
                 trail.decisionOrigin() == null
                         ? null
                         : DecisionOrigin.valueOf(trail.decisionOrigin().name()),

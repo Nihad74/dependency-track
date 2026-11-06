@@ -55,12 +55,14 @@ record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sour
             return none();
         }
         final Trail trail = trails.get(analysis.getId());
-        final String local =
-                trail == null ? trimToNull(analysis.getAnalysisDetails()) : trimToNull(trail.localDetails());
+        if (trail == null) {
+            return none();
+        }
+        final String local = trimToNull(trail.localDetails());
         if (local != null) {
             return new ExportedExplanation(local, List.of());
         }
-        if (trail == null || trail.sourceAssessments().isEmpty()) {
+        if (trail.sourceAssessments().isEmpty()) {
             return none();
         }
         final var sources = new ArrayList<SourceAttribution>();
@@ -78,10 +80,6 @@ record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sour
         }
         sources.sort(Comparator.comparing(SourceAttribution::projectUuid));
         return new ExportedExplanation(distinctTexts.getFirst(), sources);
-    }
-
-    List<UUID> sourceProjectUuids() {
-        return sources.stream().map(SourceAttribution::projectUuid).toList();
     }
 
     /**

@@ -19,11 +19,17 @@
 package org.dependencytrack.assessmentsync;
 
 import alpine.resources.AlpineRequest;
+import org.dependencytrack.model.AnalysisJustification;
+import org.dependencytrack.model.AnalysisResponse;
+import org.dependencytrack.model.AnalysisState;
+import org.dependencytrack.model.Severity;
 import org.dependencytrack.persistence.jdbi.ApiRequestConfig;
 import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.transaction.TransactionIsolationLevel;
 import org.jspecify.annotations.Nullable;
 
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -50,6 +56,8 @@ import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
  * Deleted or inaccessible sources are omitted entirely. The result has no hidden-source count.
  * Source text is read only for contributions that passed the access check, so hidden text never leaves the
  * database.
+ * Reads outside a transaction use a short repeatable-read snapshot; existing caller transactions
+ * are joined without changing their isolation level.
  */
 public final class AssessmentTrailAssembler {
 
@@ -65,6 +73,13 @@ public final class AssessmentTrailAssembler {
             requirePositive(analysisId, "analysisId");
         }
 
+        if (handle.isInTransaction()) {
+            return assembleSnapshot(handle, orderedIds);
+        }
+        return handle.inTransaction(TransactionIsolationLevel.REPEATABLE_READ, tx -> assembleSnapshot(tx, orderedIds));
+    }
+
+    private static List<Trail> assembleSnapshot(final Handle handle, final LinkedHashSet<Long> orderedIds) {
         final var targets = loadTargets(handle, orderedIds);
         final var identities = loadContributionIdentities(handle, orderedIds);
         final var visible = visibleContributions(handle, identities);
@@ -87,7 +102,13 @@ public final class AssessmentTrailAssembler {
                 continue;
             }
             final List<SourceAssessment> groups = groupsByAnalysis.getOrDefault(analysisId, List.of());
-            trails.add(new Trail(analysisId, target.owner(), target.decisionVersion(), target.localDetails(), groups));
+            trails.add(new Trail(
+                    analysisId,
+                    target.analysis(),
+                    target.owner(),
+                    target.decisionVersion(),
+                    target.localDetails(),
+                    groups));
         }
         return List.copyOf(trails);
     }
@@ -97,6 +118,19 @@ public final class AssessmentTrailAssembler {
         handle.createQuery(/* language=SQL */ """
                         SELECT a."ID"
                              , a."DETAILS"
+                             , a."STATE"
+                             , a."JUSTIFICATION"
+                             , a."RESPONSE"
+                             , a."SUPPRESSED"
+                             , a."SEVERITY"::text AS "SEVERITY"
+                             , a."CVSSV2VECTOR"
+                             , a."CVSSV2SCORE"
+                             , a."CVSSV3VECTOR"
+                             , a."CVSSV3SCORE"
+                             , a."CVSSV4VECTOR"
+                             , a."CVSSV4SCORE"
+                             , a."OWASPVECTOR"
+                             , a."OWASPSCORE"
                              , o."OWNER"
                              , o."DECISION_VERSION"
                           FROM "ANALYSIS" AS a
@@ -110,12 +144,30 @@ public final class AssessmentTrailAssembler {
                     final AssessmentOwnership owner = ownerName == null ? null : AssessmentOwnership.valueOf(ownerName);
                     return new TargetRow(
                             rs.getLong("ID"),
+                            new AnalysisSnapshot(
+                                    AnalysisState.valueOf(rs.getString("STATE")),
+                                    nullableEnum(AnalysisJustification.class, rs.getString("JUSTIFICATION")),
+                                    nullableEnum(AnalysisResponse.class, rs.getString("RESPONSE")),
+                                    rs.getBoolean("SUPPRESSED"),
+                                    nullableEnum(Severity.class, rs.getString("SEVERITY")),
+                                    rs.getString("CVSSV2VECTOR"),
+                                    rs.getBigDecimal("CVSSV2SCORE"),
+                                    rs.getString("CVSSV3VECTOR"),
+                                    rs.getBigDecimal("CVSSV3SCORE"),
+                                    rs.getString("CVSSV4VECTOR"),
+                                    rs.getBigDecimal("CVSSV4SCORE"),
+                                    rs.getString("OWASPVECTOR"),
+                                    rs.getBigDecimal("OWASPSCORE")),
                             owner,
                             owner == null ? 0 : rs.getLong("DECISION_VERSION"),
                             owner == AssessmentOwnership.INHERITED ? null : rs.getString("DETAILS"));
                 })
                 .forEach(target -> targets.put(target.analysisId(), target));
         return targets;
+    }
+
+    private static <E extends Enum<E>> @Nullable E nullableEnum(final Class<E> type, final @Nullable String value) {
+        return value == null ? null : Enum.valueOf(type, value);
     }
 
     private static List<ContributionIdentity> loadContributionIdentities(
@@ -322,16 +374,41 @@ public final class AssessmentTrailAssembler {
     }
 
     /**
+     * Target machine fields read in the same SQL statement as ownership and decision version.
+     * Nullable legacy justification/response values are preserved for the existing API.
+     */
+    public record AnalysisSnapshot(
+            AnalysisState state,
+            @Nullable AnalysisJustification justification,
+            @Nullable AnalysisResponse response,
+            boolean suppressed,
+            @Nullable Severity severity,
+            @Nullable String cvssV2Vector,
+            @Nullable BigDecimal cvssV2Score,
+            @Nullable String cvssV3Vector,
+            @Nullable BigDecimal cvssV3Score,
+            @Nullable String cvssV4Vector,
+            @Nullable BigDecimal cvssV4Score,
+            @Nullable String owaspVector,
+            @Nullable BigDecimal owaspScore) {
+        public AnalysisSnapshot {
+            requireNonNull(state, "state must not be null");
+        }
+    }
+
+    /**
      * One target analysis. {@code localDetails} is null while the decision is inherited.
      */
     public record Trail(
             long analysisId,
+            AnalysisSnapshot analysis,
             @Nullable AssessmentOwnership decisionOrigin,
             long decisionVersion,
             @Nullable String localDetails,
             List<SourceAssessment> sourceAssessments) {
 
         public Trail {
+            requireNonNull(analysis, "analysis must not be null");
             requireNonNull(sourceAssessments, "sourceAssessments must not be null");
             sourceAssessments = List.copyOf(sourceAssessments);
         }
@@ -386,6 +463,7 @@ public final class AssessmentTrailAssembler {
 
     private record TargetRow(
             long analysisId,
+            AnalysisSnapshot analysis,
             @Nullable AssessmentOwnership owner,
             long decisionVersion,
             @Nullable String localDetails) {}

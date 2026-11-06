@@ -29,6 +29,7 @@ import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentReason;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.common.ConfigKeys;
+import org.dependencytrack.common.datasource.DataSourceRegistry;
 import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
@@ -46,6 +47,9 @@ import org.dependencytrack.policy.vulnerability.VulnerabilityPolicyDao.VulnPolic
 import org.dependencytrack.resources.v1.vo.AnalysisRequest;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.glassfish.jersey.server.ResourceConfig;
+import org.jdbi.v3.core.statement.SqlLogger;
+import org.jdbi.v3.core.statement.SqlStatements;
+import org.jdbi.v3.core.statement.StatementContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -59,9 +63,11 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import static net.javacrumbs.jsonunit.assertj.JsonAssertions.assertThatJson;
@@ -72,6 +78,7 @@ import static org.dependencytrack.notification.NotificationTestUtil.getNotificat
 import static org.dependencytrack.notification.proto.v1.Group.GROUP_PROJECT_AUDIT_CHANGE;
 import static org.dependencytrack.notification.proto.v1.Level.LEVEL_INFORMATIONAL;
 import static org.dependencytrack.notification.proto.v1.Scope.SCOPE_PORTFOLIO;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.createJdbi;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
@@ -80,6 +87,96 @@ class AnalysisResourceTest extends ResourceTest {
     @RegisterExtension
     static JerseyTestExtension jersey = new JerseyTestExtension(
             new ResourceConfig(AnalysisResource.class).register(ApiFilter.class).register(AuthFeature.class));
+
+    @Test
+    void sourceOnlyAccessCannotReadTheTargetAndSourceRevocationHidesItsProvenance() {
+        enablePortfolioAccessControl();
+        initializeWithPermissions(Permissions.VIEW_VULNERABILITY);
+        final var fixture = inheritedFromALiveSource();
+        final UUID sourceUuid = withJdbiHandle(h -> h.createQuery(
+                        "SELECT \"SOURCE_PROJECT_UUID\" FROM \"ASSESSMENT_SOURCE_CONTRIBUTION\" WHERE \"TARGET_ANALYSIS_ID\" = :id")
+                .bind("id", fixture.analysisId())
+                .mapTo(UUID.class)
+                .one());
+        final Project source = qm.getObjectByUuid(Project.class, sourceUuid.toString());
+        source.addAccessTeam(super.team);
+        qm.persist(source);
+        try (Response denied = jersey.target(V1_ANALYSIS)
+                .queryParam("component", fixture.component().getUuid())
+                .queryParam("vulnerability", fixture.vulnerability().getUuid())
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get()) {
+            assertThat(denied.getStatus()).isEqualTo(HttpStatus.SC_FORBIDDEN);
+            assertThat(getPlainTextBody(denied)).doesNotContain("copied", sourceUuid.toString());
+        }
+        fixture.project().addAccessTeam(super.team);
+        qm.persist(fixture.project());
+        assertThat(getAnalysis(fixture).getJsonArray("sourceAssessments")).hasSize(1);
+        source.removeAccessTeam(super.team);
+        qm.persist(source);
+        final JsonObject after = getAnalysis(fixture);
+        assertThat(after.getString("analysisState")).isEqualTo("NOT_AFFECTED");
+        assertThat(after.getBoolean("isSuppressed")).isTrue();
+        assertThat(after.containsKey("sourceAssessments")).isFalse();
+        assertThat(after.toString()).doesNotContain("copied", sourceUuid.toString(), "Acme Source");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void retrievalUsesOneDecisionSnapshotAndHandlesConcurrentDeletion(final boolean deleted) {
+        initializeWithPermissions(Permissions.VIEW_VULNERABILITY);
+        final var fixture = inheritedFinding();
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        final var changed = new AtomicBoolean();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logBeforeExecution(final StatementContext ctx) {
+                if (ctx.getRenderedSql().contains("o.\"DECISION_VERSION\"")
+                        && ctx.getRenderedSql().contains("FROM \"ANALYSIS\" AS a")
+                        && changed.compareAndSet(false, true)) {
+                    final String sql = deleted ? "DELETE FROM \"ANALYSIS\" WHERE \"ID\" = ?" : """
+                            WITH changed AS (
+                              UPDATE "ANALYSIS" SET "STATE" = 'EXPLOITABLE', "SUPPRESSED" = FALSE,
+                                     "CVSSV3SCORE" = 3.2, "DETAILS" = 'latest explanation'
+                               WHERE "ID" = ? RETURNING "ID"
+                            )
+                            UPDATE "ASSESSMENT_ORIGIN" SET "OWNER" = 'LOCAL', "DECISION_VERSION" = 5
+                             WHERE "ANALYSIS_ID" IN (SELECT "ID" FROM changed)
+                            """;
+                    try (var writer = DataSourceRegistry.getInstance()
+                                    .getDefault()
+                                    .getConnection();
+                            var statement = writer.prepareStatement(sql)) {
+                        statement.setLong(1, fixture.analysisId());
+                        statement.executeUpdate();
+                    } catch (SQLException e) {
+                        throw new IllegalStateException(e);
+                    }
+                }
+            }
+        });
+        try (Response response = jersey.target(V1_ANALYSIS)
+                .queryParam("component", fixture.component().getUuid())
+                .queryParam("vulnerability", fixture.vulnerability().getUuid())
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get(Response.class)) {
+            assertThat(changed).isTrue();
+            assertThat(response.getStatus()).isEqualTo(deleted ? HttpStatus.SC_NOT_FOUND : HttpStatus.SC_OK);
+            if (!deleted) {
+                final JsonObject body = parseJsonObject(response);
+                assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(5);
+                assertThat(body.getString("analysisState")).isEqualTo("EXPLOITABLE");
+                assertThat(body.getBoolean("isSuppressed")).isFalse();
+                assertThat(body.getJsonNumber("cvssV3Score").bigDecimalValue()).isEqualByComparingTo("3.2");
+                assertThat(body.getString("analysisDetails")).isEqualTo("latest explanation");
+            }
+        } finally {
+            jdbi.setSqlLogger(previous);
+        }
+    }
 
     @Test
     void retrieveAnalysisTest() {
