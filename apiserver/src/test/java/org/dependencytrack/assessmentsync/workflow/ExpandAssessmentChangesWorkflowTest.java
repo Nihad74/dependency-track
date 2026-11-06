@@ -50,17 +50,28 @@ import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesArg
 import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesRes;
 import org.dependencytrack.proto.internal.workflow.v1.SynchronizeProjectAssessmentsArg;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
+import org.jdbi.v3.core.statement.SqlLogger;
+import org.jdbi.v3.core.statement.SqlStatements;
+import org.jdbi.v3.core.statement.StatementContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.protoConverter;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.voidConverter;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.createJdbi;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
@@ -463,6 +474,218 @@ class ExpandAssessmentChangesWorkflowTest extends PersistenceCapableTest {
         assertThat(outboxCount()).isZero();
         assertThat(work(TARGET_A)).isNotNull();
         assertThat(work(TARGET_B)).isNotNull();
+        final int generation = withJdbiHandle(
+                h -> h.createQuery("SELECT continued_as_new_generation FROM dex_workflow_run WHERE id = :id")
+                        .bind("id", runId)
+                        .mapTo(int.class)
+                        .one());
+        assertThat(generation)
+                .as("the batch limit actually caused continuation")
+                .isEqualTo(1);
+    }
+
+    @Test
+    void concurrentMixedPagesLockAllTargetsInTheSameOrder() throws Exception {
+        start(100, 2);
+        final var first = project("first", "1", TARGET_A);
+        final var second = project("second", "1", TARGET_B);
+        final var vulnerability = vulnerability();
+        final UUID sourceOne = UUID.randomUUID();
+        final UUID sourceTwo = UUID.randomUUID();
+        final UUID componentOne = UUID.randomUUID();
+        final UUID componentTwo = UUID.randomUUID();
+        contribute(analysis(first, vulnerability, "one-small"), sourceOne, componentOne, vulnerability.getUuid());
+        contribute(analysis(second, vulnerability, "two-small"), sourceTwo, componentTwo, vulnerability.getUuid());
+        for (int i = 0; i < 3; i++) {
+            contribute(
+                    analysis(second, vulnerability, "one-large-" + i),
+                    sourceOne,
+                    componentOne,
+                    vulnerability.getUuid());
+            contribute(
+                    analysis(first, vulnerability, "two-large-" + i), sourceTwo, componentTwo, vulnerability.getUuid());
+        }
+        clearOutbox();
+        final var ids = inJdbiTransaction(h -> {
+            new AssessmentSyncWorkDao(h).requestFull(List.of(TARGET_A, TARGET_B));
+            return new AssessmentSyncOutboxDao(h)
+                    .recordAll(List.of(
+                            new AssessmentChange(
+                                    Scope.FINDING,
+                                    sourceOne,
+                                    componentOne,
+                                    vulnerability.getUuid(),
+                                    Reason.AUTHORED,
+                                    List.of()),
+                            new AssessmentChange(
+                                    Scope.FINDING,
+                                    sourceTwo,
+                                    componentTwo,
+                                    vulnerability.getUuid(),
+                                    Reason.AUTHORED,
+                                    List.of())));
+        });
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        final var firstWrites = ConcurrentHashMap.<Thread>newKeySet();
+        final var bothWriting = new CountDownLatch(2);
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logAfterExecution(final StatementContext context) {
+                if (context.getRenderedSql().contains("INSERT INTO \"ASSESSMENT_SYNC_WORK\"")
+                        && firstWrites.add(Thread.currentThread())) {
+                    bothWriting.countDown();
+                    try {
+                        // Permit either concurrent first writes or proper serialization of the whole page.
+                        bothWriting.await(2, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    }
+                }
+            }
+        });
+        try (final var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            final var one = executor.submit(() -> activity.execute(ACTIVITY_CONTEXT, argument(ids.getFirst())));
+            final var two = executor.submit(() -> activity.execute(ACTIVITY_CONTEXT, argument(ids.getLast())));
+            assertThat(one.get(15, TimeUnit.SECONDS).getTargetsRequested()).isEqualTo(2);
+            assertThat(two.get(15, TimeUnit.SECONDS).getTargetsRequested()).isEqualTo(2);
+        } finally {
+            jdbi.setSqlLogger(previous);
+        }
+        assertThat(outboxCount()).isZero();
+        for (final var uuid : List.of(TARGET_A, TARGET_B)) {
+            assertThat(work(uuid).requestedRevision()).isEqualTo(3);
+            assertThat(work(uuid).fullRevision()).isBetween(2L, 3L);
+            assertThat(pendingFindings(uuid)).hasSize(1);
+        }
+    }
+
+    @Test
+    void pageRequestsRollBackWithTheirCursorUpdateOrFinalDeletion() throws Exception {
+        start(1, 2);
+        final var source = UUID.randomUUID();
+        embed(project("a", "1", TARGET_A), source, "a", "1");
+        embed(project("b", "1", TARGET_B), source, "b", "1");
+        final long id =
+                record(new AssessmentChange(Scope.PROJECT, source, null, null, Reason.PROJECT_UPDATED, List.of()));
+        try {
+            failOutboxProgress(true);
+            assertThatThrownBy(() -> activity.execute(ACTIVITY_CONTEXT, argument(id)))
+                    .isInstanceOf(RuntimeException.class);
+            assertThat(cursor(id)).isNull();
+            assertThat(work(TARGET_A)).isNull();
+            assertThat(work(TARGET_B)).isNull();
+            failOutboxProgress(false);
+            assertThat(activity.execute(ACTIVITY_CONTEXT, argument(id)).getHasMore())
+                    .isTrue();
+            assertThat(cursor(id)).isEqualTo(TARGET_A);
+            assertThat(work(TARGET_A).requestedRevision()).isEqualTo(1);
+
+            failOutboxProgress(true);
+            assertThatThrownBy(() -> activity.execute(ACTIVITY_CONTEXT, argument(id)))
+                    .isInstanceOf(RuntimeException.class);
+            assertThat(cursor(id)).isEqualTo(TARGET_A);
+            assertThat(work(TARGET_A).requestedRevision()).isEqualTo(1);
+            assertThat(work(TARGET_B)).isNull();
+            failOutboxProgress(false);
+            final var last = activity.execute(ACTIVITY_CONTEXT, argument(id));
+            assertThat(last.getHasMore()).isFalse();
+            assertThat(last.getTargetsRequested()).isEqualTo(1);
+            assertThat(outboxCount()).isZero();
+            assertThat(work(TARGET_A).requestedRevision()).isEqualTo(1);
+            assertThat(work(TARGET_B).requestedRevision()).isEqualTo(1);
+        } finally {
+            failOutboxProgress(false);
+        }
+    }
+
+    @Test
+    void findingPaginationKeepsTheThresholdBoundaryAndDeduplicatesDiscoveryPaths() throws Exception {
+        start(2, 2);
+        final UUID source = UUID.randomUUID();
+        final UUID sourceComponent = UUID.randomUUID();
+        final var vulnerability = vulnerability();
+        final var a = project("a", "1", TARGET_A);
+        final var b = project("b", "1", TARGET_B);
+        final var c = project("c", "1", TARGET_C);
+        final var members = new java.util.ArrayList<Long>();
+        for (int i = 0; i < 2; i++) {
+            final long analysis = analysis(a, vulnerability, "a-" + i);
+            members.add(componentId(analysis));
+            contribute(analysis, source, sourceComponent, vulnerability.getUuid());
+        }
+        final var marker = component(a, "source", "1", Classifier.OPERATING_SYSTEM);
+        useJdbiTransaction(h -> new AssessmentEmbeddingDao(h)
+                .replaceMembership(
+                        a.getId(), List.of(new MarkerMembership(marker.getId(), "source", "1", source, members))));
+        for (int i = 0; i < 3; i++) {
+            contribute(analysis(b, vulnerability, "b-" + i), source, sourceComponent, vulnerability.getUuid());
+        }
+        contribute(analysis(c, vulnerability, "c"), source, sourceComponent, vulnerability.getUuid());
+        final long id = record(new AssessmentChange(
+                Scope.FINDING, source, sourceComponent, vulnerability.getUuid(), Reason.AUTHORED, List.of()));
+        final var first = activity.execute(ACTIVITY_CONTEXT, argument(id));
+        assertThat(first.getHasMore()).isTrue();
+        assertThat(first.getTargetsRequested()).isEqualTo(2);
+        assertThat(cursor(id)).isEqualTo(TARGET_B);
+        assertThat(work(TARGET_A).fullRevision()).isZero();
+        assertThat(pendingFindings(TARGET_A))
+                .extracting(PendingFinding::componentId)
+                .containsExactlyElementsOf(members);
+        assertThat(work(TARGET_B).fullRevision()).isEqualTo(1);
+        assertThat(pendingFindings(TARGET_B)).isEmpty();
+        assertThat(work(TARGET_C)).isNull();
+        final var last = activity.execute(ACTIVITY_CONTEXT, argument(id));
+        assertThat(last.getHasMore()).isFalse();
+        assertThat(last.getTargetsRequested()).isEqualTo(1);
+        assertThat(outboxCount()).isZero();
+        assertThat(work(TARGET_A).requestedRevision()).isEqualTo(1);
+        assertThat(work(TARGET_B).requestedRevision()).isEqualTo(1);
+        assertThat(pendingFindings(TARGET_C)).hasSize(1);
+    }
+
+    @ParameterizedTest
+    @EnumSource(Scope.class)
+    void emptyPagesCompleteAndWorkflowReplayOfADeletedRowIsHarmless(final Scope scope) throws Exception {
+        start(2, 2);
+        final var source = UUID.randomUUID();
+        final long id = record(
+                scope == Scope.PROJECT
+                        ? new AssessmentChange(scope, source, null, null, Reason.PROJECT_UPDATED, List.of())
+                        : new AssessmentChange(
+                                scope, source, UUID.randomUUID(), UUID.randomUUID(), Reason.AUTHORED, List.of()));
+        final var result = activity.execute(ACTIVITY_CONTEXT, argument(id));
+        assertThat(result.getHasMore()).isFalse();
+        assertThat(result.getAlreadyCompleted()).isFalse();
+        assertThat(result.getTargetsRequested()).isZero();
+        assertThat(outboxCount()).isZero();
+        final var replay = activity.execute(ACTIVITY_CONTEXT, argument(id));
+        assertThat(replay.getAlreadyCompleted()).isTrue();
+        assertThat(replay.getTargetsRequested()).isZero();
+        final var run = workflowTest
+                .getEngine()
+                .createRun(new CreateWorkflowRunRequest<>(ExpandAssessmentChangesWorkflow.class)
+                        .withArgument(argument(id)));
+        workflowTest.awaitRunStatus(run, WorkflowRunStatus.COMPLETED);
+    }
+
+    private static void failOutboxProgress(final boolean enabled) {
+        useJdbiTransaction(h -> {
+            h.execute("DROP TRIGGER IF EXISTS fail_expansion_progress ON \"ASSESSMENT_SYNC_OUTBOX\"");
+            if (enabled) {
+                h.execute("""
+                        CREATE OR REPLACE FUNCTION fail_expansion_progress() RETURNS trigger LANGUAGE plpgsql AS $$
+                        BEGIN RAISE EXCEPTION 'expansion progress failed'; END; $$
+                        """);
+                h.execute("""
+                        CREATE TRIGGER fail_expansion_progress BEFORE UPDATE OF "FANOUT_CURSOR" OR DELETE
+                        ON "ASSESSMENT_SYNC_OUTBOX" FOR EACH ROW EXECUTE FUNCTION fail_expansion_progress()
+                        """);
+            } else {
+                h.execute("DROP FUNCTION IF EXISTS fail_expansion_progress()");
+            }
+        });
     }
 
     private void start(final int fanoutBatchSize, final int reconcileBatchSize) {
