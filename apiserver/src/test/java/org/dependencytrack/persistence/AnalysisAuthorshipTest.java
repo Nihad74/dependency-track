@@ -31,10 +31,14 @@ import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.jdo.JDOHelper;
 import javax.jdo.ObjectState;
+import java.math.BigDecimal;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -105,6 +109,8 @@ class AnalysisAuthorshipTest extends PersistenceCapableTest {
             final Analysis otherAnalysis = qm.getObjectById(Analysis.class, unrelatedId);
             assertThat(targetAnalysis.getAnalysisComments()).hasSize(2);
             assertThat(otherAnalysis.getAnalysisComments()).hasSize(2);
+            final var targetComment = targetAnalysis.getAnalysisComments().getFirst();
+            assertThat(targetComment.getComment()).isNotBlank();
             final var otherComment = otherAnalysis.getAnalysisComments().getFirst();
             assertThat(otherComment.getComment()).isNotBlank();
             assertThat(JDOHelper.getObjectState(otherAnalysis)).isEqualTo(ObjectState.PERSISTENT_CLEAN);
@@ -116,9 +122,107 @@ class AnalysisAuthorshipTest extends PersistenceCapableTest {
 
             assertThat(JDOHelper.getObjectState(otherAnalysis)).isEqualTo(ObjectState.PERSISTENT_CLEAN);
             assertThat(JDOHelper.getObjectState(otherComment)).isEqualTo(ObjectState.PERSISTENT_CLEAN);
+            assertThat(JDOHelper.getObjectState(targetComment))
+                    .isEqualTo(ObjectState.HOLLOW_PERSISTENT_NONTRANSACTIONAL);
             assertThat(targetAnalysis.getAnalysisState()).isEqualTo(AnalysisState.EXPLOITABLE);
             assertThat(targetAnalysis.getAnalysisComments()).hasSize(4);
         });
+    }
+
+    @Test
+    void emptyCacheInvalidationLeavesLoadedAnalysesAndCommentsIntact() {
+        final var finding = finding();
+        final long id = qm.makeAnalysis(new MakeAnalysisCommand(finding.component(), finding.vulnerability())
+                .withState(AnalysisState.NOT_AFFECTED)
+                .withComment("keep loaded"));
+        qm.runInTransaction(() -> {
+            final var analysis = qm.getObjectById(Analysis.class, id);
+            assertThat(analysis.getAnalysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
+            final var comment = analysis.getAnalysisComments().getFirst();
+            assertThat(comment.getComment()).isNotBlank();
+            AnalysisCache.evict(qm.getPersistenceManager(), List.of());
+            assertThat(JDOHelper.getObjectState(analysis)).isEqualTo(ObjectState.PERSISTENT_CLEAN);
+            assertThat(JDOHelper.getObjectState(comment)).isEqualTo(ObjectState.PERSISTENT_CLEAN);
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void aWriteRefreshesValuesLoadedBeforeItsTransaction(final boolean joinTransaction) {
+        final var target = finding();
+        final var other = finding(" untouched");
+        final long otherId = qm.makeAnalysis(new MakeAnalysisCommand(other.component(), other.vulnerability())
+                .withState(AnalysisState.NOT_AFFECTED)
+                .withComment("unrelated"));
+        final long id = qm.makeAnalysis(new MakeAnalysisCommand(target.component(), target.vulnerability())
+                .withState(AnalysisState.NOT_AFFECTED)
+                .withComment("original"));
+        final var loaded = qm.getObjectById(Analysis.class, id);
+        assertThat(loaded.getAnalysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
+        assertThat(loaded.getAnalysisComments()).hasSize(2);
+        final var comment = loaded.getAnalysisComments().getFirst();
+        assertThat(comment.getComment()).isNotBlank();
+
+        final var otherAnalysis = qm.getObjectById(Analysis.class, otherId);
+        assertThat(otherAnalysis.getAnalysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
+        final var otherComment = otherAnalysis.getAnalysisComments().getFirst();
+        assertThat(otherComment.getComment()).isNotBlank();
+        final Runnable edit = () -> {
+            // Reading in a transaction legitimately enlists an object, changing its JDO state.
+            // Compare loaded unrelated objects within the same transaction context as the write.
+            assertThat(otherAnalysis.getAnalysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
+            assertThat(otherComment.getComment()).isNotBlank();
+            final var otherState = JDOHelper.getObjectState(otherAnalysis);
+            final var otherCommentState = JDOHelper.getObjectState(otherComment);
+            qm.makeAnalysis(new MakeAnalysisCommand(target.component(), target.vulnerability())
+                    .withState(AnalysisState.EXPLOITABLE)
+                    .withComment("changed"));
+            assertThat(loaded.getAnalysisState()).isEqualTo(AnalysisState.EXPLOITABLE);
+            assertThat(loaded.getAnalysisComments()).hasSize(4);
+            assertThat(JDOHelper.getObjectState(comment)).isEqualTo(ObjectState.HOLLOW_PERSISTENT_NONTRANSACTIONAL);
+            assertThat(JDOHelper.getObjectState(otherAnalysis)).isEqualTo(otherState);
+            assertThat(JDOHelper.getObjectState(otherComment)).isEqualTo(otherCommentState);
+        };
+        if (joinTransaction) {
+            qm.runInTransaction(edit);
+        } else {
+            edit.run();
+        }
+    }
+
+    @Test
+    void owaspWriteRoundTripsExactDecimalsAndKeepsExistingOverrides() {
+        final var finding = finding();
+        final long id = qm.makeAnalysis(new MakeAnalysisCommand(finding.component(), finding.vulnerability()));
+        final var analysis = qm.getObjectById(Analysis.class, id);
+        analysis.setSeverity(Severity.HIGH);
+        analysis.setCvssV2Vector("v2");
+        analysis.setCvssV2Score(new BigDecimal("4.123456789012345678"));
+        analysis.setCvssV3Vector("v3");
+        analysis.setCvssV3Score(new BigDecimal("5.123456789012345678"));
+        analysis.setCvssV4Vector("v4");
+        analysis.setCvssV4Score(new BigDecimal("6.123456789012345678"));
+        qm.persist(analysis);
+        qm.makeAnalysis(new MakeAnalysisCommand(finding.component(), finding.vulnerability())
+                .withOwasp("owasp", new BigDecimal("7.123456789012345678")));
+
+        final String storedVector = withJdbiHandle(
+                handle -> handle.createQuery("SELECT \"OWASPVECTOR\" FROM \"ANALYSIS\" WHERE \"ID\" = :id")
+                        .bind("id", id)
+                        .mapTo(String.class)
+                        .one());
+        assertThat(storedVector).isEqualTo("owasp");
+
+        final var reloaded = qm.getAnalysis(finding.component(), finding.vulnerability());
+        assertThat(reloaded.getSeverity()).isEqualTo(Severity.HIGH);
+        assertThat(reloaded.getCvssV2Vector()).isEqualTo("v2");
+        assertThat(reloaded.getCvssV2Score()).isEqualByComparingTo("4.123456789012345678");
+        assertThat(reloaded.getCvssV3Vector()).isEqualTo("v3");
+        assertThat(reloaded.getCvssV3Score()).isEqualByComparingTo("5.123456789012345678");
+        assertThat(reloaded.getCvssV4Vector()).isEqualTo("v4");
+        assertThat(reloaded.getCvssV4Score()).isEqualByComparingTo("6.123456789012345678");
+        assertThat(reloaded.getOwaspVector()).isEqualTo("owasp");
+        assertThat(reloaded.getOwaspScore()).isEqualByComparingTo("7.123456789012345678");
     }
 
     @Test

@@ -1778,6 +1778,98 @@ class AnalysisResourceTest extends ResourceTest {
     }
 
     @Test
+    void legacyCommentWithOmittedFieldsKeepsEveryInheritedDecisionField() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = inheritedFinding();
+        final var stored = qm.getObjectById(Analysis.class, fixture.analysisId());
+        stored.setAnalysisResponse(AnalysisResponse.CAN_NOT_FIX);
+        stored.setAnalysisDetails("source explanation");
+        qm.persist(stored);
+        withCapture(() -> {
+            final var response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "comment": "only a comment"
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            final var body = parseJsonObject(response);
+            assertThat(body.getString("analysisState")).isEqualTo("NOT_AFFECTED");
+            assertThat(body.getString("analysisJustification")).isEqualTo("CODE_NOT_REACHABLE");
+            assertThat(body.getString("analysisResponse")).isEqualTo("CAN_NOT_FIX");
+            // The inherited trail response renders source explanations separately. Check the stored
+            // target explanation directly so this regression covers writing, independent of rendering.
+            final String details = withJdbiHandle(
+                    handle -> handle.createQuery("SELECT \"DETAILS\" FROM \"ANALYSIS\" WHERE \"ID\" = :id")
+                            .bind("id", fixture.analysisId())
+                            .mapTo(String.class)
+                            .one());
+            assertThat(details).isEqualTo("source explanation");
+            assertThat(body.getBoolean("isSuppressed")).isTrue();
+            assertThat(body.getString("decisionOrigin")).isEqualTo("INHERITED");
+            assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(4);
+            assertThat(body.getJsonArray("analysisComments"))
+                    .extracting(value -> ((JsonObject) value).getString("comment"))
+                    .containsExactly("local note", "only a comment");
+            assertThat(contributionCount(fixture.analysisId())).isEqualTo(1);
+            assertThat(recordedChanges()).hasSize(1);
+        });
+    }
+
+    @Test
+    void legacyExplanationEditTakesOwnershipAndKeepsStructuredDecisionProvenance() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = inheritedFinding();
+        withCapture(() -> {
+            final var response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisDetails": "target explanation"
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            final var body = parseJsonObject(response);
+            assertThat(body.getString("analysisDetails")).isEqualTo("target explanation");
+            assertThat(body.getString("analysisState")).isEqualTo("NOT_AFFECTED");
+            assertThat(body.getString("analysisJustification")).isEqualTo("CODE_NOT_REACHABLE");
+            assertThat(body.getBoolean("isSuppressed")).isTrue();
+            assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
+            assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(5);
+            assertThat(body.getJsonArray("analysisComments"))
+                    .extracting(value -> ((JsonObject) value).getString("comment"))
+                    .containsExactly("local note", "Details: target explanation");
+            assertThat(contributionCount(fixture.analysisId())).isEqualTo(1);
+            assertThat(recordedChanges()).hasSize(1);
+        });
+    }
+
+    @Test
+    void legacyDecisionEditTakesOwnershipOfAPolicyRow() {
+        initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS);
+        final var fixture = findingOwnedBy("POLICY");
+        withCapture(() -> {
+            final var response = putAnalysis(fixture, """
+                    {
+                      "component": "%s",
+                      "vulnerability": "%s",
+                      "analysisState": "EXPLOITABLE"
+                    }
+                    """);
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+            final var body = parseJsonObject(response);
+            assertThat(body.getString("analysisState")).isEqualTo("EXPLOITABLE");
+            assertThat(body.getString("decisionOrigin")).isEqualTo("LOCAL");
+            assertThat(body.getJsonNumber("decisionVersion").longValue()).isEqualTo(5);
+            assertThat(body.getJsonArray("analysisComments"))
+                    .extracting(value -> ((JsonObject) value).getString("comment"))
+                    .contains("Analysis: NOT_AFFECTED → EXPLOITABLE");
+            assertThat(recordedChanges()).hasSize(1);
+        });
+    }
+
+    @Test
     void changingALocalDecisionKeepsItLocalAndAdvancesTheVersion() {
         initializeWithPermissions(Permissions.VULNERABILITY_ANALYSIS, Permissions.VIEW_VULNERABILITY);
         final var fixture = findingOwnedBy("LOCAL");
