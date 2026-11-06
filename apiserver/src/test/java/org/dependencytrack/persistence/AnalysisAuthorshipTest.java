@@ -21,6 +21,7 @@ package org.dependencytrack.persistence;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentSyncMode;
 import org.dependencytrack.common.ConfigKeys;
+import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisState;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.Project;
@@ -31,6 +32,8 @@ import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import javax.jdo.JDOHelper;
+import javax.jdo.ObjectState;
 import java.util.EnumSet;
 import java.util.UUID;
 
@@ -87,6 +90,38 @@ class AnalysisAuthorshipTest extends PersistenceCapableTest {
     }
 
     @Test
+    void updatingOneFindingRefreshesItsCacheWithoutEvictingOtherFindings() {
+        final Finding target = finding();
+        final Finding unrelated = finding(" unrelated");
+        final long targetId = qm.makeAnalysis(new MakeAnalysisCommand(target.component(), target.vulnerability())
+                .withState(AnalysisState.NOT_AFFECTED)
+                .withComment("original"));
+        final long unrelatedId =
+                qm.makeAnalysis(new MakeAnalysisCommand(unrelated.component(), unrelated.vulnerability())
+                        .withState(AnalysisState.NOT_AFFECTED)
+                        .withComment("unrelated"));
+        qm.runInTransaction(() -> {
+            final Analysis targetAnalysis = qm.getObjectById(Analysis.class, targetId);
+            final Analysis otherAnalysis = qm.getObjectById(Analysis.class, unrelatedId);
+            assertThat(targetAnalysis.getAnalysisComments()).hasSize(2);
+            assertThat(otherAnalysis.getAnalysisComments()).hasSize(2);
+            final var otherComment = otherAnalysis.getAnalysisComments().getFirst();
+            assertThat(otherComment.getComment()).isNotBlank();
+            assertThat(JDOHelper.getObjectState(otherAnalysis)).isEqualTo(ObjectState.PERSISTENT_CLEAN);
+            assertThat(JDOHelper.getObjectState(otherComment)).isEqualTo(ObjectState.PERSISTENT_CLEAN);
+
+            qm.makeAnalysis(new MakeAnalysisCommand(target.component(), target.vulnerability())
+                    .withState(AnalysisState.EXPLOITABLE)
+                    .withComment("changed"));
+
+            assertThat(JDOHelper.getObjectState(otherAnalysis)).isEqualTo(ObjectState.PERSISTENT_CLEAN);
+            assertThat(JDOHelper.getObjectState(otherComment)).isEqualTo(ObjectState.PERSISTENT_CLEAN);
+            assertThat(targetAnalysis.getAnalysisState()).isEqualTo(AnalysisState.EXPLOITABLE);
+            assertThat(targetAnalysis.getAnalysisComments()).hasSize(4);
+        });
+    }
+
+    @Test
     void modeOffWritesAnalysisWithoutOutbox() {
         final Finding finding = finding();
 
@@ -140,14 +175,18 @@ class AnalysisAuthorshipTest extends PersistenceCapableTest {
     }
 
     private Finding finding() {
-        final Project project = qm.createProject("Acme Example", null, "1.0", null, null, null, null, false);
+        return finding("");
+    }
+
+    private Finding finding(final String suffix) {
+        final Project project = qm.createProject("Acme Example" + suffix, null, "1.0", null, null, null, null, false);
         var component = new Component();
         component.setProject(project);
         component.setName("Acme Component");
         component.setVersion("1.0");
         component = qm.createComponent(component, false);
         var vulnerability = new Vulnerability();
-        vulnerability.setVulnId("INT-AUTHOR");
+        vulnerability.setVulnId("INT-AUTHOR" + suffix);
         vulnerability.setSource(Vulnerability.Source.INTERNAL);
         vulnerability.setSeverity(Severity.HIGH);
         vulnerability = qm.createVulnerability(vulnerability);

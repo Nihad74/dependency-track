@@ -265,32 +265,37 @@ public class AnalysisResource extends AbstractApiResource {
 
     private static MakeAnalysisCommand commandFor(
             final AnalysisRequest request, final Component component, final Vulnerability vulnerability) {
-        final MakeAnalysisCommand base = new MakeAnalysisCommand(component, vulnerability)
-                .withComment(request.getComment())
-                .withExpectedDecisionVersion(request.getExpectedDecisionVersion());
+        final var builder = MakeAnalysisCommand.builder(component, vulnerability)
+                .comment(request.getComment())
+                .expectedDecisionVersion(request.getExpectedDecisionVersion());
         return switch (request.getDecisionAction()) {
-            case COMMENT_ONLY -> base.withDecisionAction(MakeAnalysisCommand.DecisionAction.COMMENT_ONLY);
-            case RELEASE_LOCAL -> base.withDecisionAction(MakeAnalysisCommand.DecisionAction.RELEASE_LOCAL);
+            case COMMENT_ONLY ->
+                builder.decisionAction(MakeAnalysisCommand.DecisionAction.COMMENT_ONLY)
+                        .build();
+            case RELEASE_LOCAL ->
+                builder.decisionAction(MakeAnalysisCommand.DecisionAction.RELEASE_LOCAL)
+                        .build();
             case TAKE_LOCAL ->
-                applySentFields(base, request).withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL);
+                applySentFields(builder, request)
+                        .decisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL)
+                        .build();
             // On an inherited row, a changed field takes local ownership and the comment is kept (ADR 044).
             case AUTO ->
-                applySentFields(base, request)
-                        .withOptions(EnumSet.of(MakeAnalysisCommand.Option.V1_RESET_OMITTED_DECISION))
-                        .withDecisionAction(MakeAnalysisCommand.DecisionAction.AUTO);
+                applySentFields(builder, request)
+                        .options(EnumSet.of(MakeAnalysisCommand.Option.V1_RESET_OMITTED_DECISION))
+                        .decisionAction(MakeAnalysisCommand.DecisionAction.AUTO)
+                        .build();
         };
     }
 
-    /**
-     * Applies only the fields the client sent. Omitted fields keep their stored value.
-     */
-    private static MakeAnalysisCommand applySentFields(
-            final MakeAnalysisCommand command, final AnalysisRequest request) {
-        return command.withState(request.getAnalysisState())
-                .withJustification(request.getAnalysisJustification())
-                .withResponse(request.getAnalysisResponse())
-                .withDetails(request.getAnalysisDetails())
-                .withSuppress(request.isSuppressed());
+    /** Applies only the fields the client sent. Omitted fields keep their stored value. */
+    private static MakeAnalysisCommand.Builder applySentFields(
+            final MakeAnalysisCommand.Builder builder, final AnalysisRequest request) {
+        return builder.state(request.getAnalysisState())
+                .justification(request.getAnalysisJustification())
+                .response(request.getAnalysisResponse())
+                .details(request.getAnalysisDetails())
+                .suppress(request.isSuppressed());
     }
 
     private static boolean hasDecisionField(final AnalysisRequest request) {
