@@ -30,6 +30,8 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.UUID;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Runs stored policy evaluation and project metrics for one captured refresh revision.
  *
@@ -44,6 +46,7 @@ public final class RefreshSynchronizedAssessmentsWorkflow implements Workflow<Re
      * Instance id for one captured refresh of one target.
      */
     public static String instanceId(final UUID targetUuid, final long refreshRevision) {
+        requireNonNull(targetUuid, "targetUuid must not be null");
         if (refreshRevision <= 0) {
             throw new IllegalArgumentException("refreshRevision must be positive");
         }

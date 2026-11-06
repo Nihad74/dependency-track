@@ -39,8 +39,11 @@ public final class CompleteAssessmentRefreshActivity implements Activity<Refresh
     public static final String QUEUE_NAME = ExpandAssessmentChangesActivity.QUEUE_NAME;
 
     @Override
-    public @Nullable Void execute(
-            final ActivityContext ctx, final @Nullable RefreshSynchronizedAssessmentsArg argument) {
+    public @Nullable Void execute(final ActivityContext ctx, final @Nullable RefreshSynchronizedAssessmentsArg argument)
+            throws InterruptedException {
+        if (Thread.interrupted()) {
+            throw new InterruptedException("Interrupted before assessment refresh completion");
+        }
         final RefreshSynchronizedAssessmentsArg arg = AssessmentSyncArguments.require(argument);
         final UUID targetUuid = AssessmentSyncArguments.projectUuid(arg.getProjectUuid());
         final long capturedRefresh = AssessmentSyncArguments.positive("refresh_revision", arg.getRefreshRevision());

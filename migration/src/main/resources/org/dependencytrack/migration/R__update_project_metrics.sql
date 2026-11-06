@@ -6,7 +6,9 @@ AS
 $$
 DECLARE
   v_project_id   BIGINT; -- ID of the project to update metrics for
-  v_today        TIMESTAMPTZ := DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+  -- The caller may have waited for the project lock after starting its transaction.
+  v_measured_at  TIMESTAMPTZ := clock_timestamp();
+  v_today        TIMESTAMPTZ := DATE_TRUNC('day', v_measured_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
   v_project      RECORD; -- Aggregated project-level metrics
 BEGIN
   SELECT "ID"
@@ -160,8 +162,8 @@ BEGIN
          , policy_violations_security_total
          , policy_violations_security_audited
          , policy_violations_security_unaudited
-         , NOW()
-         , NOW()
+         , v_measured_at
+         , v_measured_at
       FROM classified
      WHERE NOT unchanged
   ),
@@ -340,8 +342,8 @@ BEGIN
          , v_project.policy_violations_security_total
          , v_project.policy_violations_security_audited
          , v_project.policy_violations_security_unaudited
-         , NOW()
-         , NOW()
+         , v_measured_at
+         , v_measured_at
      -- Skip insert if the project was deleted while metrics were being computed.
      WHERE EXISTS (
        SELECT 1

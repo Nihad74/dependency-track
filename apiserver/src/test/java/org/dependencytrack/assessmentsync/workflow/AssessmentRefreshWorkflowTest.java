@@ -27,6 +27,7 @@ import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.datasource.DataSourceRegistry;
 import org.dependencytrack.dex.api.ActivityContext;
+import org.dependencytrack.dex.api.failure.TerminalApplicationFailureException;
 import org.dependencytrack.dex.engine.api.DexEngine;
 import org.dependencytrack.dex.engine.api.TaskType;
 import org.dependencytrack.dex.engine.api.TaskWorkerOptions;
@@ -54,21 +55,31 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.protoConverter;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.voidConverter;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.openJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 
 class AssessmentRefreshWorkflowTest extends PersistenceCapableTest {
 
@@ -87,6 +98,137 @@ class AssessmentRefreshWorkflowTest extends PersistenceCapableTest {
     void clearMode() {
         MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
         MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_WORKFLOW_MAX_BATCHES);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void policyOrMetricsFailureKeepsRefreshPendingAndAFreshRunRecovers(final boolean failMetrics) throws Exception {
+        final UUID project = projectUuid();
+        useJdbiTransaction(h -> new AssessmentSyncWorkDao(h).requestRefresh(project));
+        final var policy = mock(CelPolicyEngine.class);
+        final var metrics = mock(UpdateProjectMetricsActivity.class);
+        final var actualPolicy = new CelPolicyEngine();
+        final var actualMetrics = new UpdateProjectMetricsActivity();
+        final var stages = new CopyOnWriteArrayList<String>();
+        final var failed = new java.util.concurrent.atomic.AtomicBoolean();
+        doAnswer(invocation -> {
+                    stages.add("policy");
+                    if (!failMetrics && failed.compareAndSet(false, true)) {
+                        throw new TerminalApplicationFailureException("forced policy failure");
+                    }
+                    actualPolicy.evaluateProject(project);
+                    return null;
+                })
+                .when(policy)
+                .evaluateProject(project);
+        doAnswer(invocation -> {
+                    stages.add("metrics");
+                    if (failMetrics && failed.compareAndSet(false, true)) {
+                        throw new TerminalApplicationFailureException("forced metrics failure");
+                    }
+                    actualMetrics.execute(invocation.getArgument(0), invocation.getArgument(1));
+                    assertThat(ReconcileFixture.work(project).refreshCompleted())
+                            .isZero();
+                    return null;
+                })
+                .when(metrics)
+                .execute(any(), any());
+        start(1, policy, metrics);
+        final UUID first = workflowTest.getEngine().createRun(refreshRun(project, 1));
+        workflowTest.awaitRunStatus(first, WorkflowRunStatus.FAILED);
+        assertThat(stages).containsExactlyElementsOf(failMetrics ? List.of("policy", "metrics") : List.of("policy"));
+        assertThat(ReconcileFixture.work(project).refreshCompleted()).isZero();
+        final long rows = withJdbiHandle(h -> h.createQuery(
+                        "SELECT count(*) FROM \"PROJECTMETRICS\" WHERE \"PROJECT_ID\" = (SELECT \"ID\" FROM \"PROJECT\" WHERE \"UUID\" = :uuid)")
+                .bind("uuid", project)
+                .mapTo(long.class)
+                .one());
+        assertThat(rows).isZero();
+        stages.clear();
+        final UUID retried = workflowTest.getEngine().createRun(refreshRun(project, 1));
+        workflowTest.awaitRunStatus(retried, WorkflowRunStatus.COMPLETED);
+        assertThat(stages).containsExactly("policy", "metrics");
+        assertThat(ReconcileFixture.work(project).refreshCompleted()).isEqualTo(1);
+        assertThat(ReconcileFixture.work(project).refreshRequested()).isEqualTo(1);
+    }
+
+    @Test
+    void refreshesSharingTheProjectAnalysisKeyWaitForTheActiveRefresh() throws Exception {
+        final UUID project = projectUuid();
+        useJdbiTransaction(h -> {
+            new AssessmentSyncWorkDao(h).requestRefresh(project);
+            new AssessmentSyncWorkDao(h).requestRefresh(project);
+        });
+        final var entered = new CountDownLatch(1);
+        final var release = new CountDownLatch(1);
+        final var evaluations = new AtomicInteger();
+        final var policy = mock(CelPolicyEngine.class);
+        doAnswer(invocation -> {
+                    if (evaluations.incrementAndGet() == 1) {
+                        entered.countDown();
+                        assertThat(release.await(10, TimeUnit.SECONDS)).isTrue();
+                    }
+                    return null;
+                })
+                .when(policy)
+                .evaluateProject(project);
+        start(1, policy, new UpdateProjectMetricsActivity());
+        final UUID first = workflowTest.getEngine().createRun(refreshRun(project, 1));
+        final UUID second;
+        try {
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            second = workflowTest.getEngine().createRun(refreshRun(project, 2));
+            final UUID contender = second;
+            await().during(Duration.ofMillis(250))
+                    .atMost(Duration.ofSeconds(5))
+                    .untilAsserted(() -> assertThat(workflowTest
+                                    .getEngine()
+                                    .getRunMetadataById(contender)
+                                    .status())
+                            .isEqualTo(WorkflowRunStatus.CREATED));
+            assertThat(evaluations.get()).isEqualTo(1);
+        } finally {
+            release.countDown();
+        }
+        workflowTest.awaitRunStatus(first, WorkflowRunStatus.COMPLETED);
+        workflowTest.awaitRunStatus(second, WorkflowRunStatus.COMPLETED);
+        assertThat(evaluations.get()).isEqualTo(2);
+        assertThat(ReconcileFixture.work(project).refreshCompleted()).isEqualTo(2);
+    }
+
+    @Test
+    void refreshRequestedBetweenMetricsAndAcknowledgmentIsDrainedByTheParent() throws Exception {
+        final UUID project = projectUuid();
+        useJdbiTransaction(h -> new AssessmentSyncWorkDao(h).requestRefresh(project));
+        final var metrics = mock(UpdateProjectMetricsActivity.class);
+        final var actualMetrics = new UpdateProjectMetricsActivity();
+        final var updates = new AtomicInteger();
+        doAnswer(invocation -> {
+                    actualMetrics.execute(invocation.getArgument(0), invocation.getArgument(1));
+                    if (updates.incrementAndGet() == 1) {
+                        useJdbiTransaction(h -> assertThat(new AssessmentSyncWorkDao(h).requestRefresh(project))
+                                .isEqualTo(2));
+                    }
+                    return null;
+                })
+                .when(metrics)
+                .execute(any(), any());
+        start(1, new CelPolicyEngine(), metrics);
+        final UUID run = workflowTest.getEngine().createRun(parentRun(project));
+        workflowTest.awaitRunStatus(run, WorkflowRunStatus.COMPLETED);
+        assertThat(updates.get()).isEqualTo(2);
+        assertThat(ReconcileFixture.work(project).refreshRequested()).isEqualTo(2);
+        assertThat(ReconcileFixture.work(project).refreshCompleted()).isEqualTo(2);
+        assertThat(runs(RefreshSynchronizedAssessmentsWorkflow.instanceId(project, 1)))
+                .hasSize(1);
+        assertThat(runs(RefreshSynchronizedAssessmentsWorkflow.instanceId(project, 2)))
+                .hasSize(1);
+        final int generation = withJdbiHandle(
+                h -> h.createQuery("SELECT continued_as_new_generation FROM dex_workflow_run WHERE id = :id")
+                        .bind("id", run)
+                        .mapTo(int.class)
+                        .one());
+        assertThat(generation).isEqualTo(1);
     }
 
     @Test
@@ -245,6 +387,13 @@ class AssessmentRefreshWorkflowTest extends PersistenceCapableTest {
     }
 
     private void start(final int reconcileBatchSize) {
+        start(reconcileBatchSize, new CelPolicyEngine(), new UpdateProjectMetricsActivity());
+    }
+
+    private void start(
+            final int reconcileBatchSize,
+            final CelPolicyEngine policyEngine,
+            final UpdateProjectMetricsActivity metricsActivity) {
         final DexEngine engine = workflowTest.getEngine();
         engine.registerWorkflow(
                 new SynchronizeProjectAssessmentsWorkflow(),
@@ -269,11 +418,10 @@ class AssessmentRefreshWorkflowTest extends PersistenceCapableTest {
                 protoConverter(SynchronizeProjectAssessmentsArg.class),
                 protoConverter(AssessmentSyncPendingRes.class));
         engine.registerActivity(
-                new EvalProjectPoliciesActivity(new CelPolicyEngine()),
+                new EvalProjectPoliciesActivity(policyEngine),
                 protoConverter(EvalProjectPoliciesArg.class),
                 voidConverter());
-        engine.registerActivity(
-                new UpdateProjectMetricsActivity(), protoConverter(UpdateProjectMetricsArg.class), voidConverter());
+        engine.registerActivity(metricsActivity, protoConverter(UpdateProjectMetricsArg.class), voidConverter());
         engine.createTaskQueue(new CreateTaskQueueRequest(TaskType.WORKFLOW, "default", 10));
         engine.createTaskQueue(new CreateTaskQueueRequest(TaskType.ACTIVITY, "default", 10));
         engine.createTaskQueue(
@@ -321,6 +469,14 @@ class AssessmentRefreshWorkflowTest extends PersistenceCapableTest {
                 .withArgument(SynchronizeProjectAssessmentsArg.newBuilder()
                         .setProjectUuid(targetUuid.toString())
                         .build());
+    }
+
+    private static CreateWorkflowRunRequest<RefreshSynchronizedAssessmentsArg> refreshRun(
+            final UUID project, final long revision) {
+        return new CreateWorkflowRunRequest<>(RefreshSynchronizedAssessmentsWorkflow.class)
+                .withWorkflowInstanceId(RefreshSynchronizedAssessmentsWorkflow.instanceId(project, revision))
+                .withConcurrencyKey(AnalyzeProjectWorkflow.concurrencyKeyForProject(project))
+                .withArgument(refreshArgument(project, revision));
     }
 
     private static RefreshSynchronizedAssessmentsArg refreshArgument(
