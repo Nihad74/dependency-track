@@ -435,6 +435,57 @@ public class ProjectDaoTest extends PersistenceCapableTest {
     }
 
     @Test
+    void activationCaptureIsIdempotentAndIgnoresMissingProjects() {
+        final var project = new Project();
+        project.setName("activation");
+        project.setVersion("1");
+        final var persisted = qm.persist(project);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try {
+            useJdbiTransaction(handle -> {
+                final var dao = handle.attach(ProjectDao.class);
+                assertThat(dao.updateActive(UUID.randomUUID(), false)).isFalse();
+                assertThat(dao.updateActive(persisted.getUuid(), true)).isFalse();
+                assertThat(dao.updateActive(persisted.getUuid(), false)).isTrue();
+                assertThat(dao.updateActive(persisted.getUuid(), false)).isFalse();
+            });
+            qm.getPersistenceManager().evictAll();
+            assertThat(qm.getObjectByUuid(Project.class, persisted.getUuid()).isActive())
+                    .isFalse();
+            assertThat(recordedChanges(persisted.getUuid()))
+                    .singleElement()
+                    .satisfies(
+                            change -> assertThat(change.reason()).isEqualTo(AssessmentChange.Reason.PROJECT_UPDATED));
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    @Test
+    void activationAndItsInvalidationRollbackTogether() {
+        final var project = new Project();
+        project.setName("activation");
+        project.setVersion("1");
+        final var persisted = qm.persist(project);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "ACTIVE");
+        try {
+            assertThatThrownBy(() -> useJdbiTransaction(handle -> {
+                        assertThat(handle.attach(ProjectDao.class).updateActive(persisted.getUuid(), false))
+                                .isTrue();
+                        throw new IllegalStateException("rollback");
+                    }))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("rollback");
+            qm.getPersistenceManager().evictAll();
+            assertThat(qm.getObjectByUuid(Project.class, persisted.getUuid()).isActive())
+                    .isTrue();
+            assertThat(recordedChanges(persisted.getUuid())).isEmpty();
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    @Test
     public void testGetProjectId() {
         final var project = new Project();
         project.setName("acme-app");

@@ -3206,6 +3206,95 @@ class BomResourceTest extends ResourceTest {
                 """);
     }
 
+    @ParameterizedTest
+    @CsvSource({
+        "false,false,true,true,CAPTURE", "false,true,false,true,CAPTURE",
+        "true,false,true,true,ACTIVE", "true,true,false,true,ACTIVE",
+        "false,false,false,true,ACTIVE", "false,true,true,true,ACTIVE",
+        "true,false,false,true,CAPTURE", "true,true,true,true,CAPTURE",
+        "false,false,true,false,CAPTURE", "false,true,false,false,CAPTURE",
+        "true,false,true,false,ACTIVE", "true,true,false,false,ACTIVE",
+        "false,false,false,true,OFF", "false,true,false,true,WITHDRAW",
+        "true,false,false,true,OFF", "true,true,false,true,WITHDRAW"
+    })
+    void bomUploadCapturesActivationBeforeTheImportRuns(
+            final boolean multipart,
+            final boolean byName,
+            final boolean active,
+            final boolean changed,
+            final String mode)
+            throws Exception {
+        initializeWithPermissions(Permissions.BOM_UPLOAD);
+        final var project = new Project();
+        project.setName("activation-source");
+        project.setVersion("1");
+        project.setActive(changed ? !active : active);
+        qm.persist(project);
+        final UUID projectUuid = project.getUuid();
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, mode);
+        try {
+            final int status;
+            if (multipart) {
+                try (final var body = new FormDataMultiPart()
+                                .field(
+                                        "bom",
+                                        resourceToString("/unit/bom-1.xml", StandardCharsets.UTF_8),
+                                        MediaType.APPLICATION_XML_TYPE)
+                                .field("isActive", Boolean.toString(active));
+                        final var client = ClientBuilder.newClient(new ClientConfig()
+                                .register(MultiPartFeature.class)
+                                .connectorProvider(new HttpUrlConnectorProvider()))) {
+                    if (byName) {
+                        body.field("projectName", project.getName()).field("projectVersion", project.getVersion());
+                    } else {
+                        body.field("project", projectUuid.toString());
+                    }
+                    try (final Response response = client.target(
+                                    jersey.target(V1_BOM).getUri())
+                            .request()
+                            .header(X_API_KEY, apiKey)
+                            .post(Entity.entity(body, body.getMediaType()))) {
+                        status = response.getStatus();
+                    }
+                }
+            } else {
+                final var body = jakarta.json.Json.createObjectBuilder()
+                        .add("bom", Base64.getEncoder().encodeToString(resourceToByteArray("/unit/bom-1.xml")))
+                        .add("isActive", active);
+                if (byName) {
+                    body.add("projectName", project.getName()).add("projectVersion", project.getVersion());
+                } else {
+                    body.add("project", projectUuid.toString());
+                }
+                try (final Response response = jersey.target(V1_BOM)
+                        .request()
+                        .header(X_API_KEY, apiKey)
+                        .put(Entity.json(body.build().toString()))) {
+                    status = response.getStatus();
+                }
+            }
+            assertThat(status).isEqualTo(200);
+            qm.getPersistenceManager().evictAll();
+            assertThat(qm.getObjectByUuid(Project.class, projectUuid).isActive())
+                    .isEqualTo(active);
+            final var changes =
+                    org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges(projectUuid);
+            if (changed && (mode.equals("CAPTURE") || mode.equals("ACTIVE"))) {
+                assertThat(changes).singleElement().satisfies(change -> {
+                    assertThat(change.reason())
+                            .isEqualTo(org.dependencytrack.assessmentsync.AssessmentChange.Reason.PROJECT_UPDATED);
+                    assertThat(change.lookupKeys())
+                            .containsExactly(new org.dependencytrack.assessmentsync.AssessmentChange.LookupKey(
+                                    "activation-source", "1"));
+                });
+            } else {
+                assertThat(changes).isEmpty();
+            }
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
     @Test
     void uploadBomIsActiveNullTest() throws Exception {
         initializeWithPermissions(Permissions.BOM_UPLOAD, Permissions.PROJECT_CREATION_UPLOAD);

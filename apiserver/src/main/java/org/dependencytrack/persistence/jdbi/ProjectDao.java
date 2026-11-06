@@ -1066,6 +1066,44 @@ public interface ProjectDao extends SqlObject, PaginationSupport {
             @Define @CompileTimeConstant String collectionMetricsSubquery,
             @Define @CompileTimeConstant String leafMetricsSubquery);
 
+    /** Changes source eligibility and records its invalidation in the same transaction. */
+    @Transaction
+    default boolean updateActive(final UUID projectUuid, final boolean active) {
+        AssessmentMutationGuard.lockProject(getHandle(), projectUuid);
+        final ProjectActivation current = getHandle()
+                .createQuery("""
+                SELECT "NAME", "VERSION", ("INACTIVE_SINCE" IS NULL) AS active
+                  FROM "PROJECT"
+                 WHERE "UUID" = :uuid
+                 FOR UPDATE
+                """)
+                .bind("uuid", projectUuid)
+                .map((rs, ctx) ->
+                        new ProjectActivation(rs.getString("NAME"), rs.getString("VERSION"), rs.getBoolean("active")))
+                .findOne()
+                .orElse(null);
+        if (current == null || current.active() == active) {
+            return false;
+        }
+        getHandle()
+                .createUpdate("""
+                UPDATE "PROJECT"
+                   SET "INACTIVE_SINCE" = CASE WHEN :active THEN NULL ELSE clock_timestamp() END
+                 WHERE "UUID" = :uuid
+                """)
+                .bind("uuid", projectUuid)
+                .bind("active", active)
+                .execute();
+        AssessmentStructureCapture.recordProject(
+                getHandle(),
+                projectUuid,
+                AssessmentChange.Reason.PROJECT_UPDATED,
+                AssessmentChange.LookupKey.listOf(current.name(), current.version()));
+        return true;
+    }
+
+    record ProjectActivation(String name, @Nullable String version, boolean active) {}
+
     @SqlUpdate("""
             DELETE
               FROM "PROJECT"
