@@ -121,7 +121,7 @@ public record MakeAnalysisCommand(
     public MakeAnalysisCommand {
         requireNonNull(component, "component must not be null");
         requireNonNull(vulnerability, "vulnerability must not be null");
-        requireNonNull(options, "options must not be null");
+        options = Set.copyOf(requireNonNull(options, "options must not be null"));
         if (decisionAction == null) {
             decisionAction = DecisionAction.AUTO;
         }
@@ -146,200 +146,167 @@ public record MakeAnalysisCommand(
     }
 
     public MakeAnalysisCommand withState(final AnalysisState state) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                state,
-                this.justification,
-                this.response,
-                this.details,
-                this.suppress,
-                this.commenter,
-                this.comment,
-                this.owaspVector,
-                this.owaspScore,
-                this.options,
-                this.decisionAction,
-                this.expectedDecisionVersion);
+        return toBuilder().state(state).build();
     }
 
     public MakeAnalysisCommand withJustification(final AnalysisJustification justification) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                justification,
-                this.response,
-                this.details,
-                this.suppress,
-                this.commenter,
-                this.comment,
-                this.owaspVector,
-                this.owaspScore,
-                this.options,
-                this.decisionAction,
-                this.expectedDecisionVersion);
+        return toBuilder().justification(justification).build();
     }
 
     public MakeAnalysisCommand withResponse(final AnalysisResponse response) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                this.justification,
-                response,
-                this.details,
-                this.suppress,
-                this.commenter,
-                this.comment,
-                this.owaspVector,
-                this.owaspScore,
-                this.options,
-                this.decisionAction,
-                this.expectedDecisionVersion);
+        return toBuilder().response(response).build();
     }
 
-    public MakeAnalysisCommand withDetails(final String detail) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                this.justification,
-                this.response,
-                detail,
-                this.suppress,
-                this.commenter,
-                this.comment,
-                this.owaspVector,
-                this.owaspScore,
-                this.options,
-                this.decisionAction,
-                this.expectedDecisionVersion);
+    public MakeAnalysisCommand withDetails(final String details) {
+        return toBuilder().details(details).build();
     }
 
     public MakeAnalysisCommand withSuppress(final Boolean suppress) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                this.justification,
-                this.response,
-                this.details,
-                suppress,
-                this.commenter,
-                this.comment,
-                this.owaspVector,
-                this.owaspScore,
-                this.options,
-                this.decisionAction,
-                this.expectedDecisionVersion);
+        return toBuilder().suppress(suppress).build();
     }
 
     public MakeAnalysisCommand withCommenter(final String commenter) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                this.justification,
-                this.response,
-                this.details,
-                this.suppress,
-                commenter,
-                this.comment,
-                this.owaspVector,
-                this.owaspScore,
-                this.options,
-                this.decisionAction,
-                this.expectedDecisionVersion);
+        return toBuilder().commenter(commenter).build();
     }
 
     public MakeAnalysisCommand withComment(final String comment) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                this.justification,
-                this.response,
-                this.details,
-                this.suppress,
-                this.commenter,
-                comment,
-                this.owaspVector,
-                this.owaspScore,
-                this.options,
-                this.decisionAction,
-                this.expectedDecisionVersion);
-    }
-
-    public MakeAnalysisCommand withOwasp(final String owaspVector, final BigDecimal owaspScore) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                this.justification,
-                this.response,
-                this.details,
-                this.suppress,
-                this.commenter,
-                this.comment,
-                owaspVector,
-                owaspScore,
-                this.options,
-                this.decisionAction,
-                this.expectedDecisionVersion);
+        return toBuilder().comment(comment).build();
     }
 
     public MakeAnalysisCommand withOptions(final Set<Option> options) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                this.justification,
-                this.response,
-                this.details,
-                this.suppress,
-                this.commenter,
-                this.comment,
-                this.owaspVector,
-                this.owaspScore,
-                options,
-                this.decisionAction,
-                this.expectedDecisionVersion);
+        return toBuilder().options(options).build();
     }
 
     public MakeAnalysisCommand withDecisionAction(final DecisionAction decisionAction) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                this.justification,
-                this.response,
-                this.details,
-                this.suppress,
-                this.commenter,
-                this.comment,
-                this.owaspVector,
-                this.owaspScore,
-                this.options,
-                decisionAction,
-                this.expectedDecisionVersion);
+        return toBuilder().decisionAction(decisionAction).build();
     }
 
     public MakeAnalysisCommand withExpectedDecisionVersion(final Long expectedDecisionVersion) {
-        return new MakeAnalysisCommand(
-                this.component,
-                this.vulnerability,
-                this.state,
-                this.justification,
-                this.response,
-                this.details,
-                this.suppress,
-                this.commenter,
-                this.comment,
-                this.owaspVector,
-                this.owaspScore,
-                this.options,
-                this.decisionAction,
-                expectedDecisionVersion);
+        return toBuilder().expectedDecisionVersion(expectedDecisionVersion).build();
+    }
+
+    public MakeAnalysisCommand withOwasp(final String owaspVector, final BigDecimal owaspScore) {
+        return toBuilder().owaspVector(owaspVector).owaspScore(owaspScore).build();
+    }
+
+    public Builder toBuilder() {
+        return new Builder(this);
+    }
+
+    public static Builder builder(final Component component, final Vulnerability vulnerability) {
+        return new Builder(new MakeAnalysisCommand(component, vulnerability));
+    }
+
+    /** Copies fields by name; only build() maps them to the canonical constructor. */
+    public static final class Builder {
+        private final Component component;
+        private final Vulnerability vulnerability;
+        private AnalysisState state;
+        private AnalysisJustification justification;
+        private AnalysisResponse response;
+        private String details;
+        private Boolean suppress;
+        private String commenter;
+        private String comment;
+        private String owaspVector;
+        private BigDecimal owaspScore;
+        private Set<Option> options;
+        private DecisionAction decisionAction;
+        private Long expectedDecisionVersion;
+
+        private Builder(final MakeAnalysisCommand source) {
+            component = source.component();
+            vulnerability = source.vulnerability();
+            state = source.state();
+            justification = source.justification();
+            response = source.response();
+            details = source.details();
+            suppress = source.suppress();
+            commenter = source.commenter();
+            comment = source.comment();
+            owaspVector = source.owaspVector();
+            owaspScore = source.owaspScore();
+            options = source.options();
+            decisionAction = source.decisionAction();
+            expectedDecisionVersion = source.expectedDecisionVersion();
+        }
+
+        public Builder state(final AnalysisState state) {
+            this.state = state;
+            return this;
+        }
+
+        public Builder justification(final AnalysisJustification justification) {
+            this.justification = justification;
+            return this;
+        }
+
+        public Builder response(final AnalysisResponse response) {
+            this.response = response;
+            return this;
+        }
+
+        public Builder details(final String details) {
+            this.details = details;
+            return this;
+        }
+
+        public Builder suppress(final Boolean suppress) {
+            this.suppress = suppress;
+            return this;
+        }
+
+        public Builder commenter(final String commenter) {
+            this.commenter = commenter;
+            return this;
+        }
+
+        public Builder comment(final String comment) {
+            this.comment = comment;
+            return this;
+        }
+
+        public Builder owaspVector(final String owaspVector) {
+            this.owaspVector = owaspVector;
+            return this;
+        }
+
+        public Builder owaspScore(final BigDecimal owaspScore) {
+            this.owaspScore = owaspScore;
+            return this;
+        }
+
+        public Builder options(final Set<Option> options) {
+            this.options = options;
+            return this;
+        }
+
+        public Builder decisionAction(final DecisionAction decisionAction) {
+            this.decisionAction = decisionAction;
+            return this;
+        }
+
+        public Builder expectedDecisionVersion(final Long expectedDecisionVersion) {
+            this.expectedDecisionVersion = expectedDecisionVersion;
+            return this;
+        }
+
+        public MakeAnalysisCommand build() {
+            return new MakeAnalysisCommand(
+                    component,
+                    vulnerability,
+                    state,
+                    justification,
+                    response,
+                    details,
+                    suppress,
+                    commenter,
+                    comment,
+                    owaspVector,
+                    owaspScore,
+                    options,
+                    decisionAction,
+                    expectedDecisionVersion);
+        }
     }
 }
