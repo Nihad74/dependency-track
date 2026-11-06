@@ -29,9 +29,9 @@ import org.jdbi.v3.jackson2.Jackson2Config;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -270,28 +270,28 @@ public final class AssessmentSyncOutboxDao {
                 rs.getInt("DISPATCH_ATTEMPTS"));
     }
 
-    private List<AssessmentChange> coalesce(final Collection<AssessmentChange> changes) {
-        final var byScopeKey = new LinkedHashMap<String, AssessmentChange>();
+    private static List<AssessmentChange> coalesce(final Collection<AssessmentChange> changes) {
+        // Accumulate each scope's keys once, rather than copying the growing key list for every duplicate.
+        record PendingChange(AssessmentChange first, LinkedHashSet<LookupKey> keys) {}
+        final var byScopeKey = new LinkedHashMap<String, PendingChange>();
         for (final AssessmentChange change : changes) {
             requireNonNull(change, "change must not be null");
-            final AssessmentChange existing = byScopeKey.get(change.scopeKey());
-            if (existing == null) {
-                byScopeKey.put(change.scopeKey(), change);
-                continue;
-            }
-            final var keys = new ArrayList<LookupKey>(existing.lookupKeys());
-            keys.addAll(change.lookupKeys());
-            byScopeKey.put(
-                    change.scopeKey(),
-                    new AssessmentChange(
-                            existing.scope(),
-                            existing.projectUuid(),
-                            existing.componentUuid(),
-                            existing.vulnerabilityUuid(),
-                            existing.reason(),
-                            keys));
+            final var pending = byScopeKey.computeIfAbsent(
+                    change.scopeKey(), ignored -> new PendingChange(change, new LinkedHashSet<>()));
+            pending.keys().addAll(change.lookupKeys());
         }
-        return List.copyOf(byScopeKey.values());
+        return byScopeKey.values().stream()
+                .map(pending -> {
+                    final var first = pending.first();
+                    return new AssessmentChange(
+                            first.scope(),
+                            first.projectUuid(),
+                            first.componentUuid(),
+                            first.vulnerabilityUuid(),
+                            first.reason(),
+                            List.copyOf(pending.keys()));
+                })
+                .toList();
     }
 
     private String writeLookupKeys(final List<LookupKey> keys) {

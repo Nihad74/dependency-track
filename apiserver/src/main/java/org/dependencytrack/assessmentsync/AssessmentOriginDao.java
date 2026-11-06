@@ -28,6 +28,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 
+import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
@@ -45,7 +46,7 @@ public final class AssessmentOriginDao {
     private final Handle handle;
 
     public AssessmentOriginDao(final Handle handle) {
-        this.handle = handle;
+        this.handle = requireNonNull(handle, "handle must not be null");
     }
 
     public void upsertOrigin(final long analysisId, final AssessmentOwnership owner, final boolean decisionChanged) {
@@ -57,8 +58,12 @@ public final class AssessmentOriginDao {
      * version moves by one when ownership or the decision changes. A new row starts at 1 when the decision
      * changed, else at 0. A caller that takes over an unlabeled row passes {@code decisionChanged}, because the
      * owner the row had is not stored. Analyses that no longer exist are skipped.
+     * The native upsert also handles concurrent first inserts; it does not replace project-level writer guards.
+     * The proposed initial version (0 or 1) carries the decision-change flag into the conflict update.
+     * Rows are processed in analysis-id order to give overlapping batches a consistent lock order.
      */
     public void upsertOrigins(final Collection<OriginUpdate> updates) {
+        requireNonNull(updates, "updates must not be null");
         requireTransaction(handle);
         if (updates.isEmpty()) {
             return;
@@ -78,31 +83,22 @@ public final class AssessmentOriginDao {
             i++;
         }
         handle.createUpdate(/* language=SQL */ """
-                        WITH input AS (
-                          SELECT *
-                            FROM UNNEST(:analysisIds, :owners, :decisionChanged)
-                                 AS t(analysis_id, owner, decision_changed)
-                        ),
-                        updated AS (
-                          UPDATE "ASSESSMENT_ORIGIN" AS o
-                             SET "OWNER" = i.owner
-                               , "LAST_REASON" = NULL
-                               , "DECISION_VERSION" = o."DECISION_VERSION" + CASE
-                                   WHEN i.decision_changed OR o."OWNER" <> i.owner THEN 1
-                                   ELSE 0
-                                 END
-                            FROM input AS i
-                           WHERE o."ANALYSIS_ID" = i.analysis_id
-                          RETURNING o."ANALYSIS_ID"
-                        )
-                        INSERT INTO "ASSESSMENT_ORIGIN" ("ANALYSIS_ID", "OWNER", "DECISION_VERSION")
+                        INSERT INTO "ASSESSMENT_ORIGIN" AS o ("ANALYSIS_ID", "OWNER", "DECISION_VERSION")
                         SELECT a."ID"
                              , i.owner
                              , CASE WHEN i.decision_changed THEN 1 ELSE 0 END
-                          FROM input AS i
+                          FROM UNNEST(:analysisIds, :owners, :decisionChanged)
+                               AS i(analysis_id, owner, decision_changed)
                          INNER JOIN "ANALYSIS" AS a
                             ON a."ID" = i.analysis_id
-                         WHERE NOT EXISTS (SELECT 1 FROM updated AS u WHERE u."ANALYSIS_ID" = i.analysis_id)
+                         ORDER BY a."ID"
+                        ON CONFLICT ("ANALYSIS_ID") DO UPDATE
+                           SET "OWNER" = EXCLUDED."OWNER"
+                             , "LAST_REASON" = NULL
+                             , "DECISION_VERSION" = o."DECISION_VERSION" + CASE
+                                 WHEN EXCLUDED."DECISION_VERSION" = 1 OR o."OWNER" <> EXCLUDED."OWNER" THEN 1
+                                 ELSE 0
+                               END
                         """)
                 .bind("analysisIds", analysisIds)
                 .bind("owners", owners)
@@ -158,6 +154,7 @@ public final class AssessmentOriginDao {
     }
 
     public void deleteCopiedContributions(final Collection<Long> analysisIds) {
+        requireNonNull(analysisIds, "analysisIds must not be null");
         requireTransaction(handle);
         if (analysisIds.isEmpty()) {
             return;
@@ -219,6 +216,7 @@ public final class AssessmentOriginDao {
 
         public OriginUpdate {
             requirePositive(analysisId, "analysisId");
+            requireNonNull(owner, "owner must not be null");
         }
     }
 }

@@ -29,10 +29,12 @@ import org.jdbi.v3.core.Handle;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.openJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
@@ -237,6 +239,58 @@ class AssessmentSyncOutboxDaoTest extends PersistenceCapableTest {
             assertThat(dao.recordDispatchAttempt(id, nextDispatchAt)).isFalse();
         });
         assertThat(outboxCount()).isZero();
+    }
+
+    @Test
+    void batchKeepsProjectAndFindingScopesDistinctAndMergesAllKeys() {
+        final UUID project = UUID.randomUUID();
+        final UUID component = UUID.randomUUID();
+        final UUID vulnerability = UUID.randomUUID();
+        inJdbiTransaction(handle -> {
+            final var dao = new AssessmentSyncOutboxDao(handle);
+            final var first = AssessmentChange.project(project, Reason.PROJECT_UPDATED, "before", "1");
+            final var second = AssessmentChange.project(project, Reason.PROJECT_UPDATED, "after", "2");
+            final var finding =
+                    AssessmentChange.finding(project, component, vulnerability, Reason.AUTHORED, "after", "2");
+            final var ids = dao.recordAll(List.of(first, second, first, finding));
+            assertThat(ids).hasSize(2);
+            final var projectRow = ids.stream()
+                    .map(dao::lock)
+                    .filter(row -> row.change().scope() == Scope.PROJECT)
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(projectRow.change().lookupKeys())
+                    .containsExactly(new LookupKey("before", "1"), new LookupKey("after", "2"));
+            final var findingRow = ids.stream()
+                    .map(dao::lock)
+                    .filter(row -> row.change().scope() == Scope.FINDING)
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(findingRow.change().componentUuid()).isEqualTo(component);
+            assertThat(findingRow.change().vulnerabilityUuid()).isEqualTo(vulnerability);
+            assertThat(dao.recordAll(List.of())).isEmpty();
+            return null;
+        });
+    }
+
+    @Test
+    void rejectsNullChangesBeforeWritingAnyPartOfABatch() {
+        inJdbiTransaction(handle -> {
+            final var dao = new AssessmentSyncOutboxDao(handle);
+            assertThatThrownBy(() -> dao.recordAll(Arrays.asList(
+                            AssessmentChange.project(UUID.randomUUID(), Reason.BOM_IMPORT, "project", "1"), null)))
+                    .isInstanceOf(NullPointerException.class);
+            assertThat(dao.pollDue(10)).isEmpty();
+            return null;
+        });
+    }
+
+    @Test
+    void recordingRequiresTheCallersTransaction() {
+        try (final var handle = openJdbiHandle()) {
+            assertThatThrownBy(() -> new AssessmentSyncOutboxDao(handle).recordAll(List.of()))
+                    .isInstanceOf(IllegalStateException.class);
+        }
     }
 
     private static AssessmentChange finding(
