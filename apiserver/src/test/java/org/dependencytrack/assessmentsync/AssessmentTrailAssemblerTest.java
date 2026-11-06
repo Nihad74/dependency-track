@@ -37,6 +37,7 @@ import org.dependencytrack.assessmentsync.AssessmentTrailAssembler.Trail;
 import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.auth.ProjectAccess;
 import org.dependencytrack.common.Mappers;
+import org.dependencytrack.common.datasource.DataSourceRegistry;
 import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisState;
 import org.dependencytrack.model.Component;
@@ -49,16 +50,26 @@ import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.persistence.jdbi.FindingDao;
 import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.dependencytrack.resources.v1.vo.AnalysisTrailResponse;
+import org.jdbi.v3.core.statement.SqlLogger;
+import org.jdbi.v3.core.statement.SqlStatements;
+import org.jdbi.v3.core.statement.StatementContext;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.createJdbi;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
@@ -73,6 +84,148 @@ class AssessmentTrailAssemblerTest extends PersistenceCapableTest {
     private static final String LOCAL_COMMENT = "local-only-note";
     private static final Instant EARLIER = Instant.parse("2020-01-02T03:04:05Z");
     private static final Instant LATER = Instant.parse("2024-05-06T07:08:09Z");
+
+    @Test
+    void aConcurrentWriterCannotMixANewSourceTrailWithAnOldTargetDecision() {
+        final OwnedProjects projects = inheritedProjects();
+        final Principal viewer =
+                memberOf(projects.target(), projects.visibleSource().project());
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        final var changed = new AtomicBoolean();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logAfterExecution(final StatementContext ctx) {
+                if (ctx.getRenderedSql().contains("o.\"DECISION_VERSION\"")
+                        && ctx.getRenderedSql().contains("FROM \"ANALYSIS\" AS a")
+                        && changed.compareAndSet(false, true)) {
+                    try (var writer = DataSourceRegistry.getInstance()
+                                    .getDefault()
+                                    .getConnection();
+                            var statement = writer.prepareStatement("""
+                                    WITH changed AS (
+                                      UPDATE "ANALYSIS" SET "STATE" = 'EXPLOITABLE' WHERE "ID" = ? RETURNING "ID"
+                                    ), origin AS (
+                                      UPDATE "ASSESSMENT_ORIGIN" SET "DECISION_VERSION" = "DECISION_VERSION" + 1
+                                       WHERE "ANALYSIS_ID" IN (SELECT "ID" FROM changed)
+                                    )
+                                    UPDATE "ASSESSMENT_SOURCE_CONTRIBUTION" SET "SOURCE_DETAILS" = 'new source explanation'
+                                     WHERE "TARGET_ANALYSIS_ID" IN (SELECT "ID" FROM changed)
+                                    """)) {
+                        statement.setLong(1, projects.targetAnalysisId());
+                        statement.executeUpdate();
+                    } catch (SQLException e) {
+                        throw new IllegalStateException(e);
+                    }
+                }
+            }
+        });
+        try {
+            final Trail trail =
+                    assemble(request(viewer, true), projects.targetAnalysisId()).getFirst();
+            assertThat(changed).isTrue();
+            assertThat(trail.analysis().state()).isEqualTo(AnalysisState.NOT_AFFECTED);
+            assertThat(trail.sourceAssessments())
+                    .singleElement()
+                    .satisfies(source -> assertThat(source.sourceDetails()).isEqualTo(VISIBLE_TEXT));
+        } finally {
+            jdbi.setSqlLogger(previous);
+        }
+        final Trail next =
+                assemble(request(viewer, true), projects.targetAnalysisId()).getFirst();
+        assertThat(next.analysis().state()).isEqualTo(AnalysisState.EXPLOITABLE);
+        assertThat(next.sourceAssessments())
+                .singleElement()
+                .satisfies(source -> assertThat(source.sourceDetails()).isEqualTo("new source explanation"));
+    }
+
+    @Test
+    void batchingDeduplicatesAndPreservesInputOrderWithoutAddingPerFindingQueries() {
+        final OwnedProjects first = inheritedProjects();
+        final OwnedProjects second = inheritedProjects("second-source", "second-target");
+        final Principal viewer = memberOf(
+                first.target(),
+                first.visibleSource().project(),
+                second.target(),
+                second.visibleSource().project());
+        withJdbiHandle(request(viewer, true), h -> {
+            final var queries = new AtomicInteger();
+            h.setSqlLogger(new SqlLogger() {
+                @Override
+                public void logBeforeExecution(final StatementContext ctx) {
+                    queries.incrementAndGet();
+                }
+            });
+            assertThat(AssessmentTrailAssembler.assemble(h, List.of())).isEmpty();
+            assertThat(queries.get()).isZero();
+            AssessmentTrailAssembler.assemble(h, List.of(first.targetAnalysisId()));
+            final int single = queries.getAndSet(0);
+            final List<Trail> trails = AssessmentTrailAssembler.assemble(
+                    h,
+                    List.of(
+                            second.targetAnalysisId(),
+                            first.targetAnalysisId(),
+                            second.targetAnalysisId(),
+                            Long.MAX_VALUE));
+            assertThat(trails)
+                    .extracting(Trail::analysisId)
+                    .containsExactly(second.targetAnalysisId(), first.targetAnalysisId());
+            assertThat(queries.get()).isEqualTo(single).isLessThanOrEqualTo(6);
+            assertThatThrownBy(() -> AssessmentTrailAssembler.assemble(h, List.of(0L)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("analysisId");
+            return null;
+        });
+    }
+
+    @Test
+    void unreadableSourcesNeverTriggerCopiedTextOrCommentQueries() {
+        final OwnedProjects projects = inheritedProjects();
+        final Principal viewer = memberOf(projects.target());
+        withJdbiHandle(request(viewer, true), h -> {
+            final var textQueries = new AtomicInteger();
+            h.setSqlLogger(new SqlLogger() {
+                @Override
+                public void logBeforeExecution(final StatementContext ctx) {
+                    if (ctx.getRenderedSql().contains("SOURCE_DETAILS")
+                            || ctx.getRenderedSql().contains("ASSESSMENT_SOURCE_COMMENT")) {
+                        textQueries.incrementAndGet();
+                    }
+                }
+            });
+            assertThat(AssessmentTrailAssembler.assemble(h, List.of(projects.targetAnalysisId()))
+                            .getFirst()
+                            .sourceAssessments())
+                    .isEmpty();
+            assertThat(textQueries.get()).isZero();
+            return null;
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"component", "analysis"})
+    void removedSourceComponentOrAnalysisHidesTheWholeGroup(final String removed) {
+        final OwnedProjects projects = inheritedProjects();
+        final Principal viewer =
+                memberOf(projects.target(), projects.visibleSource().project());
+        withJdbiHandle(h -> {
+            if ("component".equals(removed)) {
+                h.createUpdate("DELETE FROM \"COMPONENT\" WHERE \"ID\" = :id")
+                        .bind("id", projects.visibleSource().component().getId())
+                        .execute();
+            } else {
+                h.createUpdate("DELETE FROM \"ANALYSIS\" WHERE \"ID\" = :id")
+                        .bind("id", projects.visibleSource().analysisId())
+                        .execute();
+            }
+            return null;
+        });
+        final AnalysisTrailResponse response = response(projects.targetAnalysisId(), viewer, true);
+        assertThat(response.sourceAssessments()).isEmpty();
+        assertThat(response.analysisState()).isEqualTo(AnalysisState.NOT_AFFECTED);
+        assertThat(contributionCount(projects.targetAnalysisId())).isEqualTo(1);
+        assertHidden(response, VISIBLE_TEXT, VISIBLE_COMMENT, VISIBLE_AUTHOR);
+    }
 
     @Test
     void bothSourceAndTargetAccessIncludesTheSourceGroup() {
