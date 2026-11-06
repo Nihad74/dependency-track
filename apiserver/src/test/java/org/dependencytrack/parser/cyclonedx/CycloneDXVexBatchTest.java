@@ -25,12 +25,14 @@ import org.dependencytrack.analysis.AnalysisMutationPlanner;
 import org.dependencytrack.analysis.AnalysisWriter;
 import org.dependencytrack.assessmentsync.AssessmentOriginDao;
 import org.dependencytrack.assessmentsync.AssessmentOwnership;
+import org.dependencytrack.assessmentsync.StaleAssessmentDecisionException;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.AnalysisComment;
 import org.dependencytrack.model.AnalysisState;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.Vulnerability;
+import org.dependencytrack.persistence.AnalysisCache;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.jdbi.v3.core.statement.SqlLogger;
@@ -38,12 +40,16 @@ import org.jdbi.v3.core.statement.SqlStatements;
 import org.jdbi.v3.core.statement.StatementContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -91,6 +97,80 @@ class CycloneDXVexBatchTest extends PersistenceCapableTest {
     }
 
     @Test
+    void overlappingComponentAndProjectAffectsWriteTheFindingOnlyOnce() throws Exception {
+        final var data = fixture(1, "[{\"ref\":\"component\"},{\"ref\":\"project\"},{\"ref\":\"component\"}]");
+        data.bom()
+                .getComponents()
+                .getFirst()
+                .setName(data.components().getFirst().getName());
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        new CycloneDXVexImporter().applyVex(qm, data.bom(), data.project());
+        final var analysis = qm.getAnalysis(data.components().getFirst(), data.vulnerability());
+        assertThat(analysis.isSuppressed()).isTrue();
+        assertThat(analysis.getAnalysisComments()).hasSize(2);
+        assertThat(withJdbiHandle(handle -> new AssessmentOriginDao(handle).findOrigin(analysis.getId()))
+                        .decisionVersion())
+                .isEqualTo(1);
+        assertThat(recordedChanges(data.project().getUuid())).hasSize(1);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "false,true"})
+    void partialOwaspRatingsKeepOmittedValuesAndTheLastResponseWins(final boolean hasVector, final boolean hasScore)
+            throws Exception {
+        final var data = fixture(1, "[{\"ref\":\"project\"}]");
+        qm.makeAnalysis(new MakeAnalysisCommand(data.components().getFirst(), data.vulnerability())
+                .withOwasp("existing", new BigDecimal("9.2")));
+        final var rating = new org.cyclonedx.model.vulnerability.Vulnerability.Rating();
+        rating.setMethod(org.cyclonedx.model.vulnerability.Vulnerability.Rating.Method.OWASP);
+        if (hasVector) {
+            rating.setVector("new vector");
+        }
+        if (hasScore) {
+            rating.setScore(7.5);
+        }
+        final var vulnerability = data.bom().getVulnerabilities().getFirst();
+        vulnerability.setRatings(List.of(rating));
+        vulnerability
+                .getAnalysis()
+                .setResponses(
+                        hasVector
+                                ? List.of(
+                                        org.cyclonedx.model.vulnerability.Vulnerability.Analysis.Response.UPDATE,
+                                        org.cyclonedx.model.vulnerability.Vulnerability.Analysis.Response.CAN_NOT_FIX)
+                                : List.of());
+        new CycloneDXVexImporter().applyVex(qm, data.bom(), data.project());
+        final var analysis = qm.getAnalysis(data.components().getFirst(), data.vulnerability());
+        assertThat(analysis.getOwaspVector()).isEqualTo(hasVector ? "new vector" : "existing");
+        assertThat(analysis.getOwaspScore()).isEqualByComparingTo(hasScore ? "7.5" : "9.2");
+        assertThat(analysis.getAnalysisResponse())
+                .isEqualTo(
+                        hasVector
+                                ? org.dependencytrack.model.AnalysisResponse.CAN_NOT_FIX
+                                : org.dependencytrack.model.AnalysisResponse.NOT_SET);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"FALSE_POSITIVE,true", "NOT_AFFECTED,true", "RESOLVED,true", "EXPLOITABLE,false", "IN_TRIAGE,false"})
+    void vexDecisionStatesSetAndClearSuppression(final String state, final boolean suppressed) throws Exception {
+        final var data = fixture(1, "[{\"ref\":\"project\"}]");
+        qm.makeAnalysis(
+                new MakeAnalysisCommand(data.components().getFirst(), data.vulnerability()).withSuppress(!suppressed));
+        data.bom()
+                .getVulnerabilities()
+                .getFirst()
+                .getAnalysis()
+                .setState(org.cyclonedx.model.vulnerability.Vulnerability.Analysis.State.valueOf(state));
+        new CycloneDXVexImporter().applyVex(qm, data.bom(), data.project());
+        final var analysis = qm.getAnalysis(data.components().getFirst(), data.vulnerability());
+        assertThat(analysis.getAnalysisState()).isEqualTo(AnalysisState.valueOf(state));
+        assertThat(analysis.isSuppressed()).isEqualTo(suppressed);
+        assertThat(analysis.getAnalysisComments())
+                .extracting(AnalysisComment::getComment)
+                .contains(suppressed ? "Suppressed" : "Unsuppressed");
+    }
+
+    @Test
     void batchBoundaryKeepsEveryFinding() throws Exception {
         final var data = fixture(251, "[{\"ref\":\"project\"}]");
         MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
@@ -113,6 +193,38 @@ class CycloneDXVexBatchTest extends PersistenceCapableTest {
                 }))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("rollback");
+        assertThat(recordedChanges(data.project().getUuid())).isEmpty();
+        for (final var component : data.components()) {
+            assertThat(qm.getAnalysis(component, data.vulnerability())).isNull();
+        }
+    }
+
+    @Test
+    void interruptionAtTheNextBatchRollsBackEarlierBatchWritesAndKeepsTheFlag() throws Exception {
+        final var data = fixture(251, "[{\"ref\":\"project\"}]");
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        final var writes = new AtomicInteger();
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logAfterExecution(final StatementContext context) {
+                if (context.getRenderedSql().contains("INSERT INTO \"ANALYSIS\"")) {
+                    writes.incrementAndGet();
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+        try {
+            assertThatThrownBy(() -> new CycloneDXVexImporter().applyVex(qm, data.bom(), data.project()))
+                    .isInstanceOf(CancellationException.class)
+                    .hasMessage("VEX import interrupted");
+            assertThat(writes).hasValue(1);
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted();
+            jdbi.setSqlLogger(previous);
+        }
         assertThat(recordedChanges(data.project().getUuid())).isEmpty();
         for (final var component : data.components()) {
             assertThat(qm.getAnalysis(component, data.vulnerability())).isNull();
@@ -197,6 +309,107 @@ class CycloneDXVexBatchTest extends PersistenceCapableTest {
                         .decisionVersion())
                 .isEqualTo(2);
         assertThat(recordedChanges(data.project().getUuid())).hasSize(1);
+    }
+
+    @Test
+    void mixedInsertAndUpdateBatchKeepsEachFindingsValuesCommentsVersionsAndResultOrder() throws Exception {
+        final var data = fixture(2, "[{\"ref\":\"project\"}]");
+        final long existingId =
+                qm.makeAnalysis(new MakeAnalysisCommand(data.components().getFirst(), data.vulnerability())
+                        .withState(AnalysisState.NOT_AFFECTED)
+                        .withSuppress(true)
+                        .withOwasp("keep vector", new BigDecimal("7.123456789012345678"))
+                        .withComment("before"));
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        final List<Long> ids;
+        try (final var handle = openJdbiHandle()) {
+            ids = handle.inTransaction(h -> AnalysisWriter.writeAll(
+                    h,
+                    List.of(
+                            writerEntry(data, 1, AnalysisState.EXPLOITABLE, 0L, "new"),
+                            writerEntry(data, 0, AnalysisState.FALSE_POSITIVE, 1L, "after"))));
+        }
+        AnalysisCache.evict(qm.getPersistenceManager(), ids);
+        final var inserted = qm.getAnalysis(data.components().get(1), data.vulnerability());
+        final var updated = qm.getAnalysis(data.components().getFirst(), data.vulnerability());
+        assertThat(ids).containsExactly(inserted.getId(), existingId);
+        assertThat(inserted.getAnalysisState()).isEqualTo(AnalysisState.EXPLOITABLE);
+        assertThat(inserted.isSuppressed()).isFalse();
+        assertThat(inserted.getOwaspScore()).isNull();
+        assertThat(inserted.getAnalysisComments())
+                .extracting(AnalysisComment::getComment)
+                .containsExactly("Analysis: NOT_SET → EXPLOITABLE", "new");
+        assertThat(updated.getAnalysisState()).isEqualTo(AnalysisState.FALSE_POSITIVE);
+        assertThat(updated.isSuppressed()).isTrue();
+        assertThat(updated.getOwaspVector()).isEqualTo("keep vector");
+        assertThat(updated.getOwaspScore()).isEqualByComparingTo("7.123456789012345678");
+        assertThat(updated.getAnalysisComments())
+                .extracting(AnalysisComment::getComment)
+                .containsExactly(
+                        "Analysis: NOT_SET → NOT_AFFECTED",
+                        "Suppressed",
+                        "OWASP Vector: (None) → keep vector",
+                        "OWASP Score: (None) → 7.123456789012345678",
+                        "before",
+                        "Analysis: NOT_AFFECTED → FALSE_POSITIVE",
+                        "after");
+        assertThat(withJdbiHandle(handle -> new AssessmentOriginDao(handle).findOrigin(inserted.getId()))
+                        .decisionVersion())
+                .isEqualTo(1);
+        assertThat(withJdbiHandle(handle -> new AssessmentOriginDao(handle).findOrigin(updated.getId()))
+                        .decisionVersion())
+                .isEqualTo(2);
+        assertThat(recordedChanges(data.project().getUuid())).hasSize(2);
+    }
+
+    @Test
+    void aStalePlanRejectsTheWholeBatchBeforeAnyMutationEvenIfTheCallerCatchesIt() throws Exception {
+        final var data = fixture(2, "[{\"ref\":\"project\"}]");
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        try (final var handle = openJdbiHandle()) {
+            handle.useTransaction(h -> assertThatThrownBy(() -> AnalysisWriter.writeAll(
+                            h,
+                            List.of(
+                                    writerEntry(data, 0, AnalysisState.EXPLOITABLE, 0L, "valid"),
+                                    writerEntry(data, 1, AnalysisState.NOT_AFFECTED, 1L, "stale"))))
+                    .isInstanceOf(StaleAssessmentDecisionException.class));
+        }
+        for (final var component : data.components()) {
+            assertThat(qm.getAnalysis(component, data.vulnerability())).isNull();
+        }
+        assertThat(recordedChanges(data.project().getUuid())).isEmpty();
+    }
+
+    private static AnalysisWriter.Entry writerEntry(
+            final Fixture data,
+            final int index,
+            final AnalysisState state,
+            final Long expectedVersion,
+            final String comment) {
+        final var component = data.components().get(index);
+        return new AnalysisWriter.Entry(
+                new AnalysisMutationPlanner.Request(
+                        state,
+                        null,
+                        null,
+                        null,
+                        null,
+                        comment,
+                        null,
+                        null,
+                        Set.of(),
+                        MakeAnalysisCommand.DecisionAction.TAKE_LOCAL,
+                        expectedVersion),
+                new AnalysisWriter.Finding(
+                        data.project().getId(),
+                        data.project().getUuid(),
+                        data.project().getName(),
+                        data.project().getVersion(),
+                        component.getId(),
+                        component.getUuid(),
+                        data.vulnerability().getId(),
+                        data.vulnerability().getUuid()),
+                "test");
     }
 
     private int applyCountingStatements(final Fixture data) {

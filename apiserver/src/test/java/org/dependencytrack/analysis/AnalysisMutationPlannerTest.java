@@ -80,6 +80,41 @@ class AnalysisMutationPlannerTest {
         assertThat(plan.notifyDecisionChange()).isFalse();
     }
 
+    @Test
+    void clearingAnExistingExplanationCountsAsAnEditButRepeatingItDoesNot() {
+        final var stored = analysis();
+        stored.setAnalysisDetails("previous explanation");
+        final var origin = new Origin(AssessmentOwnership.INHERITED, 7, null);
+        final var unchanged =
+                AnalysisMutationPlanner.plan(request(command().withDetails("previous explanation")), stored, origin);
+        assertThat(unchanged.valuesChanged()).isFalse();
+        assertThat(unchanged.owner()).isNull();
+        assertThat(unchanged.comments()).isEmpty();
+
+        final var cleared = AnalysisMutationPlanner.plan(request(command().withDetails(" ")), stored, origin);
+        assertThat(cleared.values().getAnalysisDetails()).isEqualTo(" ");
+        assertThat(cleared.owner()).isEqualTo(AssessmentOwnership.LOCAL);
+        assertThat(cleared.advanceDecisionVersion()).isTrue();
+        assertThat(cleared.dropCopiedTrail()).isFalse();
+        assertThat(cleared.comments()).containsExactly("Details:  ");
+    }
+
+    @Test
+    void releasingAnAlreadyEmptyLocalDecisionOnlyChangesOwnership() {
+        final var stored = new AnalysisValues();
+        final var released = AnalysisMutationPlanner.plan(
+                request(command().withDecisionAction(DecisionAction.RELEASE_LOCAL)),
+                stored,
+                new Origin(AssessmentOwnership.LOCAL, 7, null));
+        assertThat(released.valuesChanged()).isFalse();
+        assertThat(released.owner()).isEqualTo(AssessmentOwnership.NEUTRAL);
+        assertThat(released.advanceDecisionVersion()).isTrue();
+        assertThat(released.dropCopiedTrail()).isTrue();
+        assertThat(released.comments()).isEmpty();
+        assertThat(released.notifyDecisionChange()).isFalse();
+        assertThat(released.recordChange()).isTrue();
+    }
+
     @ParameterizedTest
     @EnumSource(AssessmentOwnership.class)
     void commentsPreserveEveryExistingOwnerAndVersion(final AssessmentOwnership owner) {
@@ -112,6 +147,9 @@ class AnalysisMutationPlannerTest {
     @Test
     void releaseClearsOverridesAndPolicyAssociationWithoutMutatingTheStoredValues() {
         final var stored = analysis();
+        stored.setAnalysisJustification(AnalysisJustification.CODE_NOT_REACHABLE);
+        stored.setAnalysisResponse(AnalysisResponse.CAN_NOT_FIX);
+        stored.setAnalysisDetails("previous explanation");
         stored.setSuppressed(true);
         stored.setSeverity(Severity.HIGH);
         stored.setCvssV2Vector("v2");
@@ -147,6 +185,37 @@ class AnalysisMutationPlannerTest {
         assertThat(stored.getVulnerabilityPolicyId()).isEqualTo(42L);
         assertThat(plan.owner()).isEqualTo(AssessmentOwnership.NEUTRAL);
         assertThat(plan.dropCopiedTrail()).isTrue();
+        assertThat(plan.values().getAnalysisDetails()).isNull();
+        assertThat(plan.comments())
+                .contains(
+                        "Justification: CODE_NOT_REACHABLE → NOT_SET",
+                        "Vendor Response: CAN_NOT_FIX → NOT_SET",
+                        "Details: (None)");
+    }
+
+    @Test
+    void owaspScoresCompareNumericallyAndChangesKeepTheExactDecimal() {
+        final var stored = analysis();
+        stored.setOwaspVector("vector");
+        stored.setOwaspScore(new BigDecimal("7.50"));
+        final var origin = new Origin(AssessmentOwnership.INHERITED, 7, null);
+        final var same = AnalysisMutationPlanner.plan(
+                request(command().withOwasp("vector", new BigDecimal("7.500"))), stored, origin);
+        assertThat(same.valuesChanged()).isFalse();
+        assertThat(same.owner()).isNull();
+        assertThat(same.comments()).isEmpty();
+        assertThat(same.recordChange()).isFalse();
+
+        final var changed = AnalysisMutationPlanner.plan(
+                request(command().withOwasp("new vector", new BigDecimal("7.500000000000000001"))), stored, origin);
+        assertThat(changed.values().getOwaspScore()).isEqualByComparingTo("7.500000000000000001");
+        assertThat(changed.values().getOwaspVector()).isEqualTo("new vector");
+        assertThat(changed.owner()).isEqualTo(AssessmentOwnership.LOCAL);
+        assertThat(changed.advanceDecisionVersion()).isTrue();
+        assertThat(changed.dropCopiedTrail()).isTrue();
+        assertThat(changed.comments())
+                .containsExactly("OWASP Vector: vector → new vector", "OWASP Score: 7.50 → 7.500000000000000001");
+        assertThat(stored.getOwaspScore()).isEqualTo(new BigDecimal("7.50"));
     }
 
     @Test
