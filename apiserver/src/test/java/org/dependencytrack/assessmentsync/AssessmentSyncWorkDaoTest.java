@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -41,11 +42,25 @@ import java.util.concurrent.TimeUnit;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.openJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
+
+    @Test
+    void invalidFindingInputCannotLeaveACommittedRequestWhenTheCallerCatchesIt() {
+        final var target = UUID.randomUUID();
+        useJdbiTransaction(h -> {
+            final var dao = new AssessmentSyncWorkDao(h);
+            assertThatThrownBy(() -> dao.requestFindings(target, Arrays.asList(new FindingKey(1, 2), null)))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessage("finding key must not be null");
+        });
+        final WorkRow row = withJdbiHandle(h -> new AssessmentSyncWorkDao(h).find(target));
+        assertThat(row).isNull();
+    }
 
     @Test
     void shouldAllocateDistinctRevisionsAcrossOverlappingTransactions() throws Exception {
