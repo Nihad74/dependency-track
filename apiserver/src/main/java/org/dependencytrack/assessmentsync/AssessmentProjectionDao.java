@@ -100,7 +100,6 @@ public final class AssessmentProjectionDao {
 
         updateMachineFields(accepted);
         final Map<Long, Long> versions = updateOrigins(accepted);
-        replaceContributions(accepted);
         for (final AcceptedWrite write : accepted) {
             final Long version = versions.get(write.write().analysisId());
             if (version == null) {
@@ -109,6 +108,7 @@ public final class AssessmentProjectionDao {
             }
             results.set(write.index(), new WorkerWriteResult(WorkerWriteStatus.APPLIED, version));
         }
+        replaceContributions(accepted);
         return List.copyOf(results);
     }
 
@@ -805,13 +805,13 @@ public final class AssessmentProjectionDao {
                 throw new IllegalArgumentException("Worker writes cannot assign " + owner);
             }
             requireNonNull(contributions, "contributions must not be null");
-            final var identities = new LinkedHashMap<ContributionKey, ContributionKey>();
+            final var identities = new LinkedHashSet<ContributionKey>();
             for (final SourceContributionWrite contribution : contributions) {
                 requireNonNull(contribution, "contribution must not be null");
                 final var key = new ContributionKey(
                         contribution.contributor().sourceProjectUuid(),
                         contribution.contributor().sourceAnalysisId());
-                if (identities.putIfAbsent(key, key) != null) {
+                if (!identities.add(key)) {
                     throw new IllegalArgumentException("Duplicate source contribution " + key.sourceProjectUuid());
                 }
             }
@@ -828,10 +828,10 @@ public final class AssessmentProjectionDao {
         public SourceContributionWrite {
             requireNonNull(contributor, "contributor must not be null");
             requireNonNull(comments, "comments must not be null");
-            final var ids = new LinkedHashMap<Long, Long>();
+            final var ids = new LinkedHashSet<Long>();
             for (final SourceCommentWrite comment : comments) {
                 requireNonNull(comment, "comment must not be null");
-                if (ids.putIfAbsent(comment.sourceCommentId(), comment.sourceCommentId()) != null) {
+                if (!ids.add(comment.sourceCommentId())) {
                     throw new IllegalArgumentException("Duplicate source comment " + comment.sourceCommentId());
                 }
             }

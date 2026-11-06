@@ -146,7 +146,7 @@ public final class AssessmentMatcher {
     private static boolean hashesConflict(final ComponentIdentity target, final ComponentIdentity candidate) {
         for (final Map.Entry<HashAlgorithm, String> entry : target.hashes().entrySet()) {
             final String other = candidate.hashes().get(entry.getKey());
-            if (other != null && !other.equals(entry.getValue())) {
+            if (other != null && !other.equalsIgnoreCase(entry.getValue())) {
                 return true;
             }
         }

@@ -727,10 +727,10 @@ public final class AssessmentSynchronizer {
 
     private static Map<UUID, Map<UUID, SourceComponent>> loadSourceComponents(
             final Handle handle, final Map<Long, List<UUID>> sourcesByComponent, final List<FindingKey> keys) {
-        final var sourceUuids = new LinkedHashMap<UUID, UUID>();
+        final var sourceUuids = new LinkedHashSet<UUID>();
         for (final List<UUID> sources : sourcesByComponent.values()) {
             for (final UUID sourceUuid : sources) {
-                sourceUuids.putIfAbsent(sourceUuid, sourceUuid);
+                sourceUuids.add(sourceUuid);
             }
         }
         if (sourceUuids.isEmpty()) {
@@ -805,7 +805,7 @@ public final class AssessmentSynchronizer {
                           LEFT JOIN "ASSESSMENT_ORIGIN" AS o
                             ON o."ANALYSIS_ID" = a."ID"
                         """)
-                .bind("sourceUuids", sourceUuids.keySet().toArray(UUID[]::new))
+                .bind("sourceUuids", sourceUuids.toArray(UUID[]::new))
                 .bind("vulnerabilityIds", vulnerabilityIds)
                 .map((rs, ctx) -> {
                     final UUID sourceProjectUuid = rs.getObject("source_project_uuid", UUID.class);
@@ -843,7 +843,7 @@ public final class AssessmentSynchronizer {
                     return sourceProjectUuid;
                 })
                 .list();
-        attachComments(handle, sourceUuids.keySet().toArray(UUID[]::new), vulnerabilityIds, grouped);
+        attachComments(handle, sourceUuids.toArray(UUID[]::new), vulnerabilityIds, grouped);
         final var components = new LinkedHashMap<UUID, Map<UUID, SourceComponent>>();
         for (final var project : grouped.entrySet()) {
             final var projectComponents = new LinkedHashMap<UUID, SourceComponent>();
@@ -1018,13 +1018,14 @@ public final class AssessmentSynchronizer {
             if (trail.comments().size() != write.comments().size()) {
                 return true;
             }
+            // The writer retains the first copied timestamp for a source comment. Comparing it
+            // with a later source timestamp (or finer source precision) would never converge.
             for (int i = 0; i < trail.comments().size(); i++) {
                 final SourceCommentWrite left = trail.comments().get(i);
                 final SourceCommentWrite right = write.comments().get(i);
                 if (left.sourceCommentId() != right.sourceCommentId()
                         || !left.comment().equals(right.comment())
-                        || !Objects.equals(left.commenter(), right.commenter())
-                        || !left.originalTimestamp().equals(right.originalTimestamp())) {
+                        || !Objects.equals(left.commenter(), right.commenter())) {
                     return true;
                 }
             }

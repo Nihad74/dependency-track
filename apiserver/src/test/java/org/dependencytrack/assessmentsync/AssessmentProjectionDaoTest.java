@@ -40,6 +40,8 @@ import org.dependencytrack.model.Vulnerability;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -49,6 +51,7 @@ import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
@@ -57,6 +60,91 @@ class AssessmentProjectionDaoTest extends PersistenceCapableTest {
 
     private static final Instant ORIGINAL_TIMESTAMP = Instant.parse("2020-01-02T03:04:05Z");
     private static final Instant REPLACEMENT_TIMESTAMP = Instant.parse("2024-05-06T07:08:09Z");
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void lossOfTheFinalVersionOrOwnershipGuardRollsBackTheWholeBatch(final boolean ownership) {
+        final long first = persistAnalysis(AnalysisState.NOT_SET, null);
+        final long second = persistAnalysis(AnalysisState.NOT_SET, null);
+        final StoredProjection beforeFirst = load(first);
+        final StoredProjection beforeSecond = load(second);
+        useJdbiTransaction(h -> {
+            final String mutation = ownership
+                    ? "UPDATE \"ASSESSMENT_ORIGIN\" SET \"OWNER\" = 'LOCAL' WHERE \"ANALYSIS_ID\" = NEW.\"ID\";"
+                    : "UPDATE \"ASSESSMENT_ORIGIN\" SET \"DECISION_VERSION\" = \"DECISION_VERSION\" + 1 WHERE \"ANALYSIS_ID\" = NEW.\"ID\";";
+            h.execute("CREATE FUNCTION assessment_move_origin_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+                    + mutation + " RETURN NEW; END; $$");
+            h.execute("""
+                    CREATE TRIGGER assessment_move_origin_guard BEFORE UPDATE OF "STATE" ON "ANALYSIS"
+                    FOR EACH ROW EXECUTE FUNCTION assessment_move_origin_guard()
+                    """);
+        });
+        try {
+            assertThatThrownBy(() -> useJdbiTransaction(h -> new AssessmentProjectionDao(h)
+                            .applyWorkerWrites(List.of(
+                                    new WorkerWrite(
+                                            first,
+                                            AssessmentOwnership.INHERITED,
+                                            richDecision(),
+                                            null,
+                                            0,
+                                            List.of(new SourceContributionWrite(
+                                                    contributor("kernel"), "must roll back", List.of()))),
+                                    write(second, AssessmentOwnership.INHERITED, richDecision(), 0)))))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("lost the origin guard");
+            assertThat(load(first)).isEqualTo(beforeFirst);
+            assertThat(load(second)).isEqualTo(beforeSecond);
+        } finally {
+            useJdbiTransaction(h -> {
+                h.execute("DROP TRIGGER assessment_move_origin_guard ON \"ANALYSIS\"");
+                h.execute("DROP FUNCTION assessment_move_origin_guard()");
+            });
+        }
+        final WorkerWriteResult retried = inJdbiTransaction(h -> new AssessmentProjectionDao(h)
+                .applyWorkerWrite(write(first, AssessmentOwnership.INHERITED, richDecision(), 0)));
+        assertThat(retried.status()).isEqualTo(WorkerWriteStatus.APPLIED);
+    }
+
+    @Test
+    void duplicateWritesAreRejectedBeforeMutationAndMissingOriginsRemainProtected() {
+        final long analysisId = persistAnalysis(AnalysisState.NOT_SET, null);
+        final StoredProjection before = load(analysisId);
+        useJdbiTransaction(h -> {
+            final var dao = new AssessmentProjectionDao(h);
+            final WorkerWrite write = write(analysisId, AssessmentOwnership.INHERITED, richDecision(), 0);
+            assertThatThrownBy(() -> dao.applyWorkerWrites(List.of(write, write)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Duplicate worker write");
+            assertThat(dao.applyWorkerWrites(List.of())).isEmpty();
+        });
+        assertThat(load(analysisId)).isEqualTo(before);
+        useJdbiTransaction(h -> {
+            h.createUpdate("DELETE FROM \"ASSESSMENT_ORIGIN\" WHERE \"ANALYSIS_ID\" = :id")
+                    .bind("id", analysisId)
+                    .execute();
+            final var dao = new AssessmentProjectionDao(h);
+            assertThat(dao.applyWorkerWrite(write(analysisId, AssessmentOwnership.INHERITED, richDecision(), 0))
+                            .status())
+                    .isEqualTo(WorkerWriteStatus.MISSING);
+            assertThat(dao.load(analysisId).decision()).isEqualTo(before.decision());
+            assertThat(dao.load(Long.MAX_VALUE)).isNull();
+        });
+    }
+
+    @Test
+    void duplicateProvenanceAndCommentIdentitiesAreRejectedBeforeWriting() {
+        final Contributor source = contributor("kernel");
+        final var trail = new SourceContributionWrite(source, "explanation", List.of());
+        assertThatThrownBy(() -> new WorkerWrite(
+                        1, AssessmentOwnership.INHERITED, richDecision(), null, 0, List.of(trail, trail)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Duplicate source contribution");
+        final var comment = new SourceCommentWrite(17, "text", "alice", ORIGINAL_TIMESTAMP);
+        assertThatThrownBy(() -> new SourceContributionWrite(source, "explanation", List.of(comment, comment)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Duplicate source comment");
+    }
 
     @Test
     void shouldUpsertWholeTupleAndResetToNeutral() {
