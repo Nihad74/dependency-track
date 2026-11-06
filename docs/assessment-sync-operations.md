@@ -50,7 +50,11 @@ Turning `access-management` / `acl.enabled` on or off queues a full pass for eve
 
 The maintenance task runs on `dt.assessment-sync.maintenance.cron` (default `0 3 * * *`, UTC). What it does depends on the mode: `CAPTURE` runs backfill, `ACTIVE` runs verification, and `WITHDRAW` runs withdrawal. Nothing starts when the mode changes; the next scheduled run picks up the new mode.
 
+Each project runs in its own transaction under the assessment mutation guard. Maintenance rechecks the mode and interruption after acquiring that guard, so a lock wait cannot start a project using an obsolete mode. A mode change during a project takes effect at the next project boundary. Verification checks interruption between finding pages; a project still holds its transaction and guard across those pages. Large projects and bulk withdrawal can therefore hold the guard for a long time. Page size does not bound transaction duration; configured query timeouts apply to individual database statements.
+
 Verification rebuilds each project's embedding index, compares findings with the same match, consensus, and diff as reconciliation, and enqueues a full target pass when the stored projection differs. It does not promote a row to `INHERITED` and it does not reset local ownership. An analysis with no origin stays protected.
+
+`dt.assessment_sync.drift{operation="VERIFY"}` counts drift observations after each project commits, including projects committed before a later halt or failure. It is a cumulative observation counter: retries and subsequent scans can count the same unresolved finding again. A rolled-back project adds nothing to it.
 
 Source events are the normal update path. Drift that appears on every verification means a writer is not recording changes. Fix that writer.
 
@@ -59,7 +63,7 @@ Run verification again after a replay, an algorithm change, or recovery.
 ## Withdrawal
 
 1. Set `WITHDRAW`. New inheritance stops. Reconciliation must not create inherited rows in this mode. Withdrawal itself starts with the next scheduled maintenance run.
-2. Maintenance selects analyses whose origin is `INHERITED` and resets those machine fields to neutral. `LOCAL`, `POLICY`, and `NEUTRAL` rows are not selected. Comments in `ANALYSISCOMMENT` stay. Every copied source trail on the project is removed, including source text kept as provenance on `LOCAL` rows. Affected projects get a refresh request, which the relay dispatches in this mode.
+2. Maintenance selects analyses whose origin is `INHERITED` and resets those machine fields to neutral. `LOCAL`, `POLICY`, and `NEUTRAL` rows are not selected. Comments in `ANALYSISCOMMENT` stay. Every copied source trail on the project is removed, including source text kept as provenance on `LOCAL` rows. Projects whose machine fields were reset get a refresh request, which the relay dispatches in this mode. Removing only copied provenance does not request policy or metrics refresh.
 3. Read `dt.assessment_sync.inherited` and `dt.assessment_sync.rollback.incomplete`.
 4. Set `OFF` only after inherited rows are gone and verification has been reviewed.
 5. Turning the feature back on after a period with no capture requires backfill and verification again. `CAPTURE` pauses application. It is not withdrawal.

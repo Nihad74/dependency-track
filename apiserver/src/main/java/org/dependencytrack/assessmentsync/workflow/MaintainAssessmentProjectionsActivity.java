@@ -107,15 +107,16 @@ public final class MaintainAssessmentProjectionsActivity
             if (outcome.halted()) {
                 return result(next, false, scanned, drift, enqueued);
             }
+            // Observe each committed project, even if a later project halts or fails.
+            if (outcome.drift() > 0) {
+                driftCounter
+                        .withTag(OPERATION_TAG, MaintenanceOperations.name(operation))
+                        .increment(outcome.drift());
+            }
             scanned++;
             drift += outcome.drift();
             enqueued += outcome.enqueued();
             next = projectUuid;
-        }
-        if (drift > 0) {
-            driftCounter
-                    .withTag(OPERATION_TAG, MaintenanceOperations.name(operation))
-                    .increment(drift);
         }
         final boolean hasMore = projects.size() == projectBatchSize;
         return result(next, hasMore, scanned, drift, enqueued);
@@ -124,11 +125,14 @@ public final class MaintainAssessmentProjectionsActivity
     private ProjectOutcome processProject(
             final Handle handle, final AssessmentMaintenanceOperation operation, final UUID projectUuid)
             throws InterruptedException {
-        final AssessmentSyncMode mode = AssessmentSyncMode.current();
-        if (!MaintenanceOperations.runsIn(operation, mode)) {
+        AssessmentMutationGuard.lockProject(handle, projectUuid);
+        // The guard may have waited through a mode change or cancellation.
+        if (Thread.interrupted()) {
+            throw new InterruptedException("Interrupted before maintaining project");
+        }
+        if (!MaintenanceOperations.runsIn(operation, AssessmentSyncMode.current())) {
             return ProjectOutcome.halt();
         }
-        AssessmentMutationGuard.lockProject(handle, projectUuid);
         final Long projectId = handle.attach(ProjectDao.class).getProjectId(projectUuid);
         if (projectId == null) {
             return ProjectOutcome.advance(0, 0);
@@ -148,7 +152,7 @@ public final class MaintainAssessmentProjectionsActivity
             case ASSESSMENT_MAINTENANCE_OPERATION_VERIFY -> {
                 new AssessmentEmbeddingIndexer(handle).rebuild(projectUuid);
                 drift = countProjectDrift(handle, projectUuid, projectId);
-                if (drift > 0 && mode.recordsOutbox()) {
+                if (drift > 0) {
                     new AssessmentSyncWorkDao(handle).requestFull(projectUuid);
                     enqueued = 1;
                 }
