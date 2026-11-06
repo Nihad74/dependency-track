@@ -25,6 +25,7 @@ import org.dependencytrack.assessmentsync.AssessmentChange;
 import org.dependencytrack.assessmentsync.AssessmentChange.Reason;
 import org.dependencytrack.assessmentsync.AssessmentChange.Scope;
 import org.dependencytrack.assessmentsync.AssessmentChangeRecorder;
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.assessmentsync.AssessmentSyncMetrics;
 import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
 import org.dependencytrack.common.ConfigKeys;
@@ -46,20 +47,31 @@ import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjecti
 import org.dependencytrack.proto.internal.workflow.v1.SynchronizeProjectAssessmentsArg;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.statement.SqlLogger;
+import org.jdbi.v3.core.statement.SqlStatements;
+import org.jdbi.v3.core.statement.StatementContext;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.protoConverter;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.voidConverter;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.createJdbi;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.openJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
@@ -430,6 +442,263 @@ class AssessmentMaintenanceWorkflowTest extends PersistenceCapableTest {
                 .isZero();
         assertThat(registry.get(AssessmentSyncMetrics.INHERITED).gauge().value())
                 .isZero();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"BOOTSTRAP,CAPTURE,OFF", "VERIFY,ACTIVE,WITHDRAW", "WITHDRAW,WITHDRAW,ACTIVE"})
+    void modeChangedWhileWaitingForTheProjectGuardStopsBeforeMutating(
+            final String operationName, final String initialMode, final String nextMode) throws Exception {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, initialMode);
+        insertProject(UUID_1, "guarded");
+        final var operation =
+                AssessmentMaintenanceOperation.valueOf("ASSESSMENT_MAINTENANCE_OPERATION_" + operationName);
+        try (final var guard = openJdbiHandle();
+                final var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            guard.begin();
+            AssessmentMutationGuard.lockProject(guard, UUID_1);
+            final var pending = executor.submit(
+                    () -> activity(1, new SimpleMeterRegistry()).execute(CONTEXT, argument(operation, null)));
+            try {
+                await().atMost(Duration.ofSeconds(10))
+                        .until(() -> withJdbiHandle(handle ->
+                                        handle.createQuery("""
+                        SELECT COUNT(*) FROM pg_locks
+                         WHERE locktype = 'advisory' AND NOT granted
+                        """).mapTo(int.class).one())
+                                == 1);
+                MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, nextMode);
+            } finally {
+                guard.commit();
+            }
+            final var stopped = pending.get(10, TimeUnit.SECONDS);
+            assertThat(stopped.getScanned()).isZero();
+            assertThat(stopped.getProjectUuidCursor()).isEmpty();
+            assertThat(stopped.getEnqueued()).isZero();
+            assertThat(stopped.getHasMore()).isFalse();
+        }
+        assertThat(requestedRevision(UUID_1)).isZero();
+    }
+
+    @Test
+    void committedDriftIsCountedWhenModeChangesBeforeTheNextProject() throws Exception {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "ACTIVE");
+        ReconcileFixture.oneSource(qm, 1);
+        insertProject(UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff"), "last");
+        final var registry = new SimpleMeterRegistry();
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logAfterExecution(final StatementContext context) {
+                if (context.getRenderedSql().contains("INSERT INTO \"ASSESSMENT_SYNC_WORK\"")) {
+                    MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "OFF");
+                }
+            }
+        });
+        final MaintainAssessmentProjectionsRes stopped;
+        try {
+            stopped = activity(20, registry).execute(CONTEXT, argument(VERIFY, null));
+        } finally {
+            jdbi.setSqlLogger(previous);
+        }
+        assertThat(stopped.getDrift()).isPositive();
+        assertThat(stopped.getEnqueued()).isEqualTo(1);
+        assertThat(stopped.getHasMore()).isFalse();
+        assertThat(registry.counter(AssessmentSyncMetrics.DRIFT, "operation", "VERIFY")
+                        .count())
+                .isEqualTo(stopped.getDrift());
+    }
+
+    @Test
+    void verificationPagesFindingsWithoutChangingTheirDecisions() throws Exception {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "ACTIVE");
+        final var fixture = ReconcileFixture.oneSource(qm, 3);
+        final var registry = new SimpleMeterRegistry();
+        final var page =
+                new MaintainAssessmentProjectionsActivity(20, 1, registry).execute(CONTEXT, argument(VERIFY, null));
+        assertThat(page.getDrift()).isEqualTo(3);
+        assertThat(page.getEnqueued()).isEqualTo(1);
+        for (final var component : fixture.libraries) {
+            assertThat(ReconcileFixture.state(component.getId(), fixture.vulnerability.getId()))
+                    .isNull();
+        }
+        assertThat(registry.counter(AssessmentSyncMetrics.DRIFT, "operation", "VERIFY")
+                        .count())
+                .isEqualTo(3d);
+    }
+
+    @Test
+    void interruptionAfterTheGuardStopsBeforeTheProjectIsMutated() {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        insertProject(UUID_1, "interrupted");
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logAfterExecution(final StatementContext context) {
+                if (context.getRenderedSql().contains("pg_advisory_xact_lock")) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+        try {
+            assertThatThrownBy(() -> activity(1, new SimpleMeterRegistry()).execute(CONTEXT, argument(BOOTSTRAP, null)))
+                    .isInstanceOf(InterruptedException.class)
+                    .hasMessage("Interrupted before maintaining project");
+        } finally {
+            Thread.interrupted();
+            jdbi.setSqlLogger(previous);
+        }
+        assertThat(requestedRevision(UUID_1)).isZero();
+    }
+
+    @Test
+    void bootstrapFailureRollsBackOriginsAndEmbeddingChangesWithTheWorkRequest() {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "OFF");
+        final var fixture = ReconcileFixture.oneSource(qm, 1);
+        final long analysisId = qm.makeAnalysis(
+                new MakeAnalysisCommand(fixture.library(), fixture.vulnerability).withState(AnalysisState.IN_TRIAGE));
+        useJdbiTransaction(handle -> {
+            handle.createUpdate("DELETE FROM \"ASSESSMENT_ORIGIN\" WHERE \"ANALYSIS_ID\" = :id")
+                    .bind("id", analysisId)
+                    .execute();
+            handle.execute("DELETE FROM \"ASSESSMENT_EMBEDDING\"");
+        });
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logBeforeExecution(final StatementContext context) {
+                if (context.getRenderedSql().contains("INSERT INTO \"ASSESSMENT_SYNC_WORK\"")) {
+                    throw new IllegalStateException("work request failed");
+                }
+            }
+        });
+        try {
+            assertThatThrownBy(
+                            () -> activity(20, new SimpleMeterRegistry()).execute(CONTEXT, argument(BOOTSTRAP, null)))
+                    .hasMessageContaining("work request failed");
+        } finally {
+            jdbi.setSqlLogger(previous);
+        }
+        assertThat(ReconcileFixture.owner(fixture.library().getId(), fixture.vulnerability.getId()))
+                .isNull();
+        final int embeddingCount =
+                withJdbiHandle(handle -> handle.createQuery("SELECT COUNT(*) FROM \"ASSESSMENT_EMBEDDING\"")
+                        .mapTo(int.class)
+                        .one());
+        assertThat(embeddingCount).isZero();
+        assertThat(requestedRevision(fixture.target.getUuid())).isZero();
+    }
+
+    @Test
+    void aLaterProjectFailureKeepsCommittedDriftAndRollsBackTheFailingProject() {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "ACTIVE");
+        final var first = ReconcileFixture.oneSource(qm, 1);
+        final var second = ReconcileFixture.oneSource(qm, 1);
+        final var targets = List.of(first.target.getUuid(), second.target.getUuid()).stream()
+                .sorted(java.util.Comparator.comparing(UUID::toString))
+                .toList();
+        final var registry = new SimpleMeterRegistry();
+        final var writes = new AtomicInteger();
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logBeforeExecution(final StatementContext context) {
+                if (context.getRenderedSql().contains("INSERT INTO \"ASSESSMENT_SYNC_WORK\"")
+                        && writes.incrementAndGet() == 2) {
+                    throw new IllegalStateException("second project failed");
+                }
+            }
+        });
+        try {
+            assertThatThrownBy(() -> activity(20, registry).execute(CONTEXT, argument(VERIFY, null)))
+                    .hasMessageContaining("second project failed");
+        } finally {
+            jdbi.setSqlLogger(previous);
+        }
+        assertThat(writes).hasValue(2);
+        assertThat(requestedRevision(targets.getFirst())).isEqualTo(1);
+        assertThat(requestedRevision(targets.getLast())).isZero();
+        assertThat(registry.counter(AssessmentSyncMetrics.DRIFT, "operation", "VERIFY")
+                        .count())
+                .isEqualTo(1d);
+    }
+
+    @Test
+    void aProjectDeletedAfterListingIsSkippedAndItsCursorStillAdvances() throws Exception {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "CAPTURE");
+        insertProject(UUID_1, "deleted");
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logAfterExecution(final StatementContext context) {
+                if (context.getRenderedSql().contains("SELECT \"UUID\"")) {
+                    useJdbiTransaction(handle -> handle.createUpdate("DELETE FROM \"PROJECT\" WHERE \"UUID\" = :uuid")
+                            .bind("uuid", UUID_1)
+                            .execute());
+                }
+            }
+        });
+        final MaintainAssessmentProjectionsRes page;
+        try {
+            page = activity(2, new SimpleMeterRegistry())
+                    .execute(
+                            CONTEXT,
+                            argument(BOOTSTRAP, null).toBuilder()
+                                    .setProjectUuidCursor(" ")
+                                    .build());
+        } finally {
+            jdbi.setSqlLogger(previous);
+        }
+        assertThat(page.getProjectUuidCursor()).isEqualTo(UUID_1.toString());
+        assertThat(page.getScanned()).isEqualTo(1);
+        assertThat(page.getHasMore()).isFalse();
+        assertThat(page.getEnqueued()).isZero();
+        assertThat(requestedRevision(UUID_1)).isZero();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "PROJECTS,Interrupted during assessment maintenance",
+        "FINDINGS,Interrupted during assessment verification"
+    })
+    void interruptionAtScanBoundariesRollsBackUnfinishedProjectWork(final String boundary, final String message) {
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "ACTIVE");
+        final var fixture = ReconcileFixture.oneSource(qm, 1);
+        useJdbiTransaction(handle -> handle.execute("DELETE FROM \"ASSESSMENT_EMBEDDING\""));
+        final var registry = new SimpleMeterRegistry();
+        final var jdbi = createJdbi();
+        final var previous = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+        jdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logAfterExecution(final StatementContext context) {
+                final String sql = context.getRenderedSql();
+                if ((boundary.equals("PROJECTS") && sql.contains("SELECT \"UUID\""))
+                        || (boundary.equals("FINDINGS")
+                                && sql.contains("INSERT INTO \"ASSESSMENT_EMBEDDING_MEMBER\""))) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+        try {
+            assertThatThrownBy(() -> activity(20, registry).execute(CONTEXT, argument(VERIFY, null)))
+                    .isInstanceOf(InterruptedException.class)
+                    .hasMessage(message);
+        } finally {
+            Thread.interrupted();
+            jdbi.setSqlLogger(previous);
+        }
+        assertThat(requestedRevision(fixture.target.getUuid())).isZero();
+        assertThat(registry.find(AssessmentSyncMetrics.DRIFT).counters()).isEmpty();
+        final int embeddings =
+                withJdbiHandle(handle -> handle.createQuery("SELECT COUNT(*) FROM \"ASSESSMENT_EMBEDDING\"")
+                        .mapTo(int.class)
+                        .one());
+        assertThat(embeddings).isZero();
     }
 
     private static MaintainAssessmentProjectionsActivity activity(

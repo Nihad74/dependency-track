@@ -29,7 +29,7 @@ import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 /**
- * Backlog, mode, and drift gauges. Labels are the mode name or the maintenance operation.
+ * Backlog and mode gauges, and a drift counter. Labels are the mode name or the maintenance operation.
  */
 public final class AssessmentSyncMetrics {
 
@@ -93,7 +93,7 @@ public final class AssessmentSyncMetrics {
                 .strongReference(true)
                 .register(registry);
         Gauge.builder(ROLLBACK_INCOMPLETE, AssessmentSyncMetrics::rollbackIncomplete)
-                .description("1 when mode is OFF and inherited projections remain")
+                .description("1 when mode is OFF and inherited projections or copied source trails remain")
                 .strongReference(true)
                 .register(registry);
     }
