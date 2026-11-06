@@ -69,6 +69,12 @@ public final class ExpandAssessmentChangesActivity
         if (reconcileBatchSize <= 0) {
             throw new IllegalArgumentException("reconcileBatchSize must be positive");
         }
+        if (fanoutBatchSize == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("fanoutBatchSize must allow one lookahead row");
+        }
+        if (reconcileBatchSize == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("reconcileBatchSize must allow one lookahead row");
+        }
         this.fanoutBatchSize = fanoutBatchSize;
         this.reconcileBatchSize = reconcileBatchSize;
         this.beforeExpand = requireNonNull(beforeExpand, "beforeExpand must not be null");
@@ -130,8 +136,8 @@ public final class ExpandAssessmentChangesActivity
                 }
                 lastOnPage = target.getKey();
             }
-            workDao.requestFull(full);
-            workDao.requestFindings(findings);
+            // Lock the whole page in one UUID order, irrespective of its full/finding classification.
+            workDao.requestWork(full, findings);
             last = lastOnPage;
             targetsRequested = full.size() + findings.size();
         }

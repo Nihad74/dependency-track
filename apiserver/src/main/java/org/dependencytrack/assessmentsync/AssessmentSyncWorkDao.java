@@ -26,7 +26,7 @@ import org.jspecify.annotations.Nullable;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -104,73 +104,75 @@ public final class AssessmentSyncWorkDao {
      * {@link #requestFull(UUID)} for many targets in one statement. Rows are locked in UUID order.
      */
     public void requestFull(final Collection<UUID> targetUuids) {
-        requireTransaction(handle);
-        if (targetUuids.isEmpty()) {
-            return;
-        }
-        handle.createUpdate(/* language=SQL */ """
-                        INSERT INTO "ASSESSMENT_SYNC_WORK" (
-                          "TARGET_UUID"
-                        , "REQUESTED_REVISION"
-                        , "FULL_REVISION"
-                        , "NEXT_DISPATCH_AT"
-                        , "PENDING_SINCE"
-                        )
-                        SELECT DISTINCT t.target_uuid
-                             , 1
-                             , 1
-                             , date_trunc('milliseconds', clock_timestamp())
-                             , date_trunc('milliseconds', clock_timestamp())
-                          FROM UNNEST(:targetUuids) AS t(target_uuid)
-                         ORDER BY t.target_uuid
-                        ON CONFLICT ("TARGET_UUID") DO UPDATE
-                        SET "REQUESTED_REVISION" = "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
-                          , "FULL_REVISION" = "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
-                          , "NEXT_DISPATCH_AT" = date_trunc('milliseconds', clock_timestamp())
-                          , "PENDING_SINCE" = COALESCE(
-                              "ASSESSMENT_SYNC_WORK"."PENDING_SINCE"
-                            , date_trunc('milliseconds', clock_timestamp())
-                            )
-                        """)
-                .bind("targetUuids", targetUuids.toArray(UUID[]::new))
-                .execute();
+        requestWork(targetUuids, Map.of());
     }
 
     /**
-     * {@link #requestFindings(UUID, Collection)} for many targets in one statement. Each target's keys are
-     * stored at that target's new revision. Rows are locked in UUID order.
+     * {@link #requestFindings(UUID, Collection)} for many targets in one statement.
      */
     public void requestFindings(final Map<UUID, ? extends Collection<FindingKey>> keysByTarget) {
+        requestWork(List.of(), keysByTarget);
+    }
+
+    /**
+     * Allocates one revision per target for a mixed page, locking all work rows in UUID order.
+     * Full passes take precedence over keys for the same target. Input is validated before SQL.
+     */
+    public void requestWork(
+            final Collection<UUID> fullTargets, final Map<UUID, ? extends Collection<FindingKey>> keysByTarget) {
+        requireNonNull(fullTargets, "fullTargets must not be null");
+        requireNonNull(keysByTarget, "keysByTarget must not be null");
         requireTransaction(handle);
-        if (keysByTarget.isEmpty()) {
-            return;
+        final var full = new LinkedHashSet<UUID>();
+        for (final UUID uuid : fullTargets) {
+            full.add(requireNonNull(uuid, "targetUuid must not be null"));
         }
+        final var targets = new LinkedHashSet<>(full);
         final var keyTargets = new ArrayList<UUID>();
         final var componentIds = new ArrayList<Long>();
         final var vulnerabilityIds = new ArrayList<Long>();
         for (final var entry : keysByTarget.entrySet()) {
-            for (final FindingKey key : dedupe(entry.getValue())) {
-                keyTargets.add(entry.getKey());
+            final UUID uuid = requireNonNull(entry.getKey(), "targetUuid must not be null");
+            final var keys = dedupe(requireNonNull(entry.getValue(), "keys must not be null"));
+            targets.add(uuid);
+            if (full.contains(uuid)) {
+                continue;
+            }
+            for (final FindingKey key : keys) {
+                keyTargets.add(uuid);
                 componentIds.add(key.componentId());
                 vulnerabilityIds.add(key.vulnDbId());
             }
+        }
+        if (targets.isEmpty()) {
+            return;
+        }
+        final UUID[] targetUuids = targets.toArray(UUID[]::new);
+        final var fullPasses = new boolean[targetUuids.length];
+        for (int i = 0; i < targetUuids.length; i++) {
+            fullPasses[i] = full.contains(targetUuids[i]);
         }
         handle.createUpdate(/* language=SQL */ """
                         WITH requested AS (
                           INSERT INTO "ASSESSMENT_SYNC_WORK" (
                             "TARGET_UUID"
                           , "REQUESTED_REVISION"
+                          , "FULL_REVISION"
                           , "NEXT_DISPATCH_AT"
                           , "PENDING_SINCE"
                           )
-                          SELECT DISTINCT t.target_uuid
+                          SELECT t.target_uuid
                                , 1
+                               , CASE WHEN t.full_pass THEN 1 ELSE 0 END
                                , date_trunc('milliseconds', clock_timestamp())
                                , date_trunc('milliseconds', clock_timestamp())
-                            FROM UNNEST(:targetUuids) AS t(target_uuid)
+                            FROM UNNEST(:targetUuids, :fullPasses) AS t(target_uuid, full_pass)
                            ORDER BY t.target_uuid
                           ON CONFLICT ("TARGET_UUID") DO UPDATE
                           SET "REQUESTED_REVISION" = "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
+                            , "FULL_REVISION" = CASE WHEN EXCLUDED."FULL_REVISION" = 1
+                                THEN "ASSESSMENT_SYNC_WORK"."REQUESTED_REVISION" + 1
+                                ELSE "ASSESSMENT_SYNC_WORK"."FULL_REVISION" END
                             , "NEXT_DISPATCH_AT" = date_trunc('milliseconds', clock_timestamp())
                             , "PENDING_SINCE" = COALESCE(
                                 "ASSESSMENT_SYNC_WORK"."PENDING_SINCE"
@@ -195,7 +197,8 @@ public final class AssessmentSyncWorkDao {
                         ON CONFLICT ("TARGET_UUID", "COMPONENT_ID", "VULNERABILITY_ID") DO UPDATE
                         SET "REVISION" = GREATEST("ASSESSMENT_SYNC_FINDING"."REVISION", EXCLUDED."REVISION")
                         """)
-                .bind("targetUuids", keysByTarget.keySet().toArray(UUID[]::new))
+                .bind("targetUuids", targetUuids)
+                .bind("fullPasses", fullPasses)
                 .bind("keyTargets", keyTargets.toArray(UUID[]::new))
                 .bind(
                         "componentIds",
@@ -213,6 +216,7 @@ public final class AssessmentSyncWorkDao {
         requireNonNull(targetUuid, "targetUuid must not be null");
         requireNonNull(keys, "keys must not be null");
         requireTransaction(handle);
+        final Collection<FindingKey> unique = dedupe(keys);
         final long revision = handle.createQuery(/* language=SQL */ """
                         INSERT INTO "ASSESSMENT_SYNC_WORK" (
                           "TARGET_UUID"
@@ -239,7 +243,6 @@ public final class AssessmentSyncWorkDao {
                 .mapTo(long.class)
                 .one();
 
-        final Collection<FindingKey> unique = dedupe(keys);
         if (unique.isEmpty()) {
             return revision;
         }
@@ -618,12 +621,12 @@ public final class AssessmentSyncWorkDao {
     }
 
     private static Collection<FindingKey> dedupe(final Collection<FindingKey> keys) {
-        final var unique = new LinkedHashMap<FindingKey, FindingKey>();
+        final var unique = new LinkedHashSet<FindingKey>();
         for (final FindingKey key : keys) {
             requireNonNull(key, "finding key must not be null");
-            unique.putIfAbsent(key, key);
+            unique.add(key);
         }
-        return unique.values();
+        return unique;
     }
 
     /**
