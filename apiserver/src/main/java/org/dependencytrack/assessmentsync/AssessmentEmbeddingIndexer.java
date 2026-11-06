@@ -18,6 +18,7 @@
  */
 package org.dependencytrack.assessmentsync;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.dependencytrack.assessmentsync.AssessmentEmbeddingDao.MarkerMembership;
 import org.dependencytrack.assessmentsync.AssessmentSourceResolver.Identity;
@@ -232,7 +233,7 @@ public final class AssessmentEmbeddingIndexer {
         final JsonNode node;
         try {
             node = Mappers.jsonMapper().readTree(directDependencies);
-        } catch (Exception e) {
+        } catch (JsonProcessingException e) {
             throw new IllegalStateException("Could not read direct dependencies", e);
         }
         if (!node.isArray()) {

@@ -67,8 +67,8 @@ public final class ReconcileProjectAssessmentsActivity
      */
     ReconcileProjectAssessmentsActivity(
             final int reconcileBatchSize, final Duration inactiveBackoff, final Runnable afterWrite) {
-        if (reconcileBatchSize <= 0) {
-            throw new IllegalArgumentException("reconcileBatchSize must be positive");
+        if (reconcileBatchSize <= 0 || reconcileBatchSize == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("reconcileBatchSize must be positive and less than Integer.MAX_VALUE");
         }
         if (inactiveBackoff == null || inactiveBackoff.isZero() || inactiveBackoff.isNegative()) {
             throw new IllegalArgumentException("inactiveBackoff must be positive");

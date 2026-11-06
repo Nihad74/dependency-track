@@ -258,7 +258,10 @@ public final class AssessmentEmbeddingDao {
     private static Set<StoredMember> desiredMembers(final Collection<MarkerMembership> membership) {
         final var members = new LinkedHashSet<StoredMember>();
         for (final MarkerMembership marker : membership) {
-            for (final long componentId : dedupeMembers(marker)) {
+            for (final long componentId : marker.componentIds()) {
+                if (componentId <= 0) {
+                    throw new IllegalArgumentException("componentId must be positive");
+                }
                 members.add(new StoredMember(marker.markerComponentId(), componentId));
             }
         }
@@ -272,17 +275,6 @@ public final class AssessmentEmbeddingDao {
             @Nullable UUID sourceProjectUuid) {}
 
     private record StoredMember(long markerComponentId, long componentId) {}
-
-    private static LinkedHashSet<Long> dedupeMembers(final MarkerMembership marker) {
-        final var componentIds = new LinkedHashSet<Long>();
-        for (final long componentId : marker.componentIds()) {
-            if (componentId <= 0) {
-                throw new IllegalArgumentException("componentId must be positive");
-            }
-            componentIds.add(componentId);
-        }
-        return componentIds;
-    }
 
     /**
      * One marker row. {@code sourceProjectUuid} is null when the source project is unresolved.

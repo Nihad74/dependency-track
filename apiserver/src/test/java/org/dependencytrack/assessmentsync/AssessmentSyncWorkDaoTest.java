@@ -50,6 +50,67 @@ import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 class AssessmentSyncWorkDaoTest extends PersistenceCapableTest {
 
     @Test
+    void missingCompletedAndStalePassesCannotChangePersistedWork() {
+        final UUID target = UUID.randomUUID();
+        useJdbiTransaction(h -> {
+            final var dao = new AssessmentSyncWorkDao(h);
+            assertThat(dao.beginOrResumePass(target)).isNull();
+            assertThat(dao.completePass(target, 1)).isFalse();
+            assertThat(dao.acknowledgeCancellation(target)).isFalse();
+            dao.requestFindings(target, List.of(new FindingKey(11, 22)));
+            final WorkRow before = dao.find(target);
+            assertThat(dao.completePass(target, 1)).isFalse();
+            assertThat(dao.pendingFindings(target)).hasSize(1);
+            assertThat(dao.find(target)).isEqualTo(before);
+            final Pass pass = requireNonNull(dao.beginOrResumePass(target));
+            assertThat(dao.completePass(target, pass.activeRevision() + 1)).isFalse();
+            assertThat(dao.pendingFindings(target)).hasSize(1);
+            assertThat(dao.find(target).completedRevision()).isZero();
+            assertThat(dao.completePass(target, pass.activeRevision())).isTrue();
+            assertThat(dao.beginOrResumePass(target)).isNull();
+            assertThat(dao.completePass(target, pass.activeRevision())).isFalse();
+        });
+    }
+
+    @Test
+    void cancellationClearsActiveCursorFindingsRefreshAndBackoffAtomically() {
+        final UUID target = UUID.randomUUID();
+        useJdbiTransaction(h -> {
+            final var dao = new AssessmentSyncWorkDao(h);
+            dao.requestFindings(target, List.of(new FindingKey(11, 22)));
+            final Pass pass = requireNonNull(dao.beginOrResumePass(target));
+            dao.advancePass(target, pass.activeRevision(), new FindingKey(11, 22));
+            dao.requestFull(target);
+            dao.requestRefresh(target);
+            dao.recordDispatchAttempt(target, Instant.now().plusSeconds(3600));
+        });
+        final WorkRow before = withJdbiHandle(h -> new AssessmentSyncWorkDao(h).find(target));
+        assertThatThrownBy(() -> useJdbiTransaction(h -> {
+                    assertThat(new AssessmentSyncWorkDao(h).acknowledgeCancellation(target))
+                            .isTrue();
+                    throw new IllegalStateException("rollback cancellation");
+                }))
+                .hasMessage("rollback cancellation");
+        final WorkRow rolledBack = withJdbiHandle(h -> new AssessmentSyncWorkDao(h).find(target));
+        assertThat(rolledBack).isEqualTo(before);
+        useJdbiTransaction(h -> {
+            final var dao = new AssessmentSyncWorkDao(h);
+            assertThat(dao.pendingFindings(target)).hasSize(1);
+            assertThat(dao.acknowledgeCancellation(target)).isTrue();
+            final WorkRow row = requireNonNull(dao.find(target));
+            assertThat(row.completedRevision()).isEqualTo(row.requestedRevision());
+            assertThat(row.refreshCompleted()).isEqualTo(row.refreshRequested());
+            assertThat(row.activeRevision()).isNull();
+            assertThat(row.activeFull()).isFalse();
+            assertThat(row.cursor()).isNull();
+            assertThat(row.dispatchAttempts()).isZero();
+            assertThat(dao.pendingFindings(target)).isEmpty();
+            assertThat(dao.pollDue(10, true)).isEmpty();
+        });
+        assertThat(pendingSince(target)).isNull();
+    }
+
+    @Test
     void invalidFindingInputCannotLeaveACommittedRequestWhenTheCallerCatchesIt() {
         final var target = UUID.randomUUID();
         useJdbiTransaction(h -> {

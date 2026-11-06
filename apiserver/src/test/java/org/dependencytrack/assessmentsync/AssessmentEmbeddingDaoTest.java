@@ -31,10 +31,41 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 
 class AssessmentEmbeddingDaoTest extends PersistenceCapableTest {
+
+    @Test
+    void validatesTheEntireReplacementBeforeDeletingExistingMembership() {
+        final Project target = persistProject("target", "1");
+        final Component marker = persistComponent(target, "marker", "1");
+        final Component member = persistComponent(target, "member", "1");
+        final var valid = new MarkerMembership(marker.getId(), "marker", "1", null, List.of(member.getId()));
+        useJdbiTransaction(h -> {
+            final var dao = new AssessmentEmbeddingDao(h);
+            dao.replaceMembership(target.getId(), List.of(valid));
+            assertThatThrownBy(() -> dao.replaceMembership(target.getId(), List.of(valid, valid)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Duplicate marker");
+            assertThatThrownBy(() -> dao.replaceMembership(
+                            target.getId(),
+                            List.of(new MarkerMembership(
+                                    marker.getId(), "replacement", "2", null, List.of(member.getId(), 0L)))))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("componentId must be positive");
+            assertThat(dao.findByMarkerNameAndVersion("marker", "1")).hasSize(1);
+            assertThat(dao.findMembership(target.getId(), member.getId()))
+                    .containsExactly(new Membership(target.getId(), marker.getId(), member.getId()));
+            dao.replaceMembership(
+                    target.getId(), List.of(new MarkerMembership(marker.getId(), "marker", "1", null, List.of())));
+            assertThat(dao.findMembership(target.getId(), member.getId())).isEmpty();
+            assertThat(dao.findByMarkerNameAndVersion("marker", "1")).hasSize(1);
+            dao.replaceMembership(target.getId(), List.of());
+            assertThat(dao.findByMarkerNameAndVersion("marker", "1")).isEmpty();
+        });
+    }
 
     @Test
     void shouldReplaceMembershipKeepUnresolvedMarkersAndReadByIdentity() {
