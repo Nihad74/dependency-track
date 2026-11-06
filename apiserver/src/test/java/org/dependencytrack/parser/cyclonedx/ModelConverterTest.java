@@ -49,6 +49,7 @@ import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.time.Instant;
@@ -65,6 +66,110 @@ import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 class ModelConverterTest extends PersistenceCapableTest {
+
+    @ParameterizedTest
+    @CsvSource({"VEX", "VDR"})
+    void legacyNullableDecisionFieldsArePreservedInExports(final CycloneDXExporter.Variant variant) {
+        final ExportedFinding finding = inheritedFinding();
+        withJdbiHandle(h -> h.createUpdate("""
+                UPDATE "ANALYSIS" SET "JUSTIFICATION" = NULL, "RESPONSE" = NULL WHERE "ID" = :id
+                """).bind("id", finding.analysisId()).execute());
+        final List<Finding> findings = withJdbiHandle(
+                h -> h.attach(FindingDao.class).getFindings(finding.target().getId(), true));
+        try (var viewer = new QueryManager(requestFor(finding.visibleUser()))) {
+            assertThat(ModelConverter.generateVulnerabilities(viewer, variant, findings))
+                    .singleElement()
+                    .satisfies(v -> {
+                        assertThat(v.getAnalysis().getJustification()).isNull();
+                        assertThat(v.getAnalysis().getResponses()).isNullOrEmpty();
+                        assertThat(v.getAnalysis().getDetail()).isEqualTo(VISIBLE_SOURCE_TEXT);
+                    });
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"VEX,true", "VDR,true", "VEX,false", "VDR,false"})
+    void exportGroupsKeepTheCorrectSourceComponentForEachAffectedFinding(
+            final CycloneDXExporter.Variant variant, final boolean distinctSources) {
+        final Project target = qm.createProject("target", null, "1", null, null, null, null, false);
+        final Project source = qm.createProject("source", null, "1", null, null, null, null, false);
+        final Vulnerability vulnerability = exportVulnerability("INT-GROUP");
+        final var targets = new java.util.ArrayList<Component>();
+        final Component commonSource = distinctSources ? null : exportComponent(source, "shared-source");
+        for (int i = 0; i < 2; i++) {
+            final Component targetComponent = exportComponent(target, "target-" + i);
+            final Component sourceComponent =
+                    commonSource != null ? commonSource : exportComponent(source, "source-" + i);
+            targets.add(targetComponent);
+            qm.addVulnerability(vulnerability, targetComponent, "internal");
+            qm.addVulnerability(vulnerability, sourceComponent, "internal");
+            final long sourceId = qm.makeAnalysis(
+                    new MakeAnalysisCommand(sourceComponent, vulnerability).withState(AnalysisState.NOT_AFFECTED));
+            final long targetId = qm.makeAnalysis(new MakeAnalysisCommand(targetComponent, vulnerability));
+            inJdbiTransaction(h -> new AssessmentProjectionDao(h)
+                    .applyWorkerWrite(new WorkerWrite(
+                            targetId,
+                            AssessmentOwnership.INHERITED,
+                            AssessmentDecision.of(
+                                    AnalysisState.NOT_AFFECTED,
+                                    null,
+                                    null,
+                                    false,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null),
+                            null,
+                            0,
+                            List.of(new SourceContributionWrite(
+                                    new Contributor(
+                                            source.getUuid(),
+                                            sourceComponent.getUuid(),
+                                            vulnerability.getUuid(),
+                                            sourceId),
+                                    "common explanation",
+                                    List.of())))));
+        }
+        final ManagedUser user = qm.createManagedUser("exporter", TEST_PASSWORD_HASH);
+        grant(user, target, source);
+        final List<Finding> findings =
+                withJdbiHandle(h -> h.attach(FindingDao.class).getFindings(target.getId(), true));
+        try (var viewer = new QueryManager(requestFor(user))) {
+            final var exported = ModelConverter.generateVulnerabilities(viewer, variant, findings);
+            if (!distinctSources) {
+                assertThat(exported).singleElement().satisfies(v -> {
+                    assertThat(v.getAffects()).hasSize(2);
+                    assertThat(v.getProperties())
+                            .singleElement()
+                            .satisfies(
+                                    property -> assertThat(property.getValue()).contains("shared-source@1.0.0"));
+                });
+                return;
+            }
+            assertThat(exported).hasSize(2);
+            for (int i = 0; i < targets.size(); i++) {
+                final String targetRef = targets.get(i).getUuid().toString();
+                final int index = i;
+                assertThat(exported)
+                        .filteredOn(v -> v.getAffects().stream().anyMatch(a -> targetRef.equals(a.getRef())))
+                        .singleElement()
+                        .satisfies(v -> {
+                            assertThat(v.getAffects()).hasSize(1);
+                            assertThat(v.getAnalysis().getDetail()).isEqualTo("common explanation");
+                            assertThat(v.getProperties())
+                                    .singleElement()
+                                    .satisfies(property -> assertThat(property.getValue())
+                                            .contains("source-" + index + "@1.0.0")
+                                            .doesNotContain("source-" + (1 - index) + "@1.0.0"));
+                        });
+            }
+        }
+    }
 
     @Test
     void shouldSkipFindingWhoseComponentWasDeleted() {
