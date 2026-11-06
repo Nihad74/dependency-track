@@ -18,17 +18,27 @@
  */
 package org.dependencytrack.tasks;
 
+import com.github.kagkarlsson.scheduler.task.ExecutionContext;
+import com.github.kagkarlsson.scheduler.task.TaskInstance;
 import com.github.kagkarlsson.scheduler.task.helper.RecurringTask;
 import com.github.kagkarlsson.scheduler.task.schedule.Schedule;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.smallrye.config.SmallRyeConfigBuilder;
+import org.dependencytrack.assessmentsync.workflow.MaintainAssessmentProjectionsWorkflow;
+import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.common.health.HealthCheckRegistry;
 import org.dependencytrack.dex.engine.api.DexEngine;
+import org.dependencytrack.dex.engine.api.request.CreateWorkflowRunRequest;
 import org.dependencytrack.plugin.runtime.PluginManager;
+import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjectionsArg;
 import org.dependencytrack.secret.management.SecretManager;
+import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.dependencytrack.tasks.TaskSchedulerInitializer.TriggerOnFirstRunSchedule;
 import org.eclipse.microprofile.config.ConfigProvider;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.mockito.ArgumentCaptor;
 
 import jakarta.servlet.ServletContext;
 import jakarta.servlet.ServletContextEvent;
@@ -42,6 +52,8 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class TaskSchedulerInitializerTest {
 
@@ -78,6 +90,40 @@ class TaskSchedulerInitializerTest {
                         "Vulnerability Database Maintenance",
                         "Vulnerability Metrics Update",
                         "Vulnerability Policy Bundle Sync");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"OFF,NONE", "CAPTURE,BOOTSTRAP", "ACTIVE,VERIFY", "WITHDRAW,WITHDRAW"})
+    @SuppressWarnings("unchecked") // The request class literal erases its protobuf argument type.
+    void maintenanceChoosesTheCurrentModeWhenTheTaskFires(final String mode, final String operation) {
+        final var engine = mock(DexEngine.class);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, "OFF");
+        try {
+            final var task = TaskSchedulerInitializer.recurringTasks(
+                            ConfigProvider.getConfig(), engine, mock(PluginManager.class), mock(SecretManager.class))
+                    .stream()
+                    .filter(candidate -> candidate.getName().equals("Assessment Projection Maintenance"))
+                    .findFirst()
+                    .orElseThrow();
+            MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, mode);
+            task.executeRecurringly(
+                    new TaskInstance<>(task.getName(), RecurringTask.INSTANCE), mock(ExecutionContext.class));
+            if (mode.equals("OFF")) {
+                verifyNoInteractions(engine);
+                return;
+            }
+            final ArgumentCaptor<CreateWorkflowRunRequest<MaintainAssessmentProjectionsArg>> request =
+                    ArgumentCaptor.forClass(CreateWorkflowRunRequest.class);
+            verify(engine).createRun(request.capture());
+            assertThat(request.getValue().workflowName()).isEqualTo(MaintainAssessmentProjectionsWorkflow.NAME);
+            assertThat(request.getValue().workflowInstanceId()).isEqualTo("assessment-maintenance:" + operation);
+            assertThat(request.getValue().concurrencyKey())
+                    .isEqualTo(request.getValue().workflowInstanceId());
+            assertThat(request.getValue().argument().getOperation().name())
+                    .isEqualTo("ASSESSMENT_MAINTENANCE_OPERATION_" + operation);
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
     }
 
     @Test

@@ -27,10 +27,15 @@ import org.dependencytrack.model.Vulnerability;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
+import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 
 class AssessmentSyncMetricsTest extends PersistenceCapableTest {
@@ -42,6 +47,99 @@ class AssessmentSyncMetricsTest extends PersistenceCapableTest {
 
         assertThat(registry.get(AssessmentSyncMetrics.BACKLOG_EVENTS).gauge().value())
                 .isZero();
+    }
+
+    @ParameterizedTest
+    @EnumSource(AssessmentSyncMode.class)
+    void modesRemainOneHotAndBindingIsIdempotent(final AssessmentSyncMode mode) {
+        final var registry = new SimpleMeterRegistry();
+        AssessmentSyncMetrics.bind(registry);
+        final int count = registry.getMeters().size();
+        AssessmentSyncMetrics.bind(registry);
+        assertThat(registry.getMeters()).hasSize(count);
+        MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, mode.name());
+        try {
+            for (final var candidate : AssessmentSyncMode.values()) {
+                assertThat(registry.get(AssessmentSyncMetrics.MODE)
+                                .tag("mode", candidate.name())
+                                .gauge()
+                                .value())
+                        .isEqualTo(candidate == mode ? 1d : 0d);
+            }
+            assertThat(registry.get(AssessmentSyncMetrics.ROLLBACK_INCOMPLETE)
+                            .gauge()
+                            .value())
+                    .isZero();
+        } finally {
+            MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        }
+    }
+
+    @Test
+    void nullRegistryIsRejected() {
+        assertThatThrownBy(() -> AssessmentSyncMetrics.bind(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("registry must not be null");
+    }
+
+    @Test
+    void backlogAndAgeGaugesFollowBothKindsOfPendingWorkUntilCompletion() {
+        final var registry = new SimpleMeterRegistry();
+        AssessmentSyncMetrics.bind(registry);
+        final UUID reconciliation = UUID.randomUUID();
+        final UUID refresh = UUID.randomUUID();
+        final UUID both = UUID.randomUUID();
+        final UUID completed = UUID.randomUUID();
+        useJdbiTransaction(handle -> {
+            final var work = new AssessmentSyncWorkDao(handle);
+            work.requestFull(reconciliation);
+            work.requestRefresh(refresh);
+            work.requestFull(both);
+            work.requestRefresh(both);
+            work.requestFull(completed);
+            work.acknowledgeCancellation(completed);
+            new AssessmentSyncOutboxDao(handle)
+                    .recordAll(List.of(new AssessmentChange(
+                            AssessmentChange.Scope.PROJECT,
+                            reconciliation,
+                            null,
+                            null,
+                            AssessmentChange.Reason.PROJECT_UPDATED,
+                            List.of())));
+            handle.execute("""
+                    UPDATE "ASSESSMENT_SYNC_WORK" SET "PENDING_SINCE" = clock_timestamp() - INTERVAL '2 minutes'
+                     WHERE "PENDING_SINCE" IS NOT NULL
+                    """);
+            handle.execute("""
+                    UPDATE "ASSESSMENT_SYNC_OUTBOX" SET "CREATED_AT" = clock_timestamp() - INTERVAL '3 minutes'
+                    """);
+        });
+        assertThat(registry.get(AssessmentSyncMetrics.BACKLOG_EVENTS).gauge().value())
+                .isEqualTo(1d);
+        assertThat(registry.get(AssessmentSyncMetrics.BACKLOG_WORK).gauge().value())
+                .isEqualTo(3d);
+        assertThat(registry.get(AssessmentSyncMetrics.OLDEST_EVENT_AGE_SECONDS)
+                        .gauge()
+                        .value())
+                .isBetween(180d, 210d);
+        assertThat(registry.get(AssessmentSyncMetrics.OLDEST_WORK_AGE_SECONDS)
+                        .gauge()
+                        .value())
+                .isBetween(120d, 150d);
+        useJdbiTransaction(handle -> {
+            final var work = new AssessmentSyncWorkDao(handle);
+            work.acknowledgeCancellation(reconciliation);
+            work.acknowledgeRefresh(refresh, 1);
+            work.acknowledgeCancellation(both);
+            handle.execute("DELETE FROM \"ASSESSMENT_SYNC_OUTBOX\"");
+        });
+        for (final String metric : List.of(
+                AssessmentSyncMetrics.BACKLOG_EVENTS,
+                AssessmentSyncMetrics.BACKLOG_WORK,
+                AssessmentSyncMetrics.OLDEST_EVENT_AGE_SECONDS,
+                AssessmentSyncMetrics.OLDEST_WORK_AGE_SECONDS)) {
+            assertThat(registry.get(metric).gauge().value()).as(metric).isZero();
+        }
     }
 
     @Test
@@ -91,6 +189,10 @@ class AssessmentSyncMetricsTest extends PersistenceCapableTest {
                 """));
         try {
             assertThat(registry.get(AssessmentSyncMetrics.BACKLOG_EVENTS)
+                            .gauge()
+                            .value())
+                    .isNaN();
+            assertThat(registry.get(AssessmentSyncMetrics.OLDEST_EVENT_AGE_SECONDS)
                             .gauge()
                             .value())
                     .isNaN();
