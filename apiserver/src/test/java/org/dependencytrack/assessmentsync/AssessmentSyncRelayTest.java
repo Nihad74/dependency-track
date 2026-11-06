@@ -54,7 +54,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -107,6 +109,7 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
             relay.close();
         }
         MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+        dropWorkBookkeepingTrigger();
         dropBookkeepingTrigger();
         meterRegistry.close();
     }
@@ -149,6 +152,34 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
         row = outbox(outboxId);
         assertThat(row).isNotNull();
         assertThat(row.dispatchAttempts()).isEqualTo(1);
+    }
+
+    @Test
+    void failingOutboxBookkeepingDoesNotStarveDueTargetWork() throws Exception {
+        startEngine(false);
+        final long outboxId = insertProjectOutbox();
+        final var target = UUID.randomUUID();
+        useJdbiTransaction(h -> new AssessmentSyncWorkDao(h).requestFull(target));
+        installBookkeepingTrigger();
+        assertThatThrownBy(relay::executeCycle).isInstanceOf(RuntimeException.class);
+        assertThat(outbox(outboxId).dispatchAttempts()).isZero();
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(target)))
+                .containsExactly("CREATED");
+        assertThat(work(target).dispatchAttempts()).isEqualTo(1);
+        assertThat(work(target).completedRevision()).isZero();
+        assertThat(meterRegistry
+                        .get("dt.assessment_sync.relay.cycles")
+                        .tag("outcome", "FAILED")
+                        .counter()
+                        .count())
+                .isEqualTo(1);
+        assertThat(meterRegistry
+                        .get("dt.assessment_sync.relay.dispatches")
+                        .tag("scope", "WORK")
+                        .tag("outcome", "CREATED")
+                        .counter()
+                        .count())
+                .isEqualTo(1);
     }
 
     @Test
@@ -356,8 +387,152 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
     }
 
     @Test
-    void shutdownInterruptsAnActiveSubmissionAndDoesNotRetryIt() throws Exception {
+    void failingOutboxSubmissionDoesNotStarveARegisteredTargetWorkflow() throws Exception {
+        startEngine(false);
         final long id = insertProjectOutbox();
+        final var target = UUID.randomUUID();
+        useJdbiTransaction(h -> new AssessmentSyncWorkDao(h).requestFull(target));
+        final var engine = mock(DexEngine.class);
+        final var failure = new NoSuchElementException("expansion metadata unavailable");
+        when(engine.createRuns(any())).thenAnswer(inv -> {
+            final Collection<? extends CreateWorkflowRunRequest<?>> requests = inv.getArgument(0);
+            if (requests.iterator().next().workflowName().equals(ExpandAssessmentChangesWorkflow.NAME)) {
+                throw failure;
+            }
+            return workflowTest.getEngine().createRuns(requests);
+        });
+        relay.close();
+        relay = new AssessmentSyncRelay(
+                engine,
+                meterRegistry,
+                new AssessmentSyncSettings(POLL_INTERVAL_MILLIS, BATCH_SIZE, 5_000, 100, 200, 50));
+        assertThatThrownBy(relay::executeCycle).isSameAs(failure);
+        assertThat(outbox(id).dispatchAttempts()).isZero();
+        assertThat(runStatuses(ExpandAssessmentChangesWorkflow.instanceId(id))).isEmpty();
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(target)))
+                .containsExactly("CREATED");
+        assertThat(work(target).dispatchAttempts()).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void bothScopeFailuresRemainObservableWithoutCommittingBookkeeping(final boolean sameFailure) {
+        final long id = insertProjectOutbox();
+        final var target = UUID.randomUUID();
+        useJdbiTransaction(h -> new AssessmentSyncWorkDao(h).requestFull(target));
+        final var outboxFailure = new IllegalStateException("outbox failed");
+        final var workFailure = sameFailure ? outboxFailure : new IllegalStateException("work failed");
+        final var engine = mock(DexEngine.class);
+        when(engine.createRuns(any())).thenThrow(outboxFailure, workFailure);
+        relay.close();
+        relay = new AssessmentSyncRelay(
+                engine,
+                meterRegistry,
+                new AssessmentSyncSettings(POLL_INTERVAL_MILLIS, BATCH_SIZE, 5_000, 100, 200, 50));
+        assertThatThrownBy(relay::executeCycle).isSameAs(outboxFailure);
+        assertThat(outboxFailure.getSuppressed())
+                .containsExactly(sameFailure ? new Throwable[0] : new Throwable[] {workFailure});
+        assertThat(outbox(id).dispatchAttempts()).isZero();
+        assertThat(work(target).dispatchAttempts()).isZero();
+        assertThat(runCount()).isZero();
+    }
+
+    @Test
+    void workBookkeepingFailureRollsBackTheBatchAndReplayKeepsOneActiveRun() throws Exception {
+        startEngine(false);
+        final long outboxId = insertProjectOutbox();
+        final var target = UUID.randomUUID();
+        useJdbiTransaction(h -> new AssessmentSyncWorkDao(h).requestFull(target));
+        installWorkBookkeepingTrigger();
+        assertThatThrownBy(relay::executeCycle).isInstanceOf(RuntimeException.class);
+        assertThat(outbox(outboxId).dispatchAttempts()).isEqualTo(1);
+        assertThat(work(target).dispatchAttempts()).isZero();
+        assertThat(work(target).requestedRevision()).isEqualTo(1);
+        assertThat(work(target).completedRevision()).isZero();
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(target)))
+                .containsExactly("CREATED");
+        dropWorkBookkeepingTrigger();
+        relay.executeCycle();
+        assertThat(work(target).dispatchAttempts()).isEqualTo(1);
+        assertThat(work(target).completedRevision()).isZero();
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(target)))
+                .containsExactly("CREATED");
+        assertThat(meterRegistry
+                        .get("dt.assessment_sync.relay.dispatches")
+                        .tag("scope", "WORK")
+                        .tag("outcome", "ACTIVE")
+                        .counter()
+                        .count())
+                .isEqualTo(1);
+    }
+
+    @Test
+    void workBatchLimitOrdersTargetsAndCorrelatesMixedResponsesAndArguments() throws Exception {
+        startEngine(false);
+        final var first = UUID.fromString("10000000-0000-4000-8000-000000000001");
+        final var second = UUID.fromString("20000000-0000-4000-8000-000000000001");
+        final var third = UUID.fromString("30000000-0000-4000-8000-000000000001");
+        useJdbiTransaction(h -> {
+            final var dao = new AssessmentSyncWorkDao(h);
+            dao.requestFull(List.of(third, second, first));
+            for (final var target : List.of(first, second, third)) {
+                dao.scheduleDispatch(target, Instant.parse("2000-01-01T00:00:00Z"));
+            }
+        });
+        final String activeId = SynchronizeProjectAssessmentsWorkflow.instanceId(second);
+        workflowTest
+                .getEngine()
+                .createRun(new CreateWorkflowRunRequest<>(SynchronizeProjectAssessmentsWorkflow.class)
+                        .withWorkflowInstanceId(activeId)
+                        .withConcurrencyKey(activeId)
+                        .withArgument(SynchronizeProjectAssessmentsArg.newBuilder()
+                                .setProjectUuid(second.toString())
+                                .build()));
+        final var calls = new AtomicInteger();
+        final var engine = mock(DexEngine.class);
+        when(engine.createRuns(any())).thenAnswer(inv -> {
+            final Collection<? extends CreateWorkflowRunRequest<?>> requests = inv.getArgument(0);
+            assertThat(requests).hasSize(BATCH_SIZE);
+            assertThat(requests)
+                    .extracting(r -> ((SynchronizeProjectAssessmentsArg) r.argument()).getProjectUuid())
+                    .containsExactly(first.toString(), second.toString());
+            calls.incrementAndGet();
+            return workflowTest.getEngine().createRuns(requests);
+        });
+        relay.close();
+        relay = new AssessmentSyncRelay(
+                engine,
+                meterRegistry,
+                new AssessmentSyncSettings(POLL_INTERVAL_MILLIS, BATCH_SIZE, 5_000, 100, 200, 50));
+        relay.executeCycle();
+        assertThat(calls).hasValue(1);
+        for (final var target : List.of(first, second)) {
+            final String instance = SynchronizeProjectAssessmentsWorkflow.instanceId(target);
+            assertThat(runStatuses(instance)).containsExactly("CREATED");
+            assertThat(concurrencyKey(instance)).isEqualTo(instance);
+            assertThat(work(target).dispatchAttempts()).isEqualTo(1);
+            assertThat(work(target).completedRevision()).isZero();
+        }
+        assertThat(work(third).dispatchAttempts()).isZero();
+        assertThat(runStatuses(SynchronizeProjectAssessmentsWorkflow.instanceId(third)))
+                .isEmpty();
+        for (final var outcome : List.of("CREATED", "ACTIVE")) {
+            assertThat(meterRegistry
+                            .get("dt.assessment_sync.relay.dispatches")
+                            .tag("scope", "WORK")
+                            .tag("outcome", outcome)
+                            .counter()
+                            .count())
+                    .isEqualTo(1);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void shutdownInterruptsAnActiveSubmissionAndDoesNotRetryIt(final boolean workScope) throws Exception {
+        final long id = workScope ? 0 : insertProjectOutbox();
+        final var target = UUID.randomUUID();
+        useJdbiTransaction(h -> new AssessmentSyncWorkDao(h).requestFull(target));
         final var engine = mock(DexEngine.class);
         final var entered = new CountDownLatch(1);
         final var release = new CountDownLatch(1);
@@ -394,7 +569,10 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
             release.countDown();
         }
         assertThat(calls).hasValue(1);
-        assertThat(outbox(id).dispatchAttempts()).isZero();
+        if (!workScope) {
+            assertThat(outbox(id).dispatchAttempts()).isZero();
+        }
+        assertThat(work(target).dispatchAttempts()).isZero();
         assertThat(runCount()).isZero();
         assertThat(meterRegistry
                         .get("dt.assessment_sync.relay.cycles")
@@ -781,6 +959,26 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
                     FOR EACH ROW
                     EXECUTE FUNCTION assessment_sync_fail_dispatch_bookkeeping()
                     """);
+        });
+    }
+
+    private static void installWorkBookkeepingTrigger() {
+        useJdbiTransaction(h -> {
+            h.execute("""
+                    CREATE OR REPLACE FUNCTION assessment_sync_fail_work_bookkeeping() RETURNS trigger
+                    LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'work bookkeeping failed'; END; $$
+                    """);
+            h.execute("""
+                    CREATE TRIGGER assessment_sync_fail_work_bookkeeping BEFORE UPDATE OF "DISPATCH_ATTEMPTS"
+                    ON "ASSESSMENT_SYNC_WORK" FOR EACH ROW EXECUTE FUNCTION assessment_sync_fail_work_bookkeeping()
+                    """);
+        });
+    }
+
+    private static void dropWorkBookkeepingTrigger() {
+        useJdbiTransaction(h -> {
+            h.execute("DROP TRIGGER IF EXISTS assessment_sync_fail_work_bookkeeping ON \"ASSESSMENT_SYNC_WORK\"");
+            h.execute("DROP FUNCTION IF EXISTS assessment_sync_fail_work_bookkeeping()");
         });
     }
 

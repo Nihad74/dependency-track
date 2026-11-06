@@ -191,11 +191,30 @@ final class AssessmentSyncRelay implements Closeable {
             LOGGER.debug("Assessment sync relay skipped because mode is {}", mode);
             return CycleOutcome.SKIPPED;
         }
-        final DispatchResult outbox = active ? dispatchOutbox() : DispatchResult.skipped();
-        recordDispatches(DispatchScope.OUTBOX, outbox);
+        var outbox = DispatchResult.skipped();
+        RuntimeException failure = null;
+        try {
+            outbox = active ? dispatchOutbox() : DispatchResult.skipped();
+            recordDispatches(DispatchScope.OUTBOX, outbox);
+        } catch (RuntimeException e) {
+            failure = e;
+        }
         throwIfInterrupted();
-        final DispatchResult work = dispatchWork(active);
-        recordDispatches(DispatchScope.WORK, work);
+        // Each scope commits independently. A retained outbox failure must not starve existing work.
+        var work = DispatchResult.skipped();
+        try {
+            work = dispatchWork(active);
+            recordDispatches(DispatchScope.WORK, work);
+        } catch (RuntimeException e) {
+            if (failure == null) {
+                failure = e;
+            } else if (!failure.equals(e)) {
+                failure.addSuppressed(e);
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
         if (outbox.skippedLock() && work.skippedLock()) {
             return CycleOutcome.SKIPPED;
         }

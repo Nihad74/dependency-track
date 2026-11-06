@@ -34,6 +34,7 @@ import java.util.UUID;
 import static java.util.Objects.requireNonNull;
 import static org.dependencytrack.assessmentsync.DaoSupport.nullableLong;
 import static org.dependencytrack.assessmentsync.DaoSupport.readInstant;
+import static org.dependencytrack.assessmentsync.DaoSupport.requirePositive;
 import static org.dependencytrack.assessmentsync.DaoSupport.requireTransaction;
 
 /**
@@ -321,6 +322,7 @@ public final class AssessmentSyncWorkDao {
                            SET "CURSOR_COMPONENT_ID" = :cursorComponentId
                              , "CURSOR_VULNERABILITY_ID" = :cursorVulnerabilityId
                              , "DISPATCH_ATTEMPTS" = 0
+                             , "NEXT_DISPATCH_AT" = LEAST("NEXT_DISPATCH_AT", date_trunc('milliseconds', clock_timestamp()))
                          WHERE "TARGET_UUID" = :targetUuid
                            AND "ACTIVE_REVISION" = :activeRevision
                         """)
@@ -496,9 +498,7 @@ public final class AssessmentSyncWorkDao {
      */
     public List<WorkRow> pollDue(final int limit, final boolean includeReconciliation) {
         requireTransaction(handle);
-        if (limit <= 0) {
-            throw new IllegalArgumentException("limit must be positive");
-        }
+        requirePositive(limit, "limit");
         return handle.createQuery(selectWorkSql() + /* language=SQL */ """
                          WHERE "NEXT_DISPATCH_AT" <= clock_timestamp()
                            AND (
@@ -526,14 +526,20 @@ public final class AssessmentSyncWorkDao {
      * Records one dispatch attempt per target in one statement.
      */
     public int recordDispatchAttempts(final Map<UUID, Instant> nextDispatchAtByTarget) {
+        requireNonNull(nextDispatchAtByTarget, "nextDispatchAtByTarget must not be null");
         requireTransaction(handle);
         if (nextDispatchAtByTarget.isEmpty()) {
             return 0;
         }
-        final UUID[] targetUuids = nextDispatchAtByTarget.keySet().toArray(UUID[]::new);
-        final long[] nextDispatchAtMillis = nextDispatchAtByTarget.values().stream()
-                .mapToLong(Instant::toEpochMilli)
-                .toArray();
+        final var targetUuids = new UUID[nextDispatchAtByTarget.size()];
+        final var nextDispatchAtMillis = new long[nextDispatchAtByTarget.size()];
+        int i = 0;
+        for (final var entry : nextDispatchAtByTarget.entrySet()) {
+            targetUuids[i] = requireNonNull(entry.getKey(), "targetUuid must not be null");
+            nextDispatchAtMillis[i] = requireNonNull(entry.getValue(), "nextDispatchAt must not be null")
+                    .toEpochMilli();
+            i++;
+        }
         return handle.createUpdate(/* language=SQL */ """
                         UPDATE "ASSESSMENT_SYNC_WORK" AS w
                            SET "NEXT_DISPATCH_AT" = to_timestamp(t.next_dispatch_at_ms / 1000.0)
