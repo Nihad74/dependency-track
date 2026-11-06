@@ -24,10 +24,10 @@ import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.statement.SqlStatements;
 import org.jspecify.annotations.Nullable;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 /**
  * Records project and finding invalidations on the caller's handle.
@@ -44,10 +44,10 @@ public final class AssessmentStructureCapture {
             final @Nullable String oldVersion,
             final @Nullable String newName,
             final @Nullable String newVersion) {
-        final var combined = new ArrayList<LookupKey>(2);
-        combined.addAll(LookupKey.listOf(oldName, oldVersion));
-        combined.addAll(LookupKey.listOf(newName, newVersion));
-        return combined;
+        return Stream.concat(
+                        LookupKey.listOf(oldName, oldVersion).stream(), LookupKey.listOf(newName, newVersion).stream())
+                .distinct()
+                .toList();
     }
 
     /**

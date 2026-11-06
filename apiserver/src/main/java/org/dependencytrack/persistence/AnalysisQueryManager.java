@@ -24,7 +24,6 @@ import alpine.resources.AlpineRequest;
 import org.dependencytrack.analysis.AnalysisMutationPlanner;
 import org.dependencytrack.analysis.AnalysisWriter;
 import org.dependencytrack.model.Analysis;
-import org.dependencytrack.model.AnalysisComment;
 import org.dependencytrack.model.Component;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.Vulnerability;
@@ -34,7 +33,7 @@ import org.jspecify.annotations.Nullable;
 
 import javax.jdo.PersistenceManager;
 import javax.jdo.Query;
-import java.util.ArrayList;
+import java.util.List;
 
 import static org.dependencytrack.util.PersistenceUtil.assertPersistent;
 
@@ -114,32 +113,8 @@ public class AnalysisQueryManager extends QueryManager {
                     this, handle -> AnalysisWriter.write(handle, mutation, finding, principalCommenter));
         });
         // The row was written through JDBI; cached JDO copies would show the old values.
-        evictAnalysis(analysisId);
+        AnalysisCache.evict(pm, List.of(analysisId));
         return analysisId;
-    }
-
-    /** Invalidates only this finding, keeping unrelated analyses loaded by the caller intact. */
-    private void evictAnalysis(final long analysisId) {
-        final var affected = new ArrayList<Object>();
-        final var managedComments = pm.getManagedObjects(AnalysisComment.class);
-        if (managedComments != null) {
-            for (final Object managed : managedComments) {
-                final var comment = (AnalysisComment) managed;
-                if (comment.getAnalysis().getId() == analysisId) {
-                    affected.add(comment);
-                }
-            }
-        }
-        final var managedAnalyses = pm.getManagedObjects(Analysis.class);
-        if (managedAnalyses != null) {
-            for (final Object managed : managedAnalyses) {
-                final var analysis = (Analysis) managed;
-                if (analysis.getId() == analysisId) {
-                    affected.add(analysis);
-                }
-            }
-        }
-        pm.evictAll(affected);
     }
 
     /**

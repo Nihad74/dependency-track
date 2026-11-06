@@ -20,6 +20,9 @@ package org.dependencytrack.parser.cyclonedx;
 
 import org.cyclonedx.model.Bom;
 import org.cyclonedx.util.BomLink;
+import org.dependencytrack.analysis.AnalysisMutationPlanner;
+import org.dependencytrack.analysis.AnalysisWriter;
+import org.dependencytrack.assessmentsync.AssessmentMutationGuard;
 import org.dependencytrack.model.AnalysisJustification;
 import org.dependencytrack.model.AnalysisResponse;
 import org.dependencytrack.model.AnalysisState;
@@ -28,6 +31,7 @@ import org.dependencytrack.model.ComponentIdentity;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.Vulnerability;
 import org.dependencytrack.parser.cyclonedx.util.ModelConverter;
+import org.dependencytrack.persistence.AnalysisCache;
 import org.dependencytrack.persistence.QueryManager;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.jspecify.annotations.Nullable;
@@ -37,13 +41,18 @@ import org.slf4j.LoggerFactory;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CancellationException;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.trimToNull;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertCdxVulnAnalysisJustificationToDtAnalysisJustification;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertCdxVulnAnalysisStateToDtAnalysisState;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 public class CycloneDXVexImporter {
 
@@ -52,6 +61,10 @@ public class CycloneDXVexImporter {
     private static final String COMMENTER = "CycloneDX VEX";
 
     public void applyVex(final QueryManager qm, final Bom bom, final Project project) {
+        qm.runInTransaction(() -> applyInTransaction(qm, bom, project));
+    }
+
+    private void applyInTransaction(final QueryManager qm, final Bom bom, final Project project) {
         if (bom.getVulnerabilities() == null || bom.getVulnerabilities().isEmpty()) {
             LOGGER.info("The uploaded VEX does not contain any vulnerabilities; Skipping VEX import");
             return;
@@ -68,6 +81,9 @@ public class CycloneDXVexImporter {
             return;
         }
 
+        final var pending = new PendingAnalyses(qm, project);
+        final var projectUuid = project.getUuid();
+        useJdbiHandle(qm, handle -> AssessmentMutationGuard.lockProject(handle, projectUuid));
         final Map<String, BomRefTarget> targetByBomRef = indexComponents(bom);
         final Map<String, List<Component>> componentsByBomRef = new HashMap<>();
 
@@ -77,7 +93,11 @@ public class CycloneDXVexImporter {
                 continue;
             }
 
-            List<Component> vulnerableComponents = null;
+            final var request = analysisRequest(vexVuln);
+            final var appliedComponents = new HashSet<Long>();
+            final List<Component> vulnerableComponents = qm.getAllVulnerableComponents(project, dtVuln);
+            final var vulnerableIds = new HashSet<Long>();
+            vulnerableComponents.forEach(component -> vulnerableIds.add(component.getId()));
 
             for (final org.cyclonedx.model.vulnerability.Vulnerability.Affect affect : vexVuln.getAffects()) {
                 final String affectedBomRef = affect.getRef();
@@ -87,11 +107,10 @@ public class CycloneDXVexImporter {
                         || (target == null && affectedBomRef != null && BomLink.isBomLink(affectedBomRef));
 
                 if (isProjectScoped) {
-                    if (vulnerableComponents == null) {
-                        vulnerableComponents = qm.getAllVulnerableComponents(project, dtVuln);
-                    }
                     for (final Component component : vulnerableComponents) {
-                        updateAnalysis(qm, component, dtVuln, vexVuln);
+                        if (appliedComponents.add(component.getId())) {
+                            pending.add(component, dtVuln, request);
+                        }
                     }
                 } else if (target != null) {
                     final List<Component> components = componentsByBomRef.computeIfAbsent(affectedBomRef, _ -> {
@@ -99,7 +118,9 @@ public class CycloneDXVexImporter {
                         return qm.matchIdentity(project, cid);
                     });
                     for (final Component component : components) {
-                        updateAnalysis(qm, component, dtVuln, vexVuln);
+                        if (vulnerableIds.contains(component.getId()) && appliedComponents.add(component.getId())) {
+                            pending.add(component, dtVuln, request);
+                        }
                     }
                 } else {
                     LOGGER.warn("""
@@ -110,6 +131,7 @@ public class CycloneDXVexImporter {
                 }
             }
         }
+        pending.flush();
     }
 
     private static @Nullable String sourceNameOf(final org.cyclonedx.model.vulnerability.Vulnerability vexVuln) {
@@ -226,51 +248,93 @@ public class CycloneDXVexImporter {
         }
     }
 
-    private static void updateAnalysis(
-            final QueryManager qm,
-            final Component component,
-            final Vulnerability vuln,
+    private static AnalysisMutationPlanner.Request analysisRequest(
             final org.cyclonedx.model.vulnerability.Vulnerability cdxVuln) {
-        MakeAnalysisCommand command = new MakeAnalysisCommand(component, vuln).withCommenter(COMMENTER);
-
+        AnalysisState state = null;
+        AnalysisJustification justification = null;
+        AnalysisResponse response = null;
+        String details = null;
+        Boolean suppressed = null;
         if (cdxVuln.getAnalysis() != null) {
-            final AnalysisState state = convertCdxVulnAnalysisStateToDtAnalysisState(
+            state = convertCdxVulnAnalysisStateToDtAnalysisState(
                     cdxVuln.getAnalysis().getState());
-            final AnalysisJustification justification = convertCdxVulnAnalysisJustificationToDtAnalysisJustification(
+            justification = convertCdxVulnAnalysisJustificationToDtAnalysisJustification(
                     cdxVuln.getAnalysis().getJustification());
-
-            // CycloneDX supports multiple responses, DT only one.
-            // The decision to effectively pick the last one is legacy behavior,
-            // there's no other particular reason for doing it.
-            final AnalysisResponse response;
-            if (cdxVuln.getAnalysis().getResponses() != null
-                    && !cdxVuln.getAnalysis().getResponses().isEmpty()) {
-                response = cdxVuln.getAnalysis().getResponses().stream()
-                        .map(ModelConverter::convertCdxVulnAnalysisResponseToDtAnalysisResponse)
-                        .toList()
-                        .getLast();
-            } else {
-                response = null;
+            final var responses = cdxVuln.getAnalysis().getResponses();
+            // Preserve the legacy last-response rule without mapping and allocating an entire list.
+            if (responses != null && !responses.isEmpty()) {
+                response = ModelConverter.convertCdxVulnAnalysisResponseToDtAnalysisResponse(responses.getLast());
             }
-
-            final boolean isSuppressed = state == AnalysisState.FALSE_POSITIVE
+            details = cdxVuln.getAnalysis().getDetail();
+            suppressed = state == AnalysisState.FALSE_POSITIVE
                     || state == AnalysisState.NOT_AFFECTED
                     || state == AnalysisState.RESOLVED;
+        }
+        final var rating = findOwaspRating(cdxVuln);
+        return new AnalysisMutationPlanner.Request(
+                state,
+                justification,
+                response,
+                details,
+                suppressed,
+                null,
+                rating == null ? null : rating.getVector(),
+                rating == null || rating.getScore() == null ? null : BigDecimal.valueOf(rating.getScore()),
+                Set.of(),
+                MakeAnalysisCommand.DecisionAction.TAKE_LOCAL,
+                null);
+    }
 
-            command = command.withState(state)
-                    .withJustification(justification)
-                    .withResponse(response)
-                    .withDetails(cdxVuln.getAnalysis().getDetail())
-                    .withSuppress(isSuppressed);
+    private record FindingKey(long componentId, long vulnerabilityId) {}
+
+    /** Bounded batches; repeated findings start a new batch to preserve their decision/audit order. */
+    private static final class PendingAnalyses {
+        private static final int BATCH_SIZE = 250;
+        private final QueryManager qm;
+        private final Project project;
+        private final List<AnalysisWriter.Entry> entries = new ArrayList<>();
+        private final Set<FindingKey> keys = new HashSet<>();
+
+        private PendingAnalyses(final QueryManager qm, final Project project) {
+            this.qm = qm;
+            this.project = project;
         }
 
-        final org.cyclonedx.model.vulnerability.Vulnerability.Rating owaspRating = findOwaspRating(cdxVuln);
-        if (owaspRating != null) {
-            final BigDecimal score = owaspRating.getScore() != null ? BigDecimal.valueOf(owaspRating.getScore()) : null;
-            command = command.withOwasp(owaspRating.getVector(), score);
+        private void add(
+                final Component component,
+                final Vulnerability vulnerability,
+                final AnalysisMutationPlanner.Request request) {
+            final var key = new FindingKey(component.getId(), vulnerability.getId());
+            if (entries.size() == BATCH_SIZE || keys.contains(key)) {
+                flush();
+            }
+            keys.add(key);
+            // Resolve every JDO field before lending its connection to the batch writer.
+            final var finding = new AnalysisWriter.Finding(
+                    project.getId(),
+                    project.getUuid(),
+                    project.getName(),
+                    project.getVersion(),
+                    component.getId(),
+                    component.getUuid(),
+                    vulnerability.getId(),
+                    vulnerability.getUuid());
+            entries.add(new AnalysisWriter.Entry(request, finding, COMMENTER));
         }
 
-        qm.makeAnalysis(command.withDecisionAction(MakeAnalysisCommand.DecisionAction.TAKE_LOCAL));
+        private void flush() {
+            if (entries.isEmpty()) {
+                return;
+            }
+            if (Thread.currentThread().isInterrupted()) {
+                throw new CancellationException("VEX import interrupted");
+            }
+            final var batch = List.copyOf(entries);
+            final var ids = withJdbiHandle(qm, handle -> AnalysisWriter.writeAll(handle, batch));
+            AnalysisCache.evict(qm.getPersistenceManager(), ids);
+            entries.clear();
+            keys.clear();
+        }
     }
 
     private static org.cyclonedx.model.vulnerability.Vulnerability.Rating findOwaspRating(

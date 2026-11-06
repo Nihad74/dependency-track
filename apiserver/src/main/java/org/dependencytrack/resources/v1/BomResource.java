@@ -65,6 +65,7 @@ import org.dependencytrack.parser.cyclonedx.CycloneDxValidator;
 import org.dependencytrack.parser.cyclonedx.InvalidBomException;
 import org.dependencytrack.persistence.QueryManager;
 import org.dependencytrack.persistence.jdbi.ConfigPropertyDao;
+import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.dependencytrack.proto.internal.workflow.v1.ImportBomArg;
 import org.dependencytrack.resources.AbstractApiResource;
 import org.dependencytrack.resources.v1.problems.InvalidBomProblemDetails;
@@ -147,6 +148,19 @@ import static org.dependencytrack.util.PersistenceUtil.isUniqueConstraintViolati
 @io.swagger.v3.oas.annotations.tags.Tag(name = "bom")
 @SecurityRequirements({@SecurityRequirement(name = "ApiKeyAuth"), @SecurityRequirement(name = "BearerAuth")})
 public class BomResource extends AbstractApiResource {
+
+    private static void maybeUpdateProjectActive(final QueryManager qm, final Project project, final Boolean active) {
+        if (active == null) {
+            return;
+        }
+        final UUID uuid = project.getUuid();
+        final boolean changed =
+                withJdbiHandle(qm, handle -> handle.attach(ProjectDao.class).updateActive(uuid, active));
+        if (changed) {
+            // JDBI wrote through the same transaction; refresh only after releasing the borrowed JDO connection.
+            qm.getPersistenceManager().refresh(project);
+        }
+    }
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BomResource.class);
     private static final String DEFAULT_EXPORT_VERSION = "1.5";
@@ -482,9 +496,7 @@ public class BomResource extends AbstractApiResource {
                                 .build());
                     }
                     maybeBindTags(qm, project, request.getProjectTags());
-                    if (request.isActive() != null) {
-                        project.setActive(request.isActive());
-                    }
+                    maybeUpdateProjectActive(qm, project, request.isActive());
                     return ProjectInfo.of(project);
                 });
             }
@@ -587,9 +599,7 @@ public class BomResource extends AbstractApiResource {
                                 .build());
                     }
                     maybeBindTags(qm, project, request.getProjectTags());
-                    if (request.isActive() != null) {
-                        project.setActive(request.isActive());
-                    }
+                    maybeUpdateProjectActive(qm, project, request.isActive());
                     return ProjectInfo.of(project);
                 });
             }
@@ -727,9 +737,7 @@ public class BomResource extends AbstractApiResource {
                                 .build());
                     }
                     maybeBindTags(qm, project, requestTags);
-                    if (isActive != null) {
-                        project.setActive(isActive);
-                    }
+                    maybeUpdateProjectActive(qm, project, isActive);
                     return ProjectInfo.of(project);
                 });
             }
@@ -823,9 +831,7 @@ public class BomResource extends AbstractApiResource {
                                 .build());
                     }
                     maybeBindTags(qm, project, requestTags);
-                    if (isActive != null) {
-                        project.setActive(isActive);
-                    }
+                    maybeUpdateProjectActive(qm, project, isActive);
                     return ProjectInfo.of(project);
                 });
             }
