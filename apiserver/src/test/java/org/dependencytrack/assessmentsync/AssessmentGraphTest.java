@@ -29,6 +29,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AssessmentGraphTest {
 
     @Test
+    void graphTakesAnImmutableSnapshotOfEdgesAndNodes() {
+        final var edges = new java.util.ArrayList<>(List.of(2L));
+        final var nodes = new HashMap<Long, List<Long>>();
+        nodes.put(1L, edges);
+        nodes.put(2L, List.of());
+        final var graph = new AssessmentGraph(nodes);
+        edges.clear();
+        nodes.clear();
+        assertThat(graph.reachableFrom(List.of(1L))).containsExactlyInAnyOrder(1L, 2L);
+        assertThat(graph.descendants(1L)).containsExactly(2L);
+    }
+
+    @Test
     void shouldReachBeyondDepthThree() {
         final AssessmentGraph graph =
                 graph(nodes(1, 2, 3, 4, 5, 6), edge(1, 2), edge(2, 3), edge(3, 4), edge(4, 5), edge(5, 6));

@@ -223,6 +223,12 @@ class SynchronizeProjectAssessmentsWorkflowTest extends PersistenceCapableTest {
         assertThat(work).isNotNull();
         assertThat(work.completedRevision()).isEqualTo(1);
         assertThat(work.requestedRevision()).isEqualTo(1);
+        final int generation = withJdbiHandle(
+                h -> h.createQuery("SELECT continued_as_new_generation FROM dex_workflow_run WHERE id = :id")
+                        .bind("id", runId)
+                        .mapTo(int.class)
+                        .one());
+        assertThat(generation).isEqualTo(1);
     }
 
     @Test

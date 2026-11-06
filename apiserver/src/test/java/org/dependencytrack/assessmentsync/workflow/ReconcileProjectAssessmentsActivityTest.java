@@ -39,6 +39,8 @@ import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -64,6 +66,96 @@ class ReconcileProjectAssessmentsActivityTest extends PersistenceCapableTest {
     @AfterEach
     void clearMode() {
         MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1, Integer.MAX_VALUE})
+    void rejectsBatchSizeWhoseLookaheadWouldOverflow(final int size) {
+        assertThatThrownBy(() -> new ReconcileProjectAssessmentsActivity(size, Duration.ofMinutes(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void validatesBackoffAndFaultHookAndAcceptsLargestSafeLookahead() {
+        assertThat(new ReconcileProjectAssessmentsActivity(Integer.MAX_VALUE - 1, Duration.ofSeconds(1)))
+                .isNotNull();
+        for (final Duration backoff : java.util.Arrays.asList(null, Duration.ZERO, Duration.ofSeconds(-1))) {
+            assertThatThrownBy(() -> new ReconcileProjectAssessmentsActivity(1, backoff))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("inactiveBackoff must be positive");
+        }
+        assertThatThrownBy(() -> new ReconcileProjectAssessmentsActivity(1, Duration.ofSeconds(1), null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("afterWrite must not be null");
+    }
+
+    @Test
+    void interruptionIsObservedBeforeOpeningTheBatchTransaction() {
+        Thread.currentThread().interrupt();
+        try {
+            assertThatThrownBy(() -> reconcile(UUID.randomUUID(), 1))
+                    .isInstanceOf(InterruptedException.class)
+                    .hasMessage("Interrupted before assessment reconciliation");
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void existingProjectWithNoWorkOrCompletedWorkIsIdle() throws Exception {
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        assertThat(reconcile(fixture.target.getUuid(), 1))
+                .isEqualTo(ReconcileProjectAssessmentsRes.getDefaultInstance());
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+        reconcile(fixture.target.getUuid(), 1);
+        final WorkRow completed = ReconcileFixture.work(fixture.target.getUuid());
+        assertThat(reconcile(fixture.target.getUuid(), 1))
+                .isEqualTo(ReconcileProjectAssessmentsRes.getDefaultInstance());
+        assertThat(ReconcileFixture.work(fixture.target.getUuid())).isEqualTo(completed);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    void failedCursorOrCompletionBookkeepingRollsBackProjectionRefreshAndIndex(final int libraries) throws Exception {
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, libraries);
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+        useJdbiTransaction(h -> {
+            h.createUpdate("DELETE FROM \"ASSESSMENT_EMBEDDING\" WHERE \"TARGET_PROJECT_ID\" = :id")
+                    .bind("id", fixture.target.getId())
+                    .execute();
+            h.execute("""
+                    CREATE FUNCTION assessment_fail_pass_bookkeeping() RETURNS trigger
+                    LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'pass bookkeeping failed'; END; $$
+                    """);
+            h.execute("""
+                    CREATE TRIGGER assessment_fail_pass_bookkeeping
+                    BEFORE UPDATE OF "CURSOR_COMPONENT_ID", "COMPLETED_REVISION" ON "ASSESSMENT_SYNC_WORK"
+                    FOR EACH ROW WHEN (NEW."CURSOR_COMPONENT_ID" IS NOT NULL OR NEW."COMPLETED_REVISION" > 0)
+                    EXECUTE FUNCTION assessment_fail_pass_bookkeeping()
+                    """);
+        });
+        final WorkRow before = ReconcileFixture.work(fixture.target.getUuid());
+        try {
+            assertThatThrownBy(() -> reconcile(fixture.target.getUuid(), 1))
+                    .hasStackTraceContaining("pass bookkeeping failed");
+            assertThat(ReconcileFixture.work(fixture.target.getUuid())).isEqualTo(before);
+            assertThat(ReconcileFixture.state(fixture.library().getId(), fixture.vulnerability.getId()))
+                    .isNull();
+            assertThat(ReconcileFixture.contributionCount(fixture.library().getId(), fixture.vulnerability.getId()))
+                    .isZero();
+            final int embeddings = withJdbiHandle(h -> h.createQuery(
+                            "SELECT count(*) FROM \"ASSESSMENT_EMBEDDING\" WHERE \"TARGET_PROJECT_ID\" = :id")
+                    .bind("id", fixture.target.getId())
+                    .mapTo(int.class)
+                    .one());
+            assertThat(embeddings).isZero();
+        } finally {
+            useJdbiTransaction(h -> {
+                h.execute("DROP TRIGGER assessment_fail_pass_bookkeeping ON \"ASSESSMENT_SYNC_WORK\"");
+                h.execute("DROP FUNCTION assessment_fail_pass_bookkeeping()");
+            });
+        }
+        assertThat(reconcile(fixture.target.getUuid(), 1).getApplied()).isEqualTo(1);
     }
 
     @Test
@@ -364,7 +456,11 @@ class ReconcileProjectAssessmentsActivityTest extends PersistenceCapableTest {
                 .withOptions(Set.of(MakeAnalysisCommand.Option.OMIT_NOTIFICATION)));
         ReconcileFixture.requestFull(fixture.target.getUuid());
 
-        reconcile(fixture.target.getUuid(), 50);
+        final ReconcileProjectAssessmentsRes result = reconcile(fixture.target.getUuid(), 1);
+        assertThat(result.getApplied()).isEqualTo(1);
+        assertThat(result.getHasMore())
+                .as("the marker finding must not consume a full-pass page")
+                .isFalse();
 
         assertThat(ReconcileFixture.owner(fixture.library().getId(), fixture.vulnerability.getId()))
                 .isEqualTo("INHERITED");
