@@ -49,21 +49,33 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.protoConverter;
 import static org.dependencytrack.dex.api.payload.PayloadConverters.voidConverter;
+import static org.dependencytrack.persistence.jdbi.AdvisoryLocks.tryAcquire;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.openJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class AssessmentSyncRelayTest extends PersistenceCapableTest {
 
@@ -96,6 +108,7 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
         }
         MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
         dropBookkeepingTrigger();
+        meterRegistry.close();
     }
 
     @Test
@@ -214,6 +227,216 @@ class AssessmentSyncRelayTest extends PersistenceCapableTest {
                                 .mapTo(long.class)
                                 .one())
                         == 0);
+    }
+
+    @Test
+    void shutdownDoesNotWaitForTheNextDelayedPoll() throws Exception {
+        relay.close();
+        relay = new AssessmentSyncRelay(
+                workflowTest.getEngine(),
+                meterRegistry,
+                new AssessmentSyncSettings(60_000, BATCH_SIZE, 60_000, 100, 200, 50));
+        relay.start();
+        try (final var closer = Executors.newVirtualThreadPerTaskExecutor()) {
+            final var closed = closer.submit(relay::close);
+            try {
+                closed.get(1, TimeUnit.SECONDS);
+            } finally {
+                // Also release a buggy executor that waits for its delayed task, so a red test is bounded.
+                closed.cancel(true);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void rejectedWorkflowSubmissionIsRetriedByTheScheduler(final boolean acceptedBeforeRejection) throws Exception {
+        startEngine(false);
+        final long outboxId = insertProjectOutbox();
+        final var engine = mock(DexEngine.class);
+        final var calls = new AtomicInteger();
+        when(engine.createRuns(any())).thenAnswer(invocation -> {
+            if (calls.incrementAndGet() == 1) {
+                if (acceptedBeforeRejection) {
+                    workflowTest.getEngine().createRuns(invocation.getArgument(0));
+                }
+                throw new RejectedExecutionException("temporary workflow submission rejection");
+            }
+            return workflowTest.getEngine().createRuns(invocation.getArgument(0));
+        });
+        relay.close();
+        relay = new AssessmentSyncRelay(
+                engine,
+                meterRegistry,
+                new AssessmentSyncSettings(POLL_INTERVAL_MILLIS, BATCH_SIZE, 5_000, 100, 200, 50));
+        relay.start();
+        await("polling resumes after a rejected workflow submission")
+                .atMost(Duration.ofSeconds(3))
+                .untilAsserted(
+                        () -> assertThat(outbox(outboxId).dispatchAttempts()).isPositive());
+        assertThat(calls.get()).isGreaterThanOrEqualTo(2);
+        assertThat(runStatuses(ExpandAssessmentChangesWorkflow.instanceId(outboxId)))
+                .containsExactly("CREATED");
+    }
+
+    @Test
+    void interruptionSkipsTheCycleAndRecordsMatchingCounterAndTimer() {
+        Thread.currentThread().interrupt();
+        try {
+            assertThatThrownBy(relay::executeCycle).isInstanceOf(InterruptedException.class);
+        } finally {
+            Thread.interrupted();
+        }
+        assertThat(meterRegistry
+                        .get("dt.assessment_sync.relay.cycles")
+                        .tag("outcome", "SKIPPED")
+                        .counter()
+                        .count())
+                .isEqualTo(1);
+        assertThat(meterRegistry
+                        .get("dt.assessment_sync.relay.cycle.latency")
+                        .tag("outcome", "SKIPPED")
+                        .timer()
+                        .count())
+                .isEqualTo(1);
+        assertThat(runCount()).isZero();
+    }
+
+    @Test
+    void anotherRelayHoldingTheClusterLockSkipsBothScopesWithoutBookkeeping() throws Exception {
+        final long id = insertProjectOutbox();
+        final var target = UUID.randomUUID();
+        useJdbiTransaction(h -> new AssessmentSyncWorkDao(h).requestFull(target));
+        try (final var holder = openJdbiHandle()) {
+            holder.begin();
+            assertThat(tryAcquire(holder, 418263950172846531L)).isTrue();
+            relay.executeCycle();
+            assertThat(outbox(id).dispatchAttempts()).isZero();
+            assertThat(work(target).dispatchAttempts()).isZero();
+            assertThat(runCount()).isZero();
+            assertThat(meterRegistry
+                            .get("dt.assessment_sync.relay.cycles")
+                            .tag("outcome", "SKIPPED")
+                            .counter()
+                            .count())
+                    .isEqualTo(1);
+            holder.rollback();
+        }
+    }
+
+    @Test
+    void mixedCreatedAndActiveOutboxBatchKeepsBothRowsAndCountsEachOutcome() throws Exception {
+        startEngine(false);
+        final long active = insertProjectOutbox();
+        final long created = insertProjectOutbox();
+        final String instanceId = ExpandAssessmentChangesWorkflow.instanceId(active);
+        workflowTest
+                .getEngine()
+                .createRun(new CreateWorkflowRunRequest<>(ExpandAssessmentChangesWorkflow.class)
+                        .withWorkflowInstanceId(instanceId)
+                        .withConcurrencyKey(instanceId)
+                        .withArgument(ExpandAssessmentChangesArg.newBuilder()
+                                .setOutboxId(active)
+                                .build()));
+        relay.executeCycle();
+        for (final long id : List.of(active, created)) {
+            assertThat(outbox(id).dispatchAttempts()).isEqualTo(1);
+            assertThat(runStatuses(ExpandAssessmentChangesWorkflow.instanceId(id)))
+                    .containsExactly("CREATED");
+        }
+        for (final String outcome : List.of("CREATED", "ACTIVE")) {
+            assertThat(meterRegistry
+                            .get("dt.assessment_sync.relay.dispatches")
+                            .tag("scope", "OUTBOX")
+                            .tag("outcome", outcome)
+                            .counter()
+                            .count())
+                    .isEqualTo(1);
+        }
+    }
+
+    @Test
+    void shutdownInterruptsAnActiveSubmissionAndDoesNotRetryIt() throws Exception {
+        final long id = insertProjectOutbox();
+        final var engine = mock(DexEngine.class);
+        final var entered = new CountDownLatch(1);
+        final var release = new CountDownLatch(1);
+        final var calls = new AtomicInteger();
+        when(engine.createRuns(any())).thenAnswer(invocation -> {
+            calls.incrementAndGet();
+            entered.countDown();
+            try {
+                release.await();
+                return List.of();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("submission interrupted", e);
+            }
+        });
+        relay.close();
+        relay = new AssessmentSyncRelay(
+                engine,
+                meterRegistry,
+                new AssessmentSyncSettings(POLL_INTERVAL_MILLIS, BATCH_SIZE, 5_000, 100, 200, 50));
+        relay.start();
+        try {
+            assertThat(entered.await(3, TimeUnit.SECONDS)).isTrue();
+            try (final var closer = Executors.newVirtualThreadPerTaskExecutor()) {
+                final var closed = closer.submit(relay::close);
+                try {
+                    closed.get(2, TimeUnit.SECONDS);
+                } finally {
+                    release.countDown();
+                    closed.cancel(true);
+                }
+            }
+        } finally {
+            release.countDown();
+        }
+        assertThat(calls).hasValue(1);
+        assertThat(outbox(id).dispatchAttempts()).isZero();
+        assertThat(runCount()).isZero();
+        assertThat(meterRegistry
+                        .get("dt.assessment_sync.relay.cycles")
+                        .tag("outcome", "SKIPPED")
+                        .counter()
+                        .count())
+                .isEqualTo(1);
+        assertThat(meterRegistry
+                        .find("dt.assessment_sync.relay.cycles")
+                        .tag("outcome", "FAILED")
+                        .counter())
+                .isNull();
+    }
+
+    @Test
+    void startingTwiceIsRejectedAndClosingTwiceIsHarmless() {
+        relay.close();
+        relay = new AssessmentSyncRelay(
+                workflowTest.getEngine(),
+                meterRegistry,
+                new AssessmentSyncSettings(60_000, BATCH_SIZE, 60_000, 100, 200, 50));
+        relay.start();
+        assertThatThrownBy(relay::start)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Already started");
+        relay.close();
+        relay.close();
+    }
+
+    @Test
+    void busyOutboxRowsUseIncreasingDispatchBackoff() throws Exception {
+        startEngine(false);
+        final long id = insertProjectOutbox();
+        Instant before = Instant.now();
+        for (int i = 0; i < 6; i++) {
+            makeDue(id);
+            before = Instant.now();
+            relay.executeCycle();
+        }
+        assertThat(outbox(id).dispatchAttempts()).isEqualTo(6);
+        assertThat(Duration.between(before, outbox(id).nextDispatchAt())).isGreaterThan(Duration.ofMillis(100));
+        assertThat(runStatuses(ExpandAssessmentChangesWorkflow.instanceId(id))).containsExactly("CREATED");
     }
 
     @Test

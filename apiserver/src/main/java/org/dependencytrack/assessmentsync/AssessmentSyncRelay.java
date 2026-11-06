@@ -46,12 +46,14 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static io.github.resilience4j.core.IntervalFunction.ofExponentialRandomBackoff;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
@@ -79,7 +81,7 @@ final class AssessmentSyncRelay implements Closeable {
     private final MeterProvider<Timer> cycleLatencyTimer;
     private final MeterProvider<Counter> cycleCounter;
     private final MeterProvider<Counter> dispatchCounter;
-    private @Nullable ScheduledExecutorService executorService;
+    private volatile @Nullable ScheduledExecutorService executorService;
 
     AssessmentSyncRelay(
             final DexEngine dexEngine, final MeterRegistry meterRegistry, final AssessmentSyncSettings settings) {
@@ -110,14 +112,17 @@ final class AssessmentSyncRelay implements Closeable {
                 .namingPattern(EXECUTOR_NAME + "-%d")
                 .build());
         new ExecutorServiceMetrics(executorService, EXECUTOR_NAME, List.of()).bindTo(meterRegistry);
-        var _ = executorService.schedule(() -> run(0), pollIntervalMillis, TimeUnit.MILLISECONDS);
+        scheduleNext(executorService, 0, pollIntervalMillis);
     }
 
     @Override
     public void close() {
-        if (executorService != null) {
-            executorService.close();
+        final var executor = executorService;
+        if (executor != null) {
             executorService = null;
+            // Delayed polls must not extend shutdown, and an active cycle must observe cancellation.
+            executor.shutdownNow();
+            executor.close();
         }
     }
 
@@ -130,10 +135,12 @@ final class AssessmentSyncRelay implements Closeable {
         try {
             outcome = dispatchDue();
         } catch (InterruptedException e) {
-            cycleLatencySample.stop(cycleLatencyTimer.withTag(OUTCOME_TAG, CycleOutcome.SKIPPED.name()));
+            recordCycle(CycleOutcome.SKIPPED, cycleLatencySample);
             throw e;
         } catch (RuntimeException e) {
-            recordCycle(CycleOutcome.FAILED, cycleLatencySample);
+            recordCycle(
+                    Thread.currentThread().isInterrupted() ? CycleOutcome.SKIPPED : CycleOutcome.FAILED,
+                    cycleLatencySample);
             throw e;
         }
         recordCycle(outcome, cycleLatencySample);
@@ -148,12 +155,10 @@ final class AssessmentSyncRelay implements Closeable {
 
         try {
             executeCycle();
-            var _ = executor.schedule(() -> run(0), pollIntervalMillis, TimeUnit.MILLISECONDS);
+            scheduleNext(executor, 0, pollIntervalMillis);
         } catch (InterruptedException e) {
             LOGGER.debug("Assessment sync relay interrupted");
             Thread.currentThread().interrupt();
-        } catch (RejectedExecutionException e) {
-            LOGGER.debug("Next poll could not be scheduled, likely because the executor was shut down", e);
         } catch (Throwable t) {
             if (Thread.currentThread().isInterrupted()) {
                 LOGGER.debug("Assessment sync relay interrupted", t);
@@ -162,7 +167,15 @@ final class AssessmentSyncRelay implements Closeable {
             }
             final long backoffDelayMillis = backoffIntervalFunction.apply(failureBackoffCount + 1);
             LOGGER.error("Failed to relay assessment sync work, backing off for {}ms", backoffDelayMillis, t);
-            var _ = executor.schedule(() -> run(failureBackoffCount + 1), backoffDelayMillis, TimeUnit.MILLISECONDS);
+            scheduleNext(executor, failureBackoffCount + 1, backoffDelayMillis);
+        }
+    }
+
+    private void scheduleNext(final ScheduledExecutorService executor, final int failures, final long delayMillis) {
+        try {
+            var _ = executor.schedule(() -> run(failures), delayMillis, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            LOGGER.debug("Next poll could not be scheduled, likely because the executor was shut down", e);
         }
     }
 
@@ -215,17 +228,7 @@ final class AssessmentSyncRelay implements Closeable {
                 requests.add(request);
                 pending.add(new Dispatch<>(entry.id(), entry.dispatchAttempts(), request.requestId()));
             }
-            final Set<UUID> createdRequestIds = createdRequestIds(requests);
-            final var nextDispatchAts = new LinkedHashMap<Long, Instant>(pending.size());
-            var created = 0;
-            for (final Dispatch<Long> dispatch : pending) {
-                nextDispatchAts.put(dispatch.key(), nextDispatchAt(dispatch.attempts()));
-                if (createdRequestIds.contains(dispatch.requestId())) {
-                    created++;
-                }
-            }
-            outboxDao.recordDispatchAttempts(nextDispatchAts);
-            return DispatchResult.completed(created, pending.size() - created);
+            return submit(requests, pending, outboxDao::recordDispatchAttempts);
         });
     }
 
@@ -250,19 +253,26 @@ final class AssessmentSyncRelay implements Closeable {
                 requests.add(request);
                 pending.add(new Dispatch<>(row.targetUuid(), row.dispatchAttempts(), request.requestId()));
             }
-            final Set<UUID> createdRequestIds = createdRequestIds(requests);
-            final var nextDispatchAts = new LinkedHashMap<UUID, Instant>(pending.size());
-            var created = 0;
-            for (final Dispatch<UUID> dispatch : pending) {
-                nextDispatchAts.put(dispatch.key(), nextDispatchAt(dispatch.attempts()));
-                if (createdRequestIds.contains(dispatch.requestId())) {
-                    created++;
-                }
-            }
             // The run being accepted is not acknowledgement. Reconciliation completes the work row.
-            workDao.recordDispatchAttempts(nextDispatchAts);
-            return DispatchResult.completed(created, pending.size() - created);
+            return submit(requests, pending, workDao::recordDispatchAttempts);
         });
+    }
+
+    private <K> DispatchResult submit(
+            final List<CreateWorkflowRunRequest<?>> requests,
+            final List<Dispatch<K>> pending,
+            final Consumer<Map<K, Instant>> recordAttempts) {
+        final Set<UUID> createdRequestIds = createdRequestIds(requests);
+        final var nextDispatchAts = new LinkedHashMap<K, Instant>(pending.size());
+        var created = 0;
+        for (final Dispatch<K> dispatch : pending) {
+            nextDispatchAts.put(dispatch.key(), nextDispatchAt(dispatch.attempts()));
+            if (createdRequestIds.contains(dispatch.requestId())) {
+                created++;
+            }
+        }
+        recordAttempts.accept(nextDispatchAts);
+        return DispatchResult.completed(created, pending.size() - created);
     }
 
     private Set<UUID> createdRequestIds(final List<CreateWorkflowRunRequest<?>> requests) {
