@@ -70,6 +70,17 @@ class AssessmentConsensusTest {
             new BigDecimal("5.5"));
 
     @Test
+    void contradictoryRowsForTheSameContributorCannotSelectAWinningDecision() {
+        final Result result = AssessmentConsensus.resolve(List.of(
+                source(FIRST, AssessmentOwnership.LOCAL, BASE),
+                source(FIRST, AssessmentOwnership.POLICY, withState(AnalysisState.EXPLOITABLE))));
+        assertThat(result)
+                .isInstanceOfSatisfying(
+                        Conflict.class,
+                        conflict -> assertThat(conflict.contributors()).containsExactly(FIRST));
+    }
+
+    @Test
     void shouldAgreeOnASingleSource() {
         final Result result = AssessmentConsensus.resolve(List.of(source(FIRST, AssessmentOwnership.LOCAL, BASE)));
 

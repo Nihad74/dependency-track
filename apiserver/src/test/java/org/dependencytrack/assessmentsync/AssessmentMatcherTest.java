@@ -25,6 +25,9 @@ import org.dependencytrack.assessmentsync.AssessmentMatcher.VulnerabilityIdentit
 import org.dependencytrack.assessmentsync.AssessmentMatcher.VulnerabilityMatch;
 import org.dependencytrack.model.Classifier;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
 import java.util.Map;
@@ -48,6 +51,46 @@ class AssessmentMatcherTest {
     private static final String PARTIAL_WILDCARD_CPE = "cpe:2.3:a:vendor:product:5.*:*:*:*:*:*:*:*";
     private static final String INVALID_CPE = "cpe:2.3:a:vendor";
     private static final String PACKAGE_CPE = "cpe:2.3:a:debian:libc6:2.36:*:*:*:*:*:*:*";
+
+    @ParameterizedTest
+    @EnumSource(HashAlgorithm.class)
+    void hexadecimalHashCaseDoesNotChangeComponentIdentity(final HashAlgorithm algorithm) {
+        final var target =
+                component(TARGET_ID, "libc6", "2.36", FULL_PURL, null, Map.of(algorithm, "abcdef0123456789"));
+        final var source =
+                candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null, Map.of(algorithm, "ABCDEF0123456789"));
+        assertThat(AssessmentMatcher.match(target, List.of(source))).isInstanceOf(MatchResult.Matched.class);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"version", "classifier"})
+    void concreteCpeDoesNotOverrideConflictingComparableFields(final String field) {
+        final var target = component(TARGET_ID, "kernel", "1", null, CONCRETE_CPE, Classifier.LIBRARY);
+        final var source = candidate(
+                SOURCE_ID,
+                "kernel",
+                "version".equals(field) ? "2" : "1",
+                null,
+                CONCRETE_CPE,
+                "classifier".equals(field) ? Classifier.APPLICATION : Classifier.LIBRARY);
+        assertThat(AssessmentMatcher.match(target, List.of(source)))
+                .isEqualTo(new MatchResult.Unavailable(AssessmentReason.IDENTITY_CONFLICT));
+    }
+
+    @Test
+    void repeatedComponentDoesNotCreateAmbiguityButAMatchingAndConflictingCandidateCannotSelectAWinner() {
+        final var target =
+                component(TARGET_ID, "libc6", "2.36", FULL_PURL, null, Map.of(HashAlgorithm.SHA256, "ab".repeat(32)));
+        final var source =
+                candidate(SOURCE_ID, "libc6", "2.36", FULL_PURL, null, Map.of(HashAlgorithm.SHA256, "ab".repeat(32)));
+        final var conflict =
+                candidate(OTHER_ID, "libc6", "2.36", FULL_PURL, null, Map.of(HashAlgorithm.SHA256, "cd".repeat(32)));
+        assertThat(AssessmentMatcher.match(target, List.of(source, source))).isEqualTo(new MatchResult.Matched(source));
+        assertThat(AssessmentMatcher.match(target, List.of(source, conflict)))
+                .isEqualTo(new MatchResult.Unavailable(AssessmentReason.IDENTITY_CONFLICT));
+        assertThat(AssessmentMatcher.match(target, List.of(conflict, source)))
+                .isEqualTo(new MatchResult.Unavailable(AssessmentReason.IDENTITY_CONFLICT));
+    }
 
     @Test
     void shouldMatchCanonicalPurlWithNamespaceVersionQualifiersAndSubpath() {

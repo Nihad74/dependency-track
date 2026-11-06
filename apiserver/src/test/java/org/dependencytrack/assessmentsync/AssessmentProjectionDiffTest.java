@@ -29,6 +29,8 @@ import org.dependencytrack.model.AnalysisResponse;
 import org.dependencytrack.model.AnalysisState;
 import org.dependencytrack.model.Severity;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -56,6 +58,36 @@ class AssessmentProjectionDiffTest {
             new BigDecimal("9.3"),
             "(SL:1/M:1)",
             new BigDecimal("5.5"));
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void staleDetailsOrPolicyReferenceRequireCleanupEvenWhenTheDecisionAndContributorsAgree(final boolean details) {
+        final var current = new CurrentProjection(
+                AssessmentOwnership.INHERITED,
+                AGREED,
+                details ? "stale details" : null,
+                details ? null : 7L,
+                List.of(FIRST));
+        final Change change = AssessmentProjectionDiff.diff(current, new Agreed(AGREED, List.of(FIRST)));
+        assertThat(change.machineChanged()).isTrue();
+        assertThat(change.contributorsChanged()).isFalse();
+        assertThat(change.decision()).isEqualTo(AGREED);
+    }
+
+    @Test
+    void contributorOrderIsNotDriftAndWithdrawalWithoutATrailDoesNotInventOne() {
+        final var current =
+                new CurrentProjection(AssessmentOwnership.INHERITED, AGREED, null, null, List.of(FIRST, SECOND));
+        final Change unchanged = AssessmentProjectionDiff.diff(current, new Agreed(AGREED, List.of(SECOND, FIRST)));
+        assertThat(unchanged.machineChanged()).isFalse();
+        assertThat(unchanged.contributorsChanged()).isFalse();
+        final Change withdrawn = AssessmentProjectionDiff.diff(
+                new CurrentProjection(AssessmentOwnership.INHERITED, AGREED, null, null, List.of()),
+                new Unavailable(AssessmentReason.IDENTITY_MISSING));
+        assertThat(withdrawn.machineChanged()).isTrue();
+        assertThat(withdrawn.contributorsChanged()).isFalse();
+        assertThat(withdrawn.decision()).isEqualTo(AssessmentDecision.neutral());
+    }
 
     @Test
     void shouldProtectLocalOwnership() {

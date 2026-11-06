@@ -21,6 +21,7 @@ package org.dependencytrack.assessmentsync.workflow;
 import alpine.model.Team;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentSyncWorkDao.WorkRow;
+import org.dependencytrack.assessmentsync.AssessmentSynchronizer;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.dex.api.ActivityContext;
 import org.dependencytrack.model.AnalysisState;
@@ -51,6 +52,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.dependencytrack.persistence.jdbi.ConfigPropertyTestUtil.createConfigProperty;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.inJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
@@ -66,6 +68,70 @@ class ReconcileProjectAssessmentsActivityTest extends PersistenceCapableTest {
     @AfterEach
     void clearMode() {
         MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"2024-01-02T03:04:05Z", "2024-01-02T03:04:05.123456Z"})
+    void retainedSourceCommentTimestampDoesNotCausePerpetualDrift(final String timestamp) throws Exception {
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        useJdbiTransaction(h -> h.createUpdate("""
+                UPDATE "ANALYSISCOMMENT" SET "TIMESTAMP" = CAST(:timestamp AS timestamptz)
+                 WHERE "ANALYSIS_ID" = :id
+                """)
+                .bind("timestamp", timestamp)
+                .bind("id", fixture.alpineAnalysisId)
+                .execute());
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+        assertThat(reconcile(fixture.target.getUuid(), 10).getApplied()).isEqualTo(1);
+        final Instant copiedTimestamp =
+                ReconcileFixture.copiedCommentTimestamp(fixture.library().getId(), fixture.vulnerability.getId());
+        final var keys = List.of(new FindingKey(fixture.library().getId(), fixture.vulnerability.getId()));
+        final int initialDrift =
+                inJdbiTransaction(h -> new AssessmentSynchronizer().countDrift(h, fixture.target.getUuid(), keys));
+        assertThat(initialDrift).isZero();
+        useJdbiTransaction(
+                h -> h.createUpdate("""
+                UPDATE "ANALYSISCOMMENT" SET "TIMESTAMP" = "TIMESTAMP" + interval '1 day', "COMMENT" = 'revised text'
+                 WHERE "ANALYSIS_ID" = :id
+                """).bind("id", fixture.alpineAnalysisId).execute());
+        ReconcileFixture.requestFindings(fixture.target.getUuid(), keys);
+        assertThat(reconcile(fixture.target.getUuid(), 10).getApplied()).isEqualTo(1);
+        final int retainedTimestamp = withJdbiHandle(h -> h.createQuery("""
+                SELECT count(*) FROM "ASSESSMENT_SOURCE_COMMENT"
+                 WHERE "SOURCE_ANALYSIS_ID" = :id AND "ORIGINAL_TIMESTAMP" = CAST(:timestamp AS timestamptz)
+                """)
+                .bind("id", fixture.alpineAnalysisId)
+                .bind("timestamp", copiedTimestamp.toString())
+                .mapTo(int.class)
+                .one());
+        assertThat(retainedTimestamp).isEqualTo(1);
+        final int drift =
+                inJdbiTransaction(h -> new AssessmentSynchronizer().countDrift(h, fixture.target.getUuid(), keys));
+        assertThat(drift).isZero();
+        ReconcileFixture.requestFindings(fixture.target.getUuid(), keys);
+        final ReconcileProjectAssessmentsRes unchanged = reconcile(fixture.target.getUuid(), 10);
+        assertThat(unchanged.getApplied()).isZero();
+        assertThat(unchanged.getSkipped()).isEqualTo(1);
+        assertThat(unchanged.getRefreshRevision()).isZero();
+    }
+
+    @Test
+    void equalBlakeHashesWithDifferentHexCaseInherit() throws Exception {
+        final ReconcileFixture fixture = ReconcileFixture.oneSource(qm, 1);
+        useJdbiTransaction(h -> {
+            h.createUpdate("UPDATE \"COMPONENT\" SET \"BLAKE3\" = :hash WHERE \"PROJECT_ID\" = :projectId")
+                    .bind("hash", "abcdef0123456789".repeat(4))
+                    .bind("projectId", fixture.alpine.getId())
+                    .execute();
+            h.createUpdate("UPDATE \"COMPONENT\" SET \"BLAKE3\" = :hash WHERE \"ID\" = :id")
+                    .bind("hash", "ABCDEF0123456789".repeat(4))
+                    .bind("id", fixture.library().getId())
+                    .execute();
+        });
+        ReconcileFixture.requestFull(fixture.target.getUuid());
+        assertThat(reconcile(fixture.target.getUuid(), 10).getApplied()).isEqualTo(1);
+        assertThat(ReconcileFixture.owner(fixture.library().getId(), fixture.vulnerability.getId()))
+                .isEqualTo("INHERITED");
     }
 
     @ParameterizedTest
