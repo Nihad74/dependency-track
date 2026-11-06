@@ -44,7 +44,11 @@ public final class ReadAssessmentSyncPendingActivity
 
     @Override
     public AssessmentSyncPendingRes execute(
-            final ActivityContext ctx, final @Nullable SynchronizeProjectAssessmentsArg argument) {
+            final ActivityContext ctx, final @Nullable SynchronizeProjectAssessmentsArg argument)
+            throws InterruptedException {
+        if (Thread.interrupted()) {
+            throw new InterruptedException("Interrupted before reading assessment sync pending work");
+        }
         final UUID targetUuid = AssessmentSyncArguments.projectUuid(
                 AssessmentSyncArguments.require(argument).getProjectUuid());
         return inJdbiTransaction(handle -> {

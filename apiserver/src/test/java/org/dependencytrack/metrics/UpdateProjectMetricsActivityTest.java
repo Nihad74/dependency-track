@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.openJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiHandle;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
@@ -50,6 +51,41 @@ import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 class UpdateProjectMetricsActivityTest extends AbstractMetricsUpdateTaskTest {
 
     private final UpdateProjectMetricsActivity activity = new UpdateProjectMetricsActivity();
+
+    @Test
+    void metricsReflectComputationOrderEvenWhenTransactionsStartInTheOppositeOrder() throws Exception {
+        final var project = new Project();
+        project.setName("ordered-metrics");
+        qm.createProject(project, List.of(), false);
+        createTestConfigProperties();
+        final long componentId;
+        try (var earlier = openJdbiHandle()) {
+            earlier.begin();
+            earlier.createQuery("SELECT now()")
+                    .mapTo(java.time.OffsetDateTime.class)
+                    .one();
+            // Make the transaction timestamps observably different even on millisecond storage.
+            earlier.execute("SELECT pg_sleep(0.01)");
+            executeActivity(project);
+            final var component = new Component();
+            component.setProject(project);
+            component.setName("added-after-first-snapshot");
+            componentId = qm.createComponent(component, false).getId();
+            earlier.attach(MetricsDao.class).updateProjectMetrics(project.getUuid());
+            earlier.commit();
+        }
+        final ProjectMetrics latest =
+                withJdbiHandle(h -> h.attach(MetricsDao.class).getMostRecentProjectMetrics(project.getId()));
+        assertThat(latest.getComponents())
+                .as("the later computation must remain the latest snapshot")
+                .isEqualTo(1);
+        final List<ProjectMetrics> history =
+                withJdbiHandle(h -> h.attach(MetricsDao.class).getProjectMetricsSince(project.getId(), Instant.EPOCH));
+        assertThat(history).extracting(ProjectMetrics::getComponents).containsExactly(0, 1);
+        final DependencyMetrics componentMetrics =
+                withJdbiHandle(h -> h.attach(MetricsDao.class).getMostRecentDependencyMetrics(componentId));
+        assertThat(componentMetrics.getLastOccurrence()).isEqualTo(latest.getLastOccurrence());
+    }
 
     @Test
     void shouldUpdateMetricsEmpty() throws Exception {
