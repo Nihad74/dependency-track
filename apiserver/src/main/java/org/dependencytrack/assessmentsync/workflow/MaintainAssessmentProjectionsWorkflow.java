@@ -92,13 +92,16 @@ public final class MaintainAssessmentProjectionsWorkflow implements Workflow<Mai
                 throw new TerminalApplicationFailureException("Maintenance activity returned no result");
             }
             completedBatches++;
-            ctx.logger()
-                    .debug(
-                            "Maintained scanned={}, drift={}, enqueued={}, hasMore={}",
-                            result.getScanned(),
-                            result.getDrift(),
-                            result.getEnqueued(),
-                            result.getHasMore());
+            if (ctx.logger().isInfoEnabled()) {
+                ctx.logger()
+                        .info(
+                                "Assessment sync maintenance operation={} scanned={} drift={} enqueued={} hasMore={}",
+                                initial.getOperation(),
+                                result.getScanned(),
+                                result.getDrift(),
+                                result.getEnqueued(),
+                                result.getHasMore());
+            }
             if (!result.getHasMore()) {
                 return null;
             }

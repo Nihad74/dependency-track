@@ -55,8 +55,8 @@ public final class ExpandAssessmentChangesWorkflow implements Workflow<ExpandAss
     @Override
     public @Nullable Void execute(
             final WorkflowContext<ExpandAssessmentChangesArg> ctx, final @Nullable ExpandAssessmentChangesArg arg) {
-        AssessmentSyncArguments.positive(
-                "outbox_id", AssessmentSyncArguments.require(arg).getOutboxId());
+        final long outboxId = AssessmentSyncArguments.require(arg).getOutboxId();
+        AssessmentSyncArguments.positive("outbox_id", outboxId);
         final int maxBatches = AssessmentSyncArguments.maxBatches(ctx);
 
         var completedBatches = 0;
@@ -74,12 +74,22 @@ public final class ExpandAssessmentChangesWorkflow implements Workflow<ExpandAss
                 throw new TerminalApplicationFailureException("Expansion activity returned no result");
             }
             completedBatches++;
-            ctx.logger()
-                    .debug(
-                            "Expanded {} targets, hasMore={}, alreadyCompleted={}",
-                            result.getTargetsRequested(),
-                            result.getHasMore(),
-                            result.getAlreadyCompleted());
+            if (result.getTargetsRequested() > 0 && ctx.logger().isInfoEnabled()) {
+                ctx.logger()
+                        .info(
+                                "Assessment sync targets requested outboxId={} targets={} hasMore={}",
+                                outboxId,
+                                result.getTargetsRequested(),
+                                result.getHasMore());
+            } else if (ctx.logger().isDebugEnabled()) {
+                ctx.logger()
+                        .debug(
+                                "Assessment sync expansion outboxId={} targets={} hasMore={} alreadyCompleted={}",
+                                outboxId,
+                                result.getTargetsRequested(),
+                                result.getHasMore(),
+                                result.getAlreadyCompleted());
+            }
             if (result.getAlreadyCompleted() || !result.getHasMore()) {
                 return null;
             }

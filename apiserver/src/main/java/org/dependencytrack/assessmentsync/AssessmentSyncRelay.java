@@ -313,6 +313,13 @@ final class AssessmentSyncRelay implements Closeable {
     private void recordDispatches(final DispatchScope scope, final DispatchResult scan) {
         increment(DispatchOutcome.CREATED, scope, scan.created());
         increment(DispatchOutcome.ACTIVE, scope, scan.active());
+        if (LOGGER.isDebugEnabled() && (scan.created() > 0 || scan.active() > 0)) {
+            LOGGER.debug(
+                    "Assessment sync dispatch committed scope={} created={} alreadyActive={}",
+                    scope,
+                    scan.created(),
+                    scan.active());
+        }
     }
 
     private void increment(final DispatchOutcome outcome, final DispatchScope scope, final int count) {

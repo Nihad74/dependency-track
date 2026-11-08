@@ -35,6 +35,8 @@ import org.dependencytrack.proto.internal.workflow.v1.ReconcileProjectAssessment
 import org.dependencytrack.proto.internal.workflow.v1.SynchronizeProjectAssessmentsArg;
 import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -52,6 +54,8 @@ public final class ReconcileProjectAssessmentsActivity
         implements Activity<SynchronizeProjectAssessmentsArg, ReconcileProjectAssessmentsRes> {
 
     public static final String QUEUE_NAME = ExpandAssessmentChangesActivity.QUEUE_NAME;
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ReconcileProjectAssessmentsActivity.class);
 
     private final int reconcileBatchSize;
     private final Duration inactiveBackoff;
@@ -87,7 +91,9 @@ public final class ReconcileProjectAssessmentsActivity
         }
         final UUID targetUuid = AssessmentSyncArguments.projectUuid(
                 AssessmentSyncArguments.require(argument).getProjectUuid());
-        if (!AssessmentSyncMode.current().appliesAssessments()) {
+        final AssessmentSyncMode mode = AssessmentSyncMode.current();
+        if (!mode.appliesAssessments()) {
+            LOGGER.debug("Assessment sync reconciliation deferred projectUuid={} mode={}", targetUuid, mode);
             return inJdbiTransaction(handle -> deferInactive(handle, targetUuid));
         }
         return inJdbiTransaction(handle -> reconcile(handle, targetUuid));
@@ -105,11 +111,13 @@ public final class ReconcileProjectAssessmentsActivity
         final Long projectId = handle.attach(ProjectDao.class).getProjectId(targetUuid);
         if (projectId == null) {
             workDao.acknowledgeCancellation(targetUuid);
+            LOGGER.debug("Assessment sync reconciliation cancelled projectUuid={} reason=TARGET_DELETED", targetUuid);
             return idle(true);
         }
 
         final Pass pass = workDao.beginOrResumePass(targetUuid);
         if (pass == null) {
+            LOGGER.debug("Assessment sync reconciliation skipped projectUuid={} reason=NO_PENDING_WORK", targetUuid);
             return idle(false);
         }
         if (pass.full() && !pass.resumed()) {
@@ -119,6 +127,15 @@ public final class ReconcileProjectAssessmentsActivity
         final List<FindingKey> fetched = pageKeys(handle, projectId, targetUuid, pass, reconcileBatchSize + 1);
         final boolean moreInPass = fetched.size() > reconcileBatchSize;
         final List<FindingKey> page = moreInPass ? fetched.subList(0, reconcileBatchSize) : fetched;
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug(
+                    "Reconciling assessment sync batch projectUuid={} revision={} full={} resumed={} findings={}",
+                    targetUuid,
+                    pass.activeRevision(),
+                    pass.full(),
+                    pass.resumed(),
+                    page.size());
+        }
         final BatchResult batch = new AssessmentSynchronizer().reconcileBatch(handle, targetUuid, page);
         afterWrite.run();
 

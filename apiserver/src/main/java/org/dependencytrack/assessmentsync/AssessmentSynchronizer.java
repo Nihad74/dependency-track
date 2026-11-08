@@ -45,6 +45,8 @@ import org.dependencytrack.notification.proto.v1.Notification;
 import org.dependencytrack.persistence.jdbi.ProjectDao;
 import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -71,6 +73,9 @@ import static org.dependencytrack.notification.api.NotificationFactory.createVul
  * <p>Does not open a transaction, commit, or call Dex. Source projects are read, not locked.
  */
 public final class AssessmentSynchronizer {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AssessmentSynchronizer.class);
+    private static final AssessmentDecision NEUTRAL_DECISION = AssessmentDecision.neutral();
 
     /**
      * Outcome of one page. {@code conflicts} counts disagreeing source sets.
@@ -105,6 +110,8 @@ public final class AssessmentSynchronizer {
             final TargetRow target = batch.targets().get(key);
             if (target == null || (target.analysisId() != null && target.owner() == null)) {
                 skipped++;
+                logFinding(
+                        targetUuid, key, target == null ? "TARGET_FINDING_MISSING" : "OWNERSHIP_UNKNOWN", null, null);
                 continue;
             }
             final Decision decision = batch.decide(target);
@@ -114,6 +121,7 @@ public final class AssessmentSynchronizer {
             if (target.analysisId() == null) {
                 if (!(decision.consensus() instanceof AssessmentConsensus.Agreed)) {
                     skipped++;
+                    logFinding(targetUuid, key, "NO_SOURCE_CONSENSUS", target.owner(), decision.consensus());
                     continue;
                 }
                 missingAnalyses.add(target);
@@ -127,6 +135,7 @@ public final class AssessmentSynchronizer {
             final PreparedTarget prepared = prepareTarget(handle, projectId, plan, inserted);
             if (prepared == null) {
                 skipped++;
+                logFinding(targetUuid, plan.key(), "TARGET_DISAPPEARED", null, null);
                 continue;
             }
             final TargetRow target = plan.target();
@@ -146,11 +155,13 @@ public final class AssessmentSynchronizer {
             // authored(null) is already true; the null check narrows origin for the worker write below.
             if (origin == null || AssessmentOwnership.authored(origin)) {
                 skipped++;
+                logFinding(targetUuid, plan.key(), "OWNERSHIP_PROTECTED", origin, consensus);
                 continue;
             }
             final List<SourceContributionWrite> contributions = plan.decision().contributions();
             if (!change.machineChanged() && !change.contributorsChanged() && !trailsDiffer(trails, contributions)) {
                 skipped++;
+                logFinding(targetUuid, plan.key(), "UNCHANGED", origin, consensus);
                 continue;
             }
             pending.add(new PendingWrite(
@@ -173,11 +184,32 @@ public final class AssessmentSynchronizer {
         var machineFieldsChanged = false;
         final var audits = new ArrayList<AuditNotice>();
         for (int i = 0; i < pending.size(); i++) {
-            if (results.get(i).status() != AssessmentProjectionDao.WorkerWriteStatus.APPLIED) {
+            final PendingWrite write = pending.get(i);
+            final var result = results.get(i);
+            if (result.status() != AssessmentProjectionDao.WorkerWriteStatus.APPLIED) {
                 skipped++;
+                logFinding(
+                        targetUuid,
+                        write.key(),
+                        result.status().name(),
+                        write.current().origin(),
+                        null);
                 continue;
             }
-            final PendingWrite write = pending.get(i);
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug(
+                        "Staged assessment sync projection projectUuid={} componentId={} vulnerabilityId={} previousOrigin={} origin={} decisionVersion={} sources={} machineChanged={} contributorsChanged={} reason={}",
+                        targetUuid,
+                        write.key().componentId(),
+                        write.key().vulnDbId(),
+                        write.current().origin(),
+                        write.write().owner(),
+                        result.decisionVersion(),
+                        write.write().contributions().size(),
+                        write.change().machineChanged(),
+                        write.change().contributorsChanged(),
+                        write.change().reason());
+            }
             if (write.write().owner() == AssessmentOwnership.NEUTRAL) {
                 withdrawn++;
             } else {
@@ -202,6 +234,42 @@ public final class AssessmentSynchronizer {
         }
         emitAuditChanges(handle, audits);
         return new BatchResult(applied, withdrawn, skipped, conflicts, machineFieldsChanged);
+    }
+
+    private static void logFinding(
+            final UUID projectUuid,
+            final FindingKey key,
+            final String outcome,
+            final @Nullable AssessmentOwnership owner,
+            final @Nullable Result consensus) {
+        if (!LOGGER.isDebugEnabled()) {
+            return;
+        }
+        final AssessmentReason reason =
+                switch (consensus) {
+                    case AssessmentConsensus.Unavailable unavailable -> unavailable.reason();
+                    case AssessmentConsensus.Conflict ignored -> AssessmentReason.SOURCE_CONFLICT;
+                    case null, default -> null;
+                };
+        LOGGER.debug(
+                "Assessment sync finding projectUuid={} componentId={} vulnerabilityId={} outcome={} owner={} sourceReason={}",
+                projectUuid,
+                key.componentId(),
+                key.vulnDbId(),
+                outcome,
+                owner,
+                reason);
+    }
+
+    private static void logSource(final TargetRow target, final UUID sourceProjectUuid, final String reason) {
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug(
+                    "Assessment source skipped componentUuid={} vulnerabilityUuid={} sourceProjectUuid={} reason={}",
+                    target.identity().uuid(),
+                    target.vulnerability().vulnerabilityUuid(),
+                    sourceProjectUuid,
+                    reason);
+        }
     }
 
     /**
@@ -296,10 +364,12 @@ public final class AssessmentSynchronizer {
             final Map<UUID, SourceComponent> components = componentsBySource.getOrDefault(sourceProjectUuid, Map.of());
             final Candidates candidates = candidatesBySource.get(sourceProjectUuid);
             if (candidates == null) {
+                logSource(target, sourceProjectUuid, "SOURCE_COMPONENTS_MISSING");
                 continue;
             }
             switch (AssessmentMatcher.match(target.identity(), candidates)) {
                 case AssessmentMatcher.MatchResult.Unavailable unavailable -> {
+                    logSource(target, sourceProjectUuid, unavailable.reason().name());
                     if (unavailable.reason() == AssessmentReason.AMBIGUOUS_COMPONENT
                             || unavailable.reason() == AssessmentReason.IDENTITY_CONFLICT) {
                         return new Decision(new AssessmentConsensus.Unavailable(unavailable.reason()), List.of());
@@ -349,11 +419,13 @@ public final class AssessmentSynchronizer {
             final ComponentIdentity matched) {
         final SourceComponent component = components.get(matched.uuid());
         if (component == null) {
+            logSource(target, sourceProjectUuid, "SOURCE_COMPONENT_MISSING");
             return;
         }
         final SourceAnalysis analysis =
                 component.analysisByVulnerability().get(target.vulnerability().vulnerabilityUuid());
         if (analysis == null) {
+            logSource(target, sourceProjectUuid, "SOURCE_ASSESSMENT_MISSING");
             return;
         }
         final var sourceVulnerability = new VulnerabilityIdentity(
@@ -366,15 +438,32 @@ public final class AssessmentSynchronizer {
                         analysis.vulnerabilityUuid(),
                         analysis.analysisId());
                 voters.add(new SourceAssessment(contributor, analysis.owner(), analysis.decision()));
+                if (LOGGER.isDebugEnabled()) {
+                    final String vote = NEUTRAL_DECISION.equals(analysis.decision())
+                            ? "ABSTAIN_NEUTRAL"
+                            : AssessmentOwnership.authored(analysis.owner()) ? "ELIGIBLE" : "ABSTAIN_UNAUTHORED";
+                    LOGGER.debug(
+                            "Assessment source matched componentUuid={} vulnerabilityUuid={} sourceProjectUuid={} sourceComponentUuid={} owner={} state={} suppressed={} vote={}",
+                            target.identity().uuid(),
+                            target.vulnerability().vulnerabilityUuid(),
+                            sourceProjectUuid,
+                            component.identity().uuid(),
+                            analysis.owner(),
+                            analysis.decision().state(),
+                            analysis.decision().suppressed(),
+                            vote);
+                }
                 writesByContributor.putIfAbsent(
                         contributor,
                         new SourceContributionWrite(contributor, analysis.details(), List.copyOf(analysis.comments())));
             }
             case AssessmentMatcher.VulnerabilityMatch.Different ignored -> {
                 // A different vulnerability row does not vote.
+                logSource(target, sourceProjectUuid, "VULNERABILITY_MISMATCH");
             }
             case AssessmentMatcher.VulnerabilityMatch.Unavailable ignored -> {
                 // An inactive source attribution does not vote.
+                logSource(target, sourceProjectUuid, "SOURCE_FINDING_INACTIVE");
             }
         }
     }

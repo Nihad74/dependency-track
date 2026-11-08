@@ -31,6 +31,34 @@ The relay polls the outbox and target work on one instance at a time. In `ACTIVE
 
 Pending outbox rows and target work rows are the replay record. A Dex run that fails does not delete them. The relay submits them again. Do not close replay by sequence id or by timestamp.
 
+## Logs
+
+At `INFO`, the API logs committed assessment writes with the component and vulnerability UUIDs, action, ownership, and decision version. Synchronization logs target requests, batches that apply or withdraw assessments, and completed policy/metrics refreshes. Target requests are not proof that reconciliation has completed. Maintenance logs each batch and committed per-project drift or withdrawal counts. Idle relay polls do not produce `INFO` messages.
+
+Enable targeted diagnostics with these configuration properties:
+
+```properties
+dt.logging.level."org.dependencytrack.assessmentsync"=DEBUG
+dt.logging.level."org.dependencytrack.resources.v1.AnalysisResource"=DEBUG
+```
+
+For the container image, the same overrides can be passed through `EXTRA_JAVA_OPTIONS`:
+
+```yaml
+EXTRA_JAVA_OPTIONS: >-
+  -Ddt.logging.level."org.dependencytrack.assessmentsync"=DEBUG
+  -Ddt.logging.level."org.dependencytrack.resources.v1.AnalysisResource"=DEBUG
+```
+
+Restart the server after changing these properties. Do not enable global `DEBUG` just to trace this feature.
+
+`DEBUG` covers source capture, outbox expansion and dispatch, marker eligibility, component matching, source voting, ownership protection, unchanged projections, and rejected decision versions. Correlate source changes by project/component/vulnerability UUID and outbox ID, then follow the workflow instance/run IDs. Finding summaries also carry internal component and vulnerability database IDs. Marker eligibility uses `markerIdentityIndex`, scoped to one resolution call, to link rejection reasons to target marker UUIDs without logging names or versions.
+
+Common reasons include `SOURCE_NOT_FOUND`, `AMBIGUOUS_SOURCE`, `SOURCE_ACCESS_DENIED`, `IDENTITY_MISSING`, `IDENTITY_CONFLICT`, `AMBIGUOUS_COMPONENT`, `NO_AUTHORED_SOURCE`, and `SOURCE_CONFLICT`. `OWNERSHIP_PROTECTED` includes the current owner; `ABSTAIN_NEUTRAL` and `ABSTAIN_UNAUTHORED` explain sources that do not vote. Projection logs distinguish machine-field changes from contributor changes and source-trail-only updates.
+
+Messages marked `Staged` run inside the business transaction and can be rolled back. Use committed API-write and workflow batch messages to confirm success. Workflow logs are replay-aware. Logs contain identifiers, enums, flags, and counts, not source explanations, comment text, credentials, or complete assessment objects.
+
+
 ## Lag
 
 Two gauges show how far synchronization is behind. Watch both. An un-suppression at the source stays invisible on the target until the target work finishes.
