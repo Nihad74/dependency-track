@@ -75,6 +75,13 @@ public final class RefreshSynchronizedAssessmentsWorkflow implements Workflow<Re
                 .await();
 
         ctx.activity(CompleteAssessmentRefreshActivity.class).call(argument).await();
+        if (ctx.logger().isInfoEnabled()) {
+            ctx.logger()
+                    .info(
+                            "Assessment sync refresh completed projectUuid={} refreshRevision={}",
+                            projectUuid,
+                            argument.getRefreshRevision());
+        }
         return null;
     }
 }

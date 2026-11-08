@@ -39,6 +39,8 @@ import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjecti
 import org.dependencytrack.proto.internal.workflow.v1.MaintainAssessmentProjectionsRes;
 import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.UUID;
@@ -59,6 +61,7 @@ public final class MaintainAssessmentProjectionsActivity
     public static final String QUEUE_NAME = ExpandAssessmentChangesActivity.QUEUE_NAME;
 
     private static final String OPERATION_TAG = "operation";
+    private static final Logger LOGGER = LoggerFactory.getLogger(MaintainAssessmentProjectionsActivity.class);
 
     private final int projectBatchSize;
     private final int findingBatchSize;
@@ -107,6 +110,15 @@ public final class MaintainAssessmentProjectionsActivity
             if (outcome.halted()) {
                 return result(next, false, scanned, drift, enqueued);
             }
+            if ((outcome.drift() > 0 || outcome.withdrawn() > 0) && LOGGER.isInfoEnabled()) {
+                LOGGER.info(
+                        "Assessment sync maintenance committed projectUuid={} operation={} drift={} withdrawn={} refreshRequested={}",
+                        projectUuid,
+                        operation,
+                        outcome.drift(),
+                        outcome.withdrawn(),
+                        outcome.enqueued());
+            }
             // Observe each committed project, even if a later project halts or fails.
             if (outcome.drift() > 0) {
                 driftCounter
@@ -135,11 +147,12 @@ public final class MaintainAssessmentProjectionsActivity
         }
         final Long projectId = handle.attach(ProjectDao.class).getProjectId(projectUuid);
         if (projectId == null) {
-            return ProjectOutcome.advance(0, 0);
+            return ProjectOutcome.advance(0, 0, 0);
         }
 
         var drift = 0;
         var enqueued = 0;
+        var withdrawn = 0;
         switch (operation) {
             case ASSESSMENT_MAINTENANCE_OPERATION_BOOTSTRAP -> {
                 new AssessmentOriginDao(handle).backfillProjectOrigins(projectUuid);
@@ -158,7 +171,7 @@ public final class MaintainAssessmentProjectionsActivity
                 }
             }
             case ASSESSMENT_MAINTENANCE_OPERATION_WITHDRAW -> {
-                final int withdrawn = new AssessmentProjectionDao(handle).withdrawInherited(projectUuid);
+                withdrawn = new AssessmentProjectionDao(handle).withdrawInherited(projectUuid);
                 if (withdrawn > 0) {
                     new AssessmentSyncWorkDao(handle).requestRefresh(projectUuid);
                     enqueued = 1;
@@ -166,7 +179,7 @@ public final class MaintainAssessmentProjectionsActivity
             }
             case ASSESSMENT_MAINTENANCE_OPERATION_UNSPECIFIED, UNRECOGNIZED -> MaintenanceOperations.name(operation);
         }
-        return ProjectOutcome.advance(drift, enqueued);
+        return ProjectOutcome.advance(drift, enqueued, withdrawn);
     }
 
     /**
@@ -251,14 +264,14 @@ public final class MaintainAssessmentProjectionsActivity
         return AssessmentSyncArguments.uuid("project_uuid_cursor", argument.getProjectUuidCursor());
     }
 
-    private record ProjectOutcome(int drift, int enqueued, boolean halted) {
+    private record ProjectOutcome(int drift, int enqueued, int withdrawn, boolean halted) {
 
         private static ProjectOutcome halt() {
-            return new ProjectOutcome(0, 0, true);
+            return new ProjectOutcome(0, 0, 0, true);
         }
 
-        private static ProjectOutcome advance(final int drift, final int enqueued) {
-            return new ProjectOutcome(drift, enqueued, false);
+        private static ProjectOutcome advance(final int drift, final int enqueued, final int withdrawn) {
+            return new ProjectOutcome(drift, enqueued, withdrawn, false);
         }
     }
 }

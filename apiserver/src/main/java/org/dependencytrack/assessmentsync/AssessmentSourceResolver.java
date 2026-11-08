@@ -20,6 +20,8 @@ package org.dependencytrack.assessmentsync;
 
 import org.dependencytrack.model.ConfigPropertyConstants;
 import org.jdbi.v3.core.Handle;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -40,6 +42,8 @@ import static java.util.Objects.requireNonNull;
  * reach viewers of the target who cannot see the source.
  */
 final class AssessmentSourceResolver {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AssessmentSourceResolver.class);
 
     private AssessmentSourceResolver() {}
 
@@ -130,6 +134,30 @@ final class AssessmentSourceResolver {
             if (entry.getValue().size() == 1 && entry.getValue().getFirst().eligible()) {
                 resolved.put(entry.getKey(), entry.getValue().getFirst().uuid());
             }
+        }
+        if (LOGGER.isDebugEnabled()) {
+            var identityIndex = 0;
+            for (final Identity marker : markers) {
+                final List<Candidate> matching = candidates.getOrDefault(marker, List.of());
+                final String reason = matching.isEmpty()
+                        ? "SOURCE_NOT_FOUND"
+                        : matching.size() > 1
+                                ? "AMBIGUOUS_SOURCE"
+                                : matching.getFirst().eligible() ? "RESOLVED" : "SOURCE_ACCESS_DENIED";
+                LOGGER.debug(
+                        "Assessment source eligibility projectUuid={} markerIdentityIndex={} candidates={} sourceProjectUuid={} reason={}",
+                        targetUuid,
+                        identityIndex++,
+                        matching.size(),
+                        resolved.get(marker),
+                        reason);
+            }
+            LOGGER.debug(
+                    "Assessment source resolution projectUuid={} markerIdentities={} candidateIdentities={} resolved={}",
+                    targetUuid,
+                    markers.size(),
+                    candidates.size(),
+                    resolved.size());
         }
         return resolved;
     }

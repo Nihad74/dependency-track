@@ -19,6 +19,8 @@
 package org.dependencytrack.assessmentsync;
 
 import org.jdbi.v3.core.Handle;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.List;
@@ -31,6 +33,8 @@ import static java.util.Objects.requireNonNull;
  * <p>Does not commit, open a transaction, or call Dex.
  */
 public final class AssessmentChangeRecorder {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AssessmentChangeRecorder.class);
 
     private final Handle handle;
 
@@ -50,9 +54,28 @@ public final class AssessmentChangeRecorder {
      */
     public void recordAll(final Collection<AssessmentChange> changes) {
         requireNonNull(changes, "changes must not be null");
-        if (changes.isEmpty() || !AssessmentSyncMode.current().recordsOutbox()) {
+        if (changes.isEmpty()) {
+            return;
+        }
+        final AssessmentSyncMode mode = AssessmentSyncMode.current();
+        if (!mode.recordsOutbox()) {
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("Assessment sync capture skipped mode={} changes={}", mode, changes.size());
+            }
             return;
         }
         new AssessmentSyncOutboxDao(handle).recordAll(changes);
+        if (LOGGER.isDebugEnabled()) {
+            for (final AssessmentChange change : changes) {
+                LOGGER.debug(
+                        "Staged assessment sync change projectUuid={} componentUuid={} vulnerabilityUuid={} scope={} reason={} mode={}",
+                        change.projectUuid(),
+                        change.componentUuid(),
+                        change.vulnerabilityUuid(),
+                        change.scope(),
+                        change.reason(),
+                        mode);
+            }
+        }
     }
 }

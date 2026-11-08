@@ -31,6 +31,8 @@ import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesArg
 import org.dependencytrack.proto.internal.workflow.v1.ExpandAssessmentChangesRes;
 import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -49,6 +51,8 @@ public final class ExpandAssessmentChangesActivity
         implements Activity<ExpandAssessmentChangesArg, ExpandAssessmentChangesRes> {
 
     public static final String QUEUE_NAME = "assessment-sync";
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ExpandAssessmentChangesActivity.class);
 
     private final int fanoutBatchSize;
     private final int reconcileBatchSize;
@@ -97,11 +101,27 @@ public final class ExpandAssessmentChangesActivity
         final var outboxDao = new AssessmentSyncOutboxDao(handle);
         final OutboxEntry entry = outboxDao.lock(argument.getOutboxId());
         if (entry == null) {
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug(
+                        "Assessment sync expansion skipped outboxId={} reason=ALREADY_COMPLETED",
+                        argument.getOutboxId());
+            }
             return ExpandAssessmentChangesRes.newBuilder()
                     .setHasMore(false)
                     .setTargetsRequested(0)
                     .setAlreadyCompleted(true)
                     .build();
+        }
+        if (LOGGER.isDebugEnabled()) {
+            final var change = entry.change();
+            LOGGER.debug(
+                    "Expanding assessment sync change outboxId={} projectUuid={} componentUuid={} vulnerabilityUuid={} scope={} reason={}",
+                    entry.id(),
+                    change.projectUuid(),
+                    change.componentUuid(),
+                    change.vulnerabilityUuid(),
+                    change.scope(),
+                    change.reason());
         }
 
         final var fanoutDao = new AssessmentSyncFanoutDao(handle);

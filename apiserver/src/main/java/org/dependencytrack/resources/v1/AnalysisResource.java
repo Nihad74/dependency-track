@@ -48,6 +48,8 @@ import org.dependencytrack.resources.v1.problems.ProblemDetails;
 import org.dependencytrack.resources.v1.vo.AnalysisRequest;
 import org.dependencytrack.resources.v1.vo.AnalysisRequest.DecisionAction;
 import org.dependencytrack.resources.v1.vo.AnalysisTrailResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import jakarta.validation.Validator;
 import jakarta.ws.rs.Consumes;
@@ -72,6 +74,8 @@ import java.util.List;
 @Tag(name = "analysis")
 @SecurityRequirements({@SecurityRequirement(name = "ApiKeyAuth"), @SecurityRequirement(name = "BearerAuth")})
 public class AnalysisResource extends AbstractApiResource {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AnalysisResource.class);
 
     @GET
     @Produces(MediaType.APPLICATION_JSON)
@@ -209,7 +213,7 @@ public class AnalysisResource extends AbstractApiResource {
         }
         try (final var qm = new QueryManager(getAlpineRequest())) {
             try {
-                return qm.callInTransaction(() -> {
+                final Response response = qm.callInTransaction(() -> {
                     final var component = qm.getObjectByUuid(Component.class, request.getComponent());
                     if (component == null) {
                         return Response.status(Response.Status.NOT_FOUND)
@@ -230,11 +234,36 @@ public class AnalysisResource extends AbstractApiResource {
                     return Response.ok(trail(qm, qm.getObjectById(Analysis.class, analysisId)))
                             .build();
                 });
+                if (response.getEntity() instanceof AnalysisTrailResponse assessment && LOGGER.isInfoEnabled()) {
+                    LOGGER.info(
+                            "Assessment write committed componentUuid={} vulnerabilityUuid={} action={} origin={} decisionVersion={}",
+                            request.getComponent(),
+                            request.getVulnerability(),
+                            request.getDecisionAction(),
+                            assessment.decisionOrigin(),
+                            assessment.decisionVersion());
+                }
+                return response;
             } catch (StaleAssessmentDecisionException e) {
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug(
+                            "Assessment write rejected componentUuid={} vulnerabilityUuid={} action={} expectedDecisionVersion={} reason=STALE_DECISION_VERSION",
+                            request.getComponent(),
+                            request.getVulnerability(),
+                            request.getDecisionAction(),
+                            request.getExpectedDecisionVersion());
+                }
                 return Response.status(Response.Status.CONFLICT)
                         .entity("The analysis decision version is stale. Reload the analysis and retry.")
                         .build();
             } catch (AssessmentNotReleasableException e) {
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug(
+                            "Assessment write rejected componentUuid={} vulnerabilityUuid={} action={} reason=TARGET_NOT_LOCAL",
+                            request.getComponent(),
+                            request.getVulnerability(),
+                            request.getDecisionAction());
+                }
                 return Response.status(Response.Status.CONFLICT)
                         .entity("Only a local analysis decision can be released.")
                         .build();

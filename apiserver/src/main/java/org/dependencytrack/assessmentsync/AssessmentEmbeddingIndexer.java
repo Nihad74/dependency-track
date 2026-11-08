@@ -26,6 +26,8 @@ import org.dependencytrack.common.Mappers;
 import org.dependencytrack.model.Classifier;
 import org.jdbi.v3.core.Handle;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -48,6 +50,8 @@ import static java.util.Objects.requireNonNull;
  * Organizational parent projects are not consulted. Services are not members.
  */
 public final class AssessmentEmbeddingIndexer {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AssessmentEmbeddingIndexer.class);
 
     /**
      * Allow-list on purpose: a classifier added to CycloneDX later stays out until added here.
@@ -74,6 +78,7 @@ public final class AssessmentEmbeddingIndexer {
     public void rebuild(final UUID projectUuid) {
         final LoadedGraph loaded = loadGraph(projectUuid);
         if (loaded == null) {
+            LOGGER.debug("Assessment source index skipped projectUuid={} reason=TARGET_DELETED", projectUuid);
             return;
         }
         new AssessmentEmbeddingDao(handle).replaceMembership(loaded.projectId(), loaded.membership());
@@ -126,6 +131,13 @@ public final class AssessmentEmbeddingIndexer {
             }
         }
         if (markers.isEmpty()) {
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug(
+                        "Assessment source index projectUuid={} components={} reachable={} reason=NO_REACHABLE_MARKERS",
+                        projectUuid,
+                        components.size(),
+                        reachable.size());
+            }
             return new LoadedGraph(project.id(), List.of());
         }
 
@@ -134,13 +146,19 @@ public final class AssessmentEmbeddingIndexer {
         for (final ComponentRow marker : markers) {
             final String markerName = requireNonNull(marker.name());
             final String markerVersion = requireNonNull(marker.version());
+            final UUID sourceUuid = sourceByIdentity.get(new Identity(markerName, markerVersion));
+            final List<Long> descendants = List.copyOf(graph.descendants(marker.id()));
             // No source when the identity is ambiguous, unknown, or blocked by the access gate.
-            membership.add(new MarkerMembership(
-                    marker.id(),
-                    markerName,
-                    markerVersion,
-                    sourceByIdentity.get(new Identity(markerName, markerVersion)),
-                    List.copyOf(graph.descendants(marker.id()))));
+            membership.add(new MarkerMembership(marker.id(), markerName, markerVersion, sourceUuid, descendants));
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug(
+                        "Staged assessment source marker projectUuid={} markerUuid={} sourceProjectUuid={} descendants={} resolved={}",
+                        projectUuid,
+                        marker.uuid(),
+                        sourceUuid,
+                        descendants.size(),
+                        sourceUuid != null);
+            }
         }
         return new LoadedGraph(project.id(), membership);
     }
@@ -220,8 +238,19 @@ public final class AssessmentEmbeddingIndexer {
 
     private Map<Identity, UUID> resolveSources(final UUID targetUuid, final List<ComponentRow> markers) {
         final var identities = new LinkedHashSet<Identity>();
+        final boolean logIdentities = LOGGER.isDebugEnabled();
+        final Map<Identity, Integer> identityIndices = logIdentities ? new HashMap<>() : Map.of();
         for (final ComponentRow marker : markers) {
-            identities.add(new Identity(requireNonNull(marker.name()), requireNonNull(marker.version())));
+            final var identity = new Identity(requireNonNull(marker.name()), requireNonNull(marker.version()));
+            identities.add(identity);
+            if (logIdentities) {
+                final Integer previous = identityIndices.putIfAbsent(identity, identityIndices.size());
+                LOGGER.debug(
+                        "Assessment marker identity projectUuid={} markerUuid={} markerIdentityIndex={}",
+                        targetUuid,
+                        marker.uuid(),
+                        previous != null ? previous : identityIndices.size() - 1);
+            }
         }
         return AssessmentSourceResolver.resolve(handle, targetUuid, identities);
     }

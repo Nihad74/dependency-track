@@ -74,16 +74,29 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
                 throw new TerminalApplicationFailureException("Reconciliation activity returned no result");
             }
             completedBatches++;
-            ctx.logger()
-                    .debug(
-                            "Reconciled {} applied={}, withdrawn={}, skipped={}, hasMore={}, refreshRevision={}, targetDeleted={}",
-                            projectUuid,
-                            result.getApplied(),
-                            result.getWithdrawn(),
-                            result.getSkipped(),
-                            result.getHasMore(),
-                            result.getRefreshRevision(),
-                            result.getTargetDeleted());
+            if ((result.getApplied() > 0 || result.getWithdrawn() > 0)
+                    && ctx.logger().isInfoEnabled()) {
+                ctx.logger()
+                        .info(
+                                "Assessment sync reconciled projectUuid={} applied={} withdrawn={} skipped={} hasMore={} refreshRevision={}",
+                                projectUuid,
+                                result.getApplied(),
+                                result.getWithdrawn(),
+                                result.getSkipped(),
+                                result.getHasMore(),
+                                result.getRefreshRevision());
+            } else if (ctx.logger().isDebugEnabled()) {
+                ctx.logger()
+                        .debug(
+                                "Assessment sync reconciliation projectUuid={} applied={} withdrawn={} skipped={} hasMore={} refreshRevision={} targetDeleted={}",
+                                projectUuid,
+                                result.getApplied(),
+                                result.getWithdrawn(),
+                                result.getSkipped(),
+                                result.getHasMore(),
+                                result.getRefreshRevision(),
+                                result.getTargetDeleted());
+            }
             if (result.getRefreshRevision() > highestRefresh) {
                 highestRefresh = result.getRefreshRevision();
             }
@@ -127,6 +140,7 @@ public final class SynchronizeProjectAssessmentsWorkflow implements Workflow<Syn
     private static void continueAsNew(
             final WorkflowContext<SynchronizeProjectAssessmentsArg> ctx,
             final SynchronizeProjectAssessmentsArg argument) {
+        ctx.logger().debug("Assessment sync continuing pending work projectUuid={}", argument.getProjectUuid());
         ctx.continueAsNew(new ContinueAsNewOptions<SynchronizeProjectAssessmentsArg>().withArgument(argument));
     }
 
