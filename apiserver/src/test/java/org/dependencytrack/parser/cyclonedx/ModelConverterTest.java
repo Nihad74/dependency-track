@@ -18,12 +18,12 @@
  */
 package org.dependencytrack.parser.cyclonedx;
 
-import org.cyclonedx.Version;
 import alpine.model.ManagedUser;
 import alpine.model.Team;
 import alpine.model.auth.UserPrincipal;
 import alpine.model.auth.UserType;
 import alpine.resources.AlpineRequest;
+import org.cyclonedx.Version;
 import org.cyclonedx.model.Hash;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.assessmentsync.AssessmentConsensus.Contributor;
