@@ -71,7 +71,7 @@ public enum AssessmentSyncMode {
      * Current mode. A missing property is OFF. Any other unknown value is rejected.
      */
     public static AssessmentSyncMode current() {
-        return from(ConfigProvider.getConfig());
+        return from(ConfigProvider.getConfig(AssessmentSyncMode.class.getClassLoader()));
     }
 
     static AssessmentSyncMode from(final Config config) {

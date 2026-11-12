@@ -35,7 +35,7 @@ import static org.apache.commons.lang3.StringUtils.trimToNull;
  * The one {@code analysis.detail} string CycloneDX allows for a finding, and the sources it is copied from.
  *
  * <p>Target-local details win. Otherwise source text is copied only when every source the caller may read has
- * that same text, and those sources are named. Differing or missing text is omitted.
+ * that same non-blank text. Readable sources are named even when their text differs or is missing.
  */
 record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sources) {
 
@@ -68,18 +68,12 @@ record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sour
         final var sources = new ArrayList<SourceAttribution>();
         for (final SourceAssessment source : trail.sourceAssessments()) {
             final String text = trimToNull(source.sourceDetails());
-            if (text == null) {
-                return none();
-            }
             sources.add(new SourceAttribution(source.project().uuid(), label(source), text));
         }
         final List<String> distinctTexts =
                 sources.stream().map(SourceAttribution::text).distinct().toList();
-        if (distinctTexts.size() != 1) {
-            return none();
-        }
         sources.sort(Comparator.comparing(SourceAttribution::projectUuid));
-        return new ExportedExplanation(distinctTexts.getFirst(), sources);
+        return new ExportedExplanation(distinctTexts.size() == 1 ? distinctTexts.getFirst() : null, sources);
     }
 
     /**
@@ -97,5 +91,6 @@ record ExportedExplanation(@Nullable String detail, List<SourceAttribution> sour
         return version == null || version.isBlank() ? name : name + "@" + version;
     }
 
-    record SourceAttribution(UUID projectUuid, String label, String text) {}
+    record SourceAttribution(
+            UUID projectUuid, String label, @Nullable String text) {}
 }
