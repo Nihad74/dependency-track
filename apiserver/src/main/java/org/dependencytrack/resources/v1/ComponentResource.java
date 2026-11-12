@@ -636,7 +636,8 @@ public class ComponentResource extends AbstractApiResource {
                             .entity("The UUID of the component could not be found.")
                             .build();
                 }
-                useJdbiHandle(qm, handle -> handle.attach(ComponentLicenseDao.class).replaceAll(updated));
+                useJdbiHandle(
+                        qm, handle -> handle.attach(ComponentLicenseDao.class).replaceAll(updated));
 
                 return Response.ok(updated).build();
             });
