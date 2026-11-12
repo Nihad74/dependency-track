@@ -268,7 +268,10 @@ class ModelConverterTest extends PersistenceCapableTest {
                     ModelConverter.generateVulnerabilities(bothSources, CycloneDXExporter.Variant.VDR, findings);
             assertThat(conflicted).singleElement().satisfies(vulnerability -> {
                 assertThat(vulnerability.getAnalysis().getDetail()).isNull();
-                assertThat(vulnerability.getProperties()).isNullOrEmpty();
+                assertThat(vulnerability.getProperties())
+                        .extracting(org.cyclonedx.model.Property::getValue)
+                        .anySatisfy(value -> assertThat(value).contains("visible-kernel"))
+                        .anySatisfy(value -> assertThat(value).contains("hidden-kernel"));
             });
         }
         qm.getPersistenceManager().evictAll();
@@ -297,7 +300,10 @@ class ModelConverterTest extends PersistenceCapableTest {
                     ModelConverter.generateVulnerabilities(bothSources, CycloneDXExporter.Variant.VEX, findings);
             assertThat(result).singleElement().satisfies(vulnerability -> {
                 assertThat(vulnerability.getAnalysis().getDetail()).isNull();
-                assertThat(vulnerability.getProperties()).isNullOrEmpty();
+                assertThat(vulnerability.getProperties())
+                        .extracting(org.cyclonedx.model.Property::getValue)
+                        .anySatisfy(value -> assertThat(value).contains("visible-kernel"))
+                        .anySatisfy(value -> assertThat(value).contains("hidden-kernel"));
             });
         }
     }

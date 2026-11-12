@@ -265,7 +265,13 @@ public class CycloneDXVexImporter {
             if (responses != null && !responses.isEmpty()) {
                 response = ModelConverter.convertCdxVulnAnalysisResponseToDtAnalysisResponse(responses.getLast());
             }
-            details = cdxVuln.getAnalysis().getDetail();
+            // Exported source explanations are provenance, not an authored target Details field.
+            details = cdxVuln.getProperties() != null
+                            && cdxVuln.getProperties().stream()
+                                    .anyMatch(
+                                            property -> "dependency-track:assessment-source".equals(property.getName()))
+                    ? null
+                    : cdxVuln.getAnalysis().getDetail();
             suppressed = state == AnalysisState.FALSE_POSITIVE
                     || state == AnalysisState.NOT_AFFECTED
                     || state == AnalysisState.RESOLVED;
@@ -280,8 +286,8 @@ public class CycloneDXVexImporter {
                 null,
                 rating == null ? null : rating.getVector(),
                 rating == null || rating.getScore() == null ? null : BigDecimal.valueOf(rating.getScore()),
-                Set.of(),
-                MakeAnalysisCommand.DecisionAction.TAKE_LOCAL,
+                Set.of(MakeAnalysisCommand.Option.VEX_DERIVE_SUPPRESSION),
+                MakeAnalysisCommand.DecisionAction.AUTO,
                 null);
     }
 

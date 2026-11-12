@@ -19,6 +19,7 @@
 package org.dependencytrack.assessmentsync;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.smallrye.config.SmallRyeConfigBuilder;
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.AnalysisState;
@@ -26,6 +27,7 @@ import org.dependencytrack.model.Component;
 import org.dependencytrack.model.Vulnerability;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
+import org.eclipse.microprofile.config.spi.ConfigProviderResolver;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -58,7 +60,16 @@ class AssessmentSyncMetricsTest extends PersistenceCapableTest {
         AssessmentSyncMetrics.bind(registry);
         assertThat(registry.getMeters()).hasSize(count);
         MemoryConfigSource.setProperty(ConfigKeys.ASSESSMENT_SYNC_MODE, mode.name());
+        final Thread thread = Thread.currentThread();
+        final ClassLoader applicationLoader = thread.getContextClassLoader();
+        final ClassLoader managementLoader = new ClassLoader(applicationLoader) {};
+        final var managementConfig = new SmallRyeConfigBuilder()
+                .withDefaultValue(ConfigKeys.ASSESSMENT_SYNC_MODE, "OFF")
+                .build();
+        final var resolver = ConfigProviderResolver.instance();
+        resolver.registerConfig(managementConfig, managementLoader);
         try {
+            thread.setContextClassLoader(managementLoader);
             for (final var candidate : AssessmentSyncMode.values()) {
                 assertThat(registry.get(AssessmentSyncMetrics.MODE)
                                 .tag("mode", candidate.name())
@@ -71,6 +82,8 @@ class AssessmentSyncMetricsTest extends PersistenceCapableTest {
                             .value())
                     .isZero();
         } finally {
+            thread.setContextClassLoader(applicationLoader);
+            resolver.releaseConfig(managementConfig);
             MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);
         }
     }

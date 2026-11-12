@@ -231,7 +231,9 @@ public final class AnalysisMutationPlanner {
             analysis.setAnalysisDetails(command.details());
             detailsChanged = true;
         }
-        if (command.suppress() != null && command.suppress() != analysis.isSuppressed()) {
+        if (command.suppress() != null
+                && (!command.options().contains(Option.VEX_DERIVE_SUPPRESSION) || stateChanged)
+                && command.suppress() != analysis.isSuppressed()) {
             auditTrailComments.add(command.suppress() ? "Suppressed" : "Unsuppressed");
             analysis.setSuppressed(command.suppress());
             suppressionChanged = true;

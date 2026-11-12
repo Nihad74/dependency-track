@@ -23,6 +23,7 @@ import org.cyclonedx.Version;
 import org.cyclonedx.exception.ParseException;
 import org.cyclonedx.parsers.BomParserFactory;
 import org.dependencytrack.PersistenceCapableTest;
+import org.dependencytrack.assessmentsync.AssessmentOriginDao;
 import org.dependencytrack.assessmentsync.AssessmentOwnership;
 import org.dependencytrack.common.ConfigKeys;
 import org.dependencytrack.model.Analysis;
@@ -37,6 +38,8 @@ import org.dependencytrack.model.Vulnerability;
 import org.dependencytrack.persistence.command.MakeAnalysisCommand;
 import org.dependencytrack.support.config.source.memory.MemoryConfigSource;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import javax.jdo.Query;
 import java.math.BigDecimal;
@@ -49,10 +52,63 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.owner;
 import static org.dependencytrack.assessmentsync.AssessmentSyncTestSupport.recordedChanges;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
+import static org.dependencytrack.persistence.jdbi.JdbiFactory.withJdbiHandle;
 
 public class CycloneDXVexImporterTest extends PersistenceCapableTest {
 
     private CycloneDXVexImporter vexImporter = new CycloneDXVexImporter();
+
+    @ParameterizedTest
+    @EnumSource(
+            value = AssessmentOwnership.class,
+            names = {"NEUTRAL", "INHERITED"})
+    void unchangedVexPreservesOwnershipAndSourceExplanation(final AssessmentOwnership ownership) {
+        final var project = qm.createProject("vex-target", null, "1.0", null, null, null, null, false);
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("library");
+        component.setVersion("1.0");
+        final Component persistedComponent = qm.createComponent(component, false);
+        final var vulnerability = new Vulnerability();
+        vulnerability.setVulnId("INT-VEX-UNCHANGED");
+        vulnerability.setSource(Vulnerability.Source.INTERNAL);
+        vulnerability.setSeverity(Severity.HIGH);
+        final Vulnerability persistedVulnerability = qm.createVulnerability(vulnerability);
+        qm.addVulnerability(persistedVulnerability, persistedComponent, "internal");
+        final boolean inherited = ownership == AssessmentOwnership.INHERITED;
+        final long analysisId = qm.makeAnalysis(new MakeAnalysisCommand(persistedComponent, persistedVulnerability)
+                .withState(inherited ? AnalysisState.EXPLOITABLE : AnalysisState.NOT_SET)
+                .withSuppress(inherited));
+        useJdbiTransaction(handle -> handle.createUpdate("""
+                        UPDATE "ASSESSMENT_ORIGIN" SET "OWNER" = :owner WHERE "ANALYSIS_ID" = :id
+                        """)
+                .bind("owner", ownership.name())
+                .bind("id", analysisId)
+                .execute());
+        final var before = withJdbiHandle(handle -> new AssessmentOriginDao(handle).findOrigin(analysisId));
+        final var exporter = new CycloneDXExporter(CycloneDXExporter.Variant.VEX, qm);
+        final var vex = exporter.create(project, Version.VERSION_16);
+        if (inherited) {
+            final var entry = vex.getVulnerabilities().getFirst();
+            entry.setProperties(
+                    List.of(new org.cyclonedx.model.Property("dependency-track:assessment-source", "source@1.0")));
+            entry.getAnalysis().setDetail("copied source explanation");
+        }
+        vexImporter.applyVex(qm, vex, project);
+        final var after = withJdbiHandle(handle -> new AssessmentOriginDao(handle).findOrigin(analysisId));
+        assertThat(after).isEqualTo(before);
+        assertThat(qm.getAnalysis(persistedComponent, persistedVulnerability).getAnalysisDetails())
+                .isNull();
+        final var entry = vex.getVulnerabilities().getFirst();
+        entry.getAnalysis().setState(org.cyclonedx.model.vulnerability.Vulnerability.Analysis.State.IN_TRIAGE);
+        vexImporter.applyVex(qm, vex, project);
+        assertThat(owner(analysisId)).isEqualTo(AssessmentOwnership.LOCAL);
+        assertThat(qm.getAnalysis(persistedComponent, persistedVulnerability).getAnalysisState())
+                .isEqualTo(AnalysisState.IN_TRIAGE);
+        assertThat(qm.getAnalysis(persistedComponent, persistedVulnerability).isSuppressed())
+                .isFalse();
+    }
 
     @Test
     public void shouldAuditVulnerabilityFromAllSourcesUsingVex() throws Exception {

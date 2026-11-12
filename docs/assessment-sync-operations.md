@@ -96,4 +96,16 @@ Run verification again after a replay, an algorithm change, or recovery.
 4. Set `OFF` only after inherited rows are gone and verification has been reviewed.
 5. Turning the feature back on after a period with no capture requires backfill and verification again. `CAPTURE` pauses application. It is not withdrawal.
 
+Returning from `WITHDRAW` to `ACTIVE` does not immediately rebuild withdrawn projections. Source and target changes trigger their normal passes; otherwise the next verification run queues reconciliation. With the default daily cron, unchanged projects can take up to a day to inherit again. Run verification after reactivation when that delay is unacceptable. Copied trails removed from protected `LOCAL` rows are not restored.
+
+## Ownership and export
+
+Taking local ownership without changing the decision retains the copied source trail as a snapshot. Later source changes do not update that snapshot. Changing the structured local decision drops the trail; release allows reconciliation to select current sources again.
+
+An unchanged VEX entry preserves ownership and decision version. Changed fields claim local ownership. A VEX detail attributed with `dependency-track:assessment-source` remains source text rather than becoming a target-local explanation; remove that attribution to import an authored local explanation.
+
+CycloneDX does not encode suppression independently of its analysis state. Import preserves existing suppression when the state is unchanged; a new or changed state derives suppression from the VEX state as before.
+
+VEX and VDR name readable sources even when their details are blank or differ. A shared source detail is exported only when every readable source has the same non-blank text. Local details take precedence. Current source ACLs apply to both text and source identities.
+
 No load numbers are published here. This note does not state a sync deadline, a portfolio size, or a latency budget.

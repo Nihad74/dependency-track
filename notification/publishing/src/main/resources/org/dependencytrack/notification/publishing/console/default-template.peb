@@ -8,3 +8,6 @@ Notification
   -- group:     {{ notification.group }}
   -- title:     {{ notification.title }}
   -- content:   {{ notification.content }}
+{% if notification.group == "GROUP_PROJECT_AUDIT_CHANGE" -%}
+  -- project:   {{ subject.project | summarize }}
+{% endif -%}

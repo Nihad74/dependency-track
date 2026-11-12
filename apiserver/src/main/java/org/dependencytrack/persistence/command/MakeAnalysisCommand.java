@@ -101,6 +101,11 @@ public record MakeAnalysisCommand(
     public enum Option {
 
         /**
+         * CycloneDX VEX cannot encode independent suppression. Derive it only when the state changes.
+         */
+        VEX_DERIVE_SUPPRESSION,
+
+        /**
          * Reset an omitted state, justification, or response to {@code NOT_SET}, as REST API v1 does.
          * Not applied to an inherited analysis, whose omitted fields keep their value.
          */
