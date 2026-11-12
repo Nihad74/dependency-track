@@ -8,6 +8,17 @@
         </encoder>
     </appender>
 
+    <appender name="STDOUT_NO_MDC" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%date %level [%logger{0}] %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Caller MDC may contain source names, request URIs, or principals. -->
+    <logger name="org.dependencytrack.assessmentsync" level="INFO" additivity="false">
+        <appender-ref ref="STDOUT_NO_MDC" />
+    </logger>
+
     <logger name="alpine" level="INFO" additivity="false">
         <appender-ref ref="STDOUT" />
     </logger>
