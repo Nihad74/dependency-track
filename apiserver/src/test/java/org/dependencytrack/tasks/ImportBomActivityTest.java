@@ -2939,8 +2939,7 @@ class ImportBomActivityTest extends PersistenceCapableTest {
 
             activity.execute(null, buildArg(target, storeBomFile(libraryOnlyBom()), UUID.randomUUID()));
             assertBomProcessedNotification();
-            assertThat(embeddings(target.getUuid(), "base-os", "5.14.121"))
-                    .isEmpty();
+            assertThat(embeddings(target.getUuid(), "base-os", "5.14.121")).isEmpty();
             assertThat(isEmbeddedMember(target.getUuid(), packageId)).isFalse();
         } finally {
             MemoryConfigSource.removeProperty(ConfigKeys.ASSESSMENT_SYNC_MODE);

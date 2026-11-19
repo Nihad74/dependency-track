@@ -95,8 +95,7 @@ class AssessmentEmbeddingDaoTest extends PersistenceCapableTest {
 
         final List<Embedding> byName = inJdbiTransaction(
                 handle -> new AssessmentEmbeddingDao(handle).findByMarkerNameAndVersion("base-os", "5.14.121"));
-        assertThat(byName)
-                .containsExactly(new Embedding(target.getId(), marker.getId(), "base-os", "5.14.121", null));
+        assertThat(byName).containsExactly(new Embedding(target.getId(), marker.getId(), "base-os", "5.14.121", null));
         final List<Embedding> missingMarker = inJdbiTransaction(
                 handle -> new AssessmentEmbeddingDao(handle).findByMarkerNameAndVersion("base-os", "9.9.9"));
         assertThat(missingMarker).isEmpty();
